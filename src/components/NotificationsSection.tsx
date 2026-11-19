@@ -24,6 +24,18 @@ import {
 
 type InboxSubTab = 'mailbox' | 'receipts';
 
+const EMAIL_EVENT_LABELS: Record<EmailNotification['eventType'], string> = {
+  conversion_confirmed: 'Conversão de Pontos',
+  withdrawal_requested: 'Saque Pix Solicitado',
+  withdrawal_approved: 'Saque Pix Aprovado',
+  withdrawal_paid: 'Saque Pix Pago',
+  withdrawal_rejected: 'Saque Pix Recusado',
+  streak_bonus_credited: 'Bônus de Sequência',
+  invite_sent: 'Convite Enviado',
+  referral_welcome: 'Boas-vindas por Convite',
+  referral_bonus_credited: 'Bônus de Indicação (+500 pts)',
+};
+
 export const NotificationsSection: React.FC = () => {
   const {
     firebaseUser,
@@ -272,7 +284,7 @@ export const NotificationsSection: React.FC = () => {
               }`}
             >
               <MailCheck className="w-3.5 h-3.5" />
-              Recibos Pix ({myNotifications.length})
+              E-mails & Recibos ({myNotifications.length})
             </button>
           </div>
 
@@ -440,7 +452,11 @@ export const NotificationsSection: React.FC = () => {
                   <div className="flex items-center justify-between gap-2 text-xs text-slate-500 dark:text-zinc-400 mb-1">
                     <span className="font-mono truncate">{item.recipientEmail}</span>
                     <span className="shrink-0">
-                      {item.deliveryStatus === 'sent_smtp' ? 'SMTP Enviado' : 'Comprovante Digital'}
+                      {item.deliveryStatus === 'sent_smtp'
+                        ? 'SMTP Enviado'
+                        : item.deliveryStatus === 'failed'
+                          ? 'Falha SMTP'
+                          : 'Comprovante Digital'}
                     </span>
                   </div>
                   <div className="text-sm font-semibold text-slate-900 dark:text-zinc-100 line-clamp-1">
@@ -471,9 +487,19 @@ export const NotificationsSection: React.FC = () => {
                       </p>
                     </div>
                   </div>
-                  <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-700 dark:text-emerald-400 shrink-0">
+                  <span
+                    className={`inline-flex items-center gap-1 text-xs font-medium shrink-0 ${
+                      activeReceipt.deliveryStatus === 'failed'
+                        ? 'text-red-600 dark:text-red-400'
+                        : 'text-emerald-700 dark:text-emerald-400'
+                    }`}
+                  >
                     <CheckCircle2 className="w-3.5 h-3.5" />
-                    {activeReceipt.deliveryStatus === 'sent_smtp' ? 'Entregue via SMTP' : 'Registrado'}
+                    {activeReceipt.deliveryStatus === 'sent_smtp'
+                      ? 'Entregue via SMTP'
+                      : activeReceipt.deliveryStatus === 'failed'
+                        ? 'Falha SMTP'
+                        : 'Registrado'}
                   </span>
                 </div>
 
@@ -482,8 +508,8 @@ export const NotificationsSection: React.FC = () => {
                   <div className="border-t border-slate-200 dark:border-zinc-800 pt-3 grid grid-cols-2 gap-3 text-xs">
                     <div>
                       <span className="text-slate-500 dark:text-zinc-400">Tipo de Evento</span>
-                      <div className="font-mono font-semibold text-slate-900 dark:text-zinc-100 mt-0.5">
-                        {activeReceipt.eventType}
+                      <div className="font-semibold text-slate-900 dark:text-zinc-100 mt-0.5">
+                        {EMAIL_EVENT_LABELS[activeReceipt.eventType] || activeReceipt.eventType}
                       </div>
                     </div>
                     <div>

@@ -176,6 +176,13 @@ interface AuthContextValue {
     title: string;
     pointsAwarded: number;
   }>;
+  sendInviteEmail: (
+    recipientEmail: string,
+    customMessage?: string
+  ) => Promise<{
+    deliveryStatus: EmailNotification['deliveryStatus'];
+    referenceId: string;
+  }>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -195,6 +202,13 @@ async function dispatchEmailNotification(params: {
   referenceId: string;
   amountBrl?: string;
   pixKey?: string;
+  inviterName?: string;
+  inviteLink?: string;
+  inviteCode?: string;
+  invitedDisplayName?: string;
+  bonusPoints?: number;
+  commissionPct?: number;
+  customMessage?: string;
 }): Promise<EmailNotification['deliveryStatus']> {
   let deliveryStatus: EmailNotification['deliveryStatus'] = 'logged_in_app';
   try {
@@ -204,9 +218,13 @@ async function dispatchEmailNotification(params: {
       body: JSON.stringify(params),
     });
     const contentType = res.headers.get('content-type') || '';
-    if (res.ok && contentType.includes('application/json')) {
+    if (contentType.includes('application/json')) {
       const data = await res.json();
-      if (data.deliveryStatus === 'sent_smtp' || data.deliveryStatus === 'logged_in_app') {
+      if (
+        data.deliveryStatus === 'sent_smtp' ||
+        data.deliveryStatus === 'logged_in_app' ||
+        data.deliveryStatus === 'failed'
+      ) {
         deliveryStatus = data.deliveryStatus;
       }
     }
@@ -220,12 +238,12 @@ async function dispatchEmailNotification(params: {
     await setDoc(doc(db, 'emailNotifications', notificationId), {
       notificationId,
       userId: params.userId,
-      recipientEmail: params.recipientEmail,
+      recipientEmail: params.recipientEmail.slice(0, 160),
       eventType: params.eventType,
       subject: params.subject.slice(0, 160),
       summary: params.summary.slice(0, 500),
       deliveryStatus,
-      referenceId: params.referenceId,
+      referenceId: params.referenceId.slice(0, 128),
       createdAt: serverTimestamp(),
     });
   } catch (error) {
@@ -269,8 +287,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const prevWithdrawalStatusRef = React.useRef<Map<string, WithdrawalStatus>>(new Map());
   const promosInitRef = React.useRef(false);
   const mailboxInitRef = React.useRef(false);
+  const notificationsInitRef = React.useRef(false);
   const seenReleasedPromoCodesRef = React.useRef<Set<string>>(new Set());
   const seenReleasedMailboxIdsRef = React.useRef<Set<string>>(new Set());
+  const dispatchedReferralNotifsRef = React.useRef<Set<string>>(new Set());
 
   const canDispatchBrowserNotification = () => {
     const { permission, enabled } = browserNotifPrefsRef.current;
@@ -327,8 +347,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         prevWithdrawalStatusRef.current.clear();
         promosInitRef.current = false;
         mailboxInitRef.current = false;
+        notificationsInitRef.current = false;
         seenReleasedPromoCodesRef.current.clear();
         seenReleasedMailboxIdsRef.current.clear();
+        dispatchedReferralNotifsRef.current.clear();
         setAuthReady(true);
         return;
       }
@@ -520,7 +542,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const unsubNotifications = onSnapshot(
       query(collection(db, 'emailNotifications'), where('userId', '==', uid), orderBy('createdAt', 'desc')),
-      (snap) => setMyNotifications(snap.docs.map((d) => d.data() as EmailNotification)),
+      (snap) => {
+        setMyNotifications(snap.docs.map((d) => d.data() as EmailNotification));
+        notificationsInitRef.current = true;
+      },
       (error) => handleFirestoreError(error, OperationType.LIST, 'emailNotifications')
     );
 
@@ -1385,6 +1410,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       } catch {
         // Ignore storage error
       }
+
+      if (validReferrerUid && firebaseUser.email) {
+        const origin =
+          typeof window !== 'undefined' ? window.location.origin : 'https://earneasy.app';
+        void dispatchEmailNotification({
+          userId: firebaseUser.uid,
+          recipientEmail: firebaseUser.email,
+          eventType: 'referral_welcome',
+          subject: 'Convite vinculado com sucesso no Earn Easy!',
+          summary: `Sua conta (${cleanName}) foi criada através de um link de convite oficial. Você já pode jogar, fazer check-ins e converter seus pontos em Pix — e quem te convidou acabou de receber +${REFERRAL_SIGNUP_BONUS_POINTS} pontos!`,
+          referenceId: validReferrerUid,
+          inviteCode: firebaseUser.uid,
+          inviteLink: `${origin}/?ref=${firebaseUser.uid}`,
+          bonusPoints: REFERRAL_SIGNUP_BONUS_POINTS,
+          commissionPct: 12,
+        });
+      }
+
       return { status: 'active', referralApplied: Boolean(validReferrerUid) };
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, `users/${firebaseUser.uid}`);
@@ -1798,6 +1841,112 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   };
 
+  // Automatic email notification whenever a friend registers via this user's invite link
+  useEffect(() => {
+    if (!firebaseUser || !userAccount || !notificationsInitRef.current) return;
+    const recipientEmail = privateInfo?.email || firebaseUser.email;
+    if (!recipientEmail || !recipientEmail.includes('@')) return;
+
+    const alreadyNotifiedIds = new Set(
+      myNotifications
+        .filter((n) => n.eventType === 'referral_bonus_credited')
+        .map((n) => n.referenceId)
+    );
+
+    const origin =
+      typeof window !== 'undefined' ? window.location.origin : 'https://earneasy.app';
+
+    for (const ref of myInvitedReferrals) {
+      const storageKey = `earneasy_ref_mail_${firebaseUser.uid}_${ref.referralId}`;
+      let persisted = false;
+      try {
+        persisted = window.localStorage.getItem(storageKey) === '1';
+      } catch {
+        persisted = false;
+      }
+
+      if (
+        alreadyNotifiedIds.has(ref.referralId) ||
+        dispatchedReferralNotifsRef.current.has(ref.referralId) ||
+        persisted
+      ) {
+        dispatchedReferralNotifsRef.current.add(ref.referralId);
+        continue;
+      }
+
+      dispatchedReferralNotifsRef.current.add(ref.referralId);
+      try {
+        window.localStorage.setItem(storageKey, '1');
+      } catch {
+        // Ignore storage error
+      }
+
+      const bonusPts = ref.signupBonusPoints || REFERRAL_SIGNUP_BONUS_POINTS;
+      void dispatchEmailNotification({
+        userId: firebaseUser.uid,
+        recipientEmail,
+        eventType: 'referral_bonus_credited',
+        subject: `Seu amigo ${ref.invitedDisplayName} aceitou seu convite (+${bonusPts} pts)!`,
+        summary: `${ref.invitedDisplayName} se cadastrou usando seu link de convite. Você ganhou +${bonusPts} pontos imediatos e receberá ${ref.commissionRatePct || 12}% extras sobre tudo o que ele pontuar nos jogos e check-ins.`,
+        referenceId: ref.referralId,
+        invitedDisplayName: ref.invitedDisplayName,
+        inviteCode: userAccount.uid,
+        inviteLink: `${origin}/?ref=${userAccount.uid}`,
+        bonusPoints: bonusPts,
+        commissionPct: ref.commissionRatePct || 12,
+      });
+    }
+  }, [firebaseUser, userAccount, privateInfo, myInvitedReferrals, myNotifications]);
+
+  const sendInviteEmail = async (
+    recipientEmail: string,
+    customMessage?: string
+  ): Promise<{
+    deliveryStatus: EmailNotification['deliveryStatus'];
+    referenceId: string;
+  }> => {
+    if (!firebaseUser || !userAccount) {
+      throw new Error('Faça login para enviar convites por e-mail.');
+    }
+    const cleanEmail = recipientEmail.trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail) || cleanEmail.length > 160) {
+      throw new Error('Informe um endereço de e-mail válido para enviar o convite.');
+    }
+    if (
+      (privateInfo?.email && cleanEmail === privateInfo.email.toLowerCase()) ||
+      (firebaseUser.email && cleanEmail === firebaseUser.email.toLowerCase())
+    ) {
+      throw new Error('Você não pode enviar um convite para o seu próprio e-mail.');
+    }
+
+    const cleanNote = (customMessage || '').trim().slice(0, 220);
+    const origin =
+      typeof window !== 'undefined' ? window.location.origin : 'https://earneasy.app';
+    const inviteLink = `${origin}/?ref=${userAccount.uid}`;
+    const referenceId = generateId('inv');
+
+    const summary = cleanNote
+      ? `${userAccount.displayName} convidou você para o Earn Easy! "${cleanNote}" — Cadastre-se pelo link abaixo para jogar, acumular pontos e sacar via Pix.`
+      : `${userAccount.displayName} convidou você para jogar no Earn Easy! Acumule pontos em desafios diários e converta para sacar via Pix.`;
+
+    const deliveryStatus = await dispatchEmailNotification({
+      userId: firebaseUser.uid,
+      recipientEmail: cleanEmail,
+      eventType: 'invite_sent',
+      subject: `${userAccount.displayName} convidou você para o Earn Easy`,
+      summary,
+      referenceId,
+      inviterName: userAccount.displayName,
+      inviteLink,
+      inviteCode: userAccount.uid,
+      bonusPoints: REFERRAL_SIGNUP_BONUS_POINTS,
+      commissionPct: 12,
+      customMessage: cleanNote || undefined,
+    });
+
+    return { deliveryStatus, referenceId };
+  };
+
   const persistReadMailboxIds = (nextIds: string[]) => {
     setReadMailboxIds(nextIds);
     if (!firebaseUser) return;
@@ -1907,6 +2056,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         claimDailyCheckin,
         claimLevelReward,
         redeemPromoCode,
+        sendInviteEmail,
         markMailboxRead,
         markAllMailboxRead,
       }}

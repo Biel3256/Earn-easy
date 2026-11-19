@@ -313,7 +313,7 @@ service cloud.firestore {
       isValidId(data.notificationId) &&
       isValidId(data.userId) &&
       data.recipientEmail is string && data.recipientEmail.size() >= 3 && data.recipientEmail.size() <= 160 &&
-      data.eventType in ['conversion_confirmed', 'withdrawal_requested', 'withdrawal_paid', 'withdrawal_rejected', 'streak_bonus_credited'] &&
+      data.eventType in ['conversion_confirmed', 'withdrawal_requested', 'withdrawal_approved', 'withdrawal_paid', 'withdrawal_rejected', 'streak_bonus_credited', 'invite_sent', 'referral_welcome', 'referral_bonus_credited'] &&
       data.subject is string && data.subject.size() >= 3 && data.subject.size() <= 160 &&
       data.summary is string && data.summary.size() >= 3 && data.summary.size() <= 500 &&
       data.deliveryStatus in ['sent_smtp', 'logged_in_app', 'failed'] &&

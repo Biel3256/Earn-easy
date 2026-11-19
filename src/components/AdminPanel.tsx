@@ -215,6 +215,23 @@ export const AdminPanel: React.FC = () => {
   const [generatedRawKey, setGeneratedRawKey] = useState<string | null>(null);
   const [webhookTestResult, setWebhookTestResult] = useState<string | null>(null);
 
+  // Nodemailer SMTP status & test state
+  const [smtpStatus, setSmtpStatus] = useState<{
+    configured: boolean;
+    host: string;
+    port: number;
+    secure: boolean;
+    from: string;
+    userMasked: string;
+    missingVars: string[];
+    verified?: boolean;
+    verificationError?: string | null;
+  } | null>(null);
+  const [smtpChecking, setSmtpChecking] = useState(false);
+  const [smtpTestEmail, setSmtpTestEmail] = useState('');
+  const [smtpTestSending, setSmtpTestSending] = useState(false);
+  const [smtpTestMsg, setSmtpTestMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
   useEffect(() => {
     if (!firebaseUser || !isAdmin) return;
 
@@ -345,6 +362,77 @@ export const AdminPanel: React.FC = () => {
     }).catch(() => {});
   }, [isAdmin, users, withdrawals]);
 
+  useEffect(() => {
+    if (!isAdmin) return;
+    if (firebaseUser?.email && !smtpTestEmail) {
+      setSmtpTestEmail(firebaseUser.email);
+    }
+    fetch('/api/notifications/smtp-status')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data) setSmtpStatus(data);
+      })
+      .catch(() => {});
+  }, [isAdmin, firebaseUser?.email]);
+
+  const handleVerifySmtp = async () => {
+    setSmtpChecking(true);
+    setSmtpTestMsg(null);
+    try {
+      const res = await fetch('/api/notifications/smtp-status?verify=true');
+      const data = await res.json();
+      setSmtpStatus(data);
+      if (data.verified) {
+        setSmtpTestMsg({
+          type: 'success',
+          text: `Conexão SMTP autenticada com sucesso em ${data.host}:${data.port}.`,
+        });
+      } else {
+        setSmtpTestMsg({
+          type: 'error',
+          text: data.verificationError || 'SMTP não configurado ou credenciais inválidas.',
+        });
+      }
+    } catch {
+      setSmtpTestMsg({ type: 'error', text: 'Erro ao consultar status SMTP no servidor.' });
+    } finally {
+      setSmtpChecking(false);
+    }
+  };
+
+  const handleSendSmtpTest = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!smtpTestEmail.trim()) return;
+    setSmtpTestSending(true);
+    setSmtpTestMsg(null);
+    try {
+      const res = await fetch('/api/notifications/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ recipientEmail: smtpTestEmail.trim() }),
+      });
+      const data = await res.json();
+      if (data.deliveryStatus === 'sent_smtp') {
+        setSmtpTestMsg({
+          type: 'success',
+          text: `E-mail de teste enviado via Nodemailer para ${smtpTestEmail.trim()} (ID: ${data.messageId || 'ok'}).`,
+        });
+      } else {
+        setSmtpTestMsg({
+          type: 'error',
+          text:
+            data.error ||
+            data.message ||
+            'Configure SMTP_HOST, SMTP_USER e SMTP_PASS nas variáveis de ambiente para disparar e-mails reais.',
+        });
+      }
+    } catch {
+      setSmtpTestMsg({ type: 'error', text: 'Falha de comunicação ao testar envio Nodemailer.' });
+    } finally {
+      setSmtpTestSending(false);
+    }
+  };
+
   if (!isAdmin) {
     return (
       <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-10 text-center max-w-lg mx-auto">
@@ -359,12 +447,26 @@ export const AdminPanel: React.FC = () => {
 
   const sendAdminEmailReceipt = async (
     w: PixWithdrawal,
-    eventType: 'withdrawal_paid' | 'withdrawal_rejected',
+    eventType: 'withdrawal_approved' | 'withdrawal_paid' | 'withdrawal_rejected',
     subject: string,
     summary: string
   ) => {
-    const email = privateMap[w.userId]?.email || 'usuario@earneasy.app';
-    let deliveryStatus: 'sent_smtp' | 'logged_in_app' = 'logged_in_app';
+    let email = privateMap[w.userId]?.email || '';
+    if (!email) {
+      try {
+        const pSnap = await getDoc(doc(db, 'users', w.userId, 'private', 'info'));
+        if (pSnap.exists()) {
+          const priv = pSnap.data() as UserPrivateInfo;
+          email = priv.email || '';
+          setPrivateMap((prev) => ({ ...prev, [w.userId]: priv }));
+        }
+      } catch {
+        // Fallback below
+      }
+    }
+    if (!email) email = 'usuario@earneasy.app';
+
+    let deliveryStatus: 'sent_smtp' | 'logged_in_app' | 'failed' = 'logged_in_app';
     try {
       const res = await fetch('/api/notifications/email', {
         method: 'POST',
@@ -380,9 +482,15 @@ export const AdminPanel: React.FC = () => {
         }),
       });
       const contentType = res.headers.get('content-type') || '';
-      if (res.ok && contentType.includes('application/json')) {
+      if (contentType.includes('application/json')) {
         const d = await res.json();
-        if (d.deliveryStatus === 'sent_smtp') deliveryStatus = 'sent_smtp';
+        if (
+          d.deliveryStatus === 'sent_smtp' ||
+          d.deliveryStatus === 'logged_in_app' ||
+          d.deliveryStatus === 'failed'
+        ) {
+          deliveryStatus = d.deliveryStatus;
+        }
       }
     } catch {
       // Fallback logged_in_app
@@ -392,10 +500,10 @@ export const AdminPanel: React.FC = () => {
     await setDoc(doc(db, 'emailNotifications', notificationId), {
       notificationId,
       userId: w.userId,
-      recipientEmail: email,
+      recipientEmail: email.slice(0, 160),
       eventType,
-      subject,
-      summary,
+      subject: subject.slice(0, 160),
+      summary: summary.slice(0, 500),
       deliveryStatus,
       referenceId: w.withdrawalId,
       createdAt: serverTimestamp(),
@@ -485,7 +593,14 @@ export const AdminPanel: React.FC = () => {
         });
       });
 
-      if (nextStatus === 'paid') {
+      if (nextStatus === 'approved') {
+        await sendAdminEmailReceipt(
+          w,
+          'withdrawal_approved',
+          `Saque Pix de ${formatBRL(w.amountCents)} aprovado`,
+          `Sua solicitação de saque via Pix para a chave ${w.pixKey} foi aprovada na revisão administrativa e entrou na fila de pagamento.`
+        );
+      } else if (nextStatus === 'paid') {
         await sendAdminEmailReceipt(
           { ...w, pixTransactionId: pixTxId },
           'withdrawal_paid',
@@ -2041,6 +2156,110 @@ export const AdminPanel: React.FC = () => {
                       )}
                     </div>
                   ))}
+                </div>
+              )}
+            </div>
+
+            <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-6 space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-lg bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-400 flex items-center justify-center shrink-0">
+                    <Mail className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-slate-900 dark:text-zinc-50">
+                      Automação de E-mail SMTP (Nodemailer)
+                    </h3>
+                    <p className="text-xs text-slate-500 dark:text-zinc-400">
+                      Dispara e-mails automáticos de saques Pix e convites usando as variáveis SMTP do ambiente.
+                    </p>
+                  </div>
+                </div>
+
+                <span
+                  className={`px-2.5 py-1 text-[11px] font-semibold rounded border ${
+                    smtpStatus?.configured
+                      ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800'
+                      : 'bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800'
+                  }`}
+                >
+                  {smtpStatus?.configured ? 'SMTP Configurado' : 'Aguardando Variáveis SMTP'}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-xs">
+                <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800">
+                  <div className="text-[11px] text-slate-500 dark:text-zinc-400">SMTP_HOST</div>
+                  <div className="font-mono font-semibold text-slate-900 dark:text-zinc-100 truncate mt-0.5">
+                    {smtpStatus?.host || 'Não definido'}
+                  </div>
+                </div>
+                <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800">
+                  <div className="text-[11px] text-slate-500 dark:text-zinc-400">SMTP_PORT</div>
+                  <div className="font-mono font-semibold text-slate-900 dark:text-zinc-100 mt-0.5">
+                    {smtpStatus?.port || 587} {smtpStatus?.secure ? '(TLS)' : '(STARTTLS)'}
+                  </div>
+                </div>
+                <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800">
+                  <div className="text-[11px] text-slate-500 dark:text-zinc-400">SMTP_USER</div>
+                  <div className="font-mono font-semibold text-slate-900 dark:text-zinc-100 truncate mt-0.5">
+                    {smtpStatus?.userMasked || 'Não definido'}
+                  </div>
+                </div>
+                <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800">
+                  <div className="text-[11px] text-slate-500 dark:text-zinc-400">SMTP_FROM</div>
+                  <div className="font-mono font-semibold text-slate-900 dark:text-zinc-100 truncate mt-0.5">
+                    {smtpStatus?.from || 'Padrão'}
+                  </div>
+                </div>
+              </div>
+
+              <div className="text-xs text-slate-600 dark:text-zinc-400 space-y-1">
+                <div className="font-semibold text-slate-800 dark:text-zinc-200">
+                  Gatilhos automáticos ativos:
+                </div>
+                <div>
+                  Saques Pix (solicitado, aprovado, pago e recusado/estornado) · Convites (convite enviado por e-mail, boas-vindas ao indicado e aviso de +500 pts + 12% ao indicador).
+                </div>
+              </div>
+
+              <form onSubmit={handleSendSmtpTest} className="flex flex-col sm:flex-row gap-2 pt-1">
+                <input
+                  type="email"
+                  required
+                  value={smtpTestEmail}
+                  onChange={(e) => setSmtpTestEmail(e.target.value)}
+                  placeholder="E-mail para teste SMTP"
+                  className="flex-1 px-3 py-2 text-xs bg-white dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-lg"
+                />
+                <button
+                  type="button"
+                  disabled={smtpChecking}
+                  onClick={handleVerifySmtp}
+                  className="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold border border-slate-300 dark:border-zinc-700 text-slate-700 dark:text-zinc-200 rounded-lg hover:bg-slate-50 dark:hover:bg-zinc-800 cursor-pointer"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${smtpChecking ? 'animate-spin' : ''}`} />
+                  Verificar Conexão
+                </button>
+                <button
+                  type="submit"
+                  disabled={smtpTestSending || !smtpTestEmail.trim()}
+                  className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 text-xs font-semibold bg-slate-900 dark:bg-emerald-600 hover:bg-slate-800 dark:hover:bg-emerald-500 disabled:opacity-50 text-white rounded-lg cursor-pointer"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  {smtpTestSending ? 'Enviando...' : 'Testar Envio'}
+                </button>
+              </form>
+
+              {smtpTestMsg && (
+                <div
+                  className={`p-3 rounded-lg border text-xs ${
+                    smtpTestMsg.type === 'success'
+                      ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300'
+                      : 'bg-red-50 dark:bg-red-950/40 border-red-200 dark:border-red-800 text-red-700 dark:text-red-300'
+                  }`}
+                >
+                  {smtpTestMsg.text}
                 </div>
               )}
             </div>

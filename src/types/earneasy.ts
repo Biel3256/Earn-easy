@@ -105,9 +105,13 @@ export interface EmailNotification {
   eventType:
     | 'conversion_confirmed'
     | 'withdrawal_requested'
+    | 'withdrawal_approved'
     | 'withdrawal_paid'
     | 'withdrawal_rejected'
-    | 'streak_bonus_credited';
+    | 'streak_bonus_credited'
+    | 'invite_sent'
+    | 'referral_welcome'
+    | 'referral_bonus_credited';
   subject: string;
   summary: string;
   deliveryStatus: 'sent_smtp' | 'logged_in_app' | 'failed';

@@ -180,7 +180,7 @@
         "notificationId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "recipientEmail": { "type": "string", "minLength": 3, "maxLength": 160 },
-        "eventType": { "type": "string", "enum": ["conversion_confirmed", "withdrawal_requested", "withdrawal_paid", "withdrawal_rejected", "streak_bonus_credited"] },
+        "eventType": { "type": "string", "enum": ["conversion_confirmed", "withdrawal_requested", "withdrawal_approved", "withdrawal_paid", "withdrawal_rejected", "streak_bonus_credited", "invite_sent", "referral_welcome", "referral_bonus_credited"] },
         "subject": { "type": "string", "minLength": 3, "maxLength": 160 },
         "summary": { "type": "string", "minLength": 3, "maxLength": 500 },
         "deliveryStatus": { "type": "string", "enum": ["sent_smtp", "logged_in_app", "failed"] },

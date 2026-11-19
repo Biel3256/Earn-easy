@@ -3,8 +3,13 @@ import crypto from 'crypto';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
-import nodemailer from 'nodemailer';
 import { createServer as createViteServer } from 'vite';
+import {
+  getSmtpStatus,
+  sendSmtpTestEmail,
+  sendTransactionalEmail,
+  verifySmtpConnection,
+} from './server/mailer';
 
 dotenv.config();
 
@@ -59,24 +64,6 @@ const CATEGORY_BOUNDS: Record<string, { minDurationMs: number; maxScore: number;
   math_sprint: { minDurationMs: 8000, maxScore: 450, maxPtsPerSec: 30 },
   memory_match: { minDurationMs: 6000, maxScore: 400, maxPtsPerSec: 35 },
 };
-
-function createSmtpTransporter() {
-  const host = process.env.SMTP_HOST;
-  const user = process.env.SMTP_USER;
-  const pass = process.env.SMTP_PASS;
-  const port = Number(process.env.SMTP_PORT || 587);
-
-  if (!host || !user || !pass) {
-    return null;
-  }
-
-  return nodemailer.createTransport({
-    host,
-    port,
-    secure: port === 465,
-    auth: { user, pass },
-  });
-}
 
 function validateEnterpriseApiKey(req: express.Request): boolean {
   const providedKey = req.header('x-api-key');
@@ -146,65 +133,80 @@ async function startServer() {
     });
   });
 
-  // 2. Transactional Email Notification Dispatcher
+  // 2. Transactional Email Notification Dispatcher (Nodemailer SMTP)
+  app.get('/api/notifications/smtp-status', async (req, res) => {
+    const status = getSmtpStatus();
+    if (req.query.verify === 'true') {
+      const verification = await verifySmtpConnection();
+      res.json({
+        ...status,
+        verified: verification.verified,
+        verificationError: verification.error || null,
+      });
+      return;
+    }
+    res.json(status);
+  });
+
   app.post('/api/notifications/email', async (req, res) => {
-    const { recipientEmail, eventType, subject, summary, referenceId, amountBrl, pixKey } = req.body ?? {};
+    const {
+      recipientEmail,
+      eventType,
+      subject,
+      summary,
+      referenceId,
+      amountBrl,
+      pixKey,
+      inviterName,
+      inviteLink,
+      inviteCode,
+      invitedDisplayName,
+      bonusPoints,
+      commissionPct,
+      customMessage,
+    } = req.body ?? {};
+
     if (!recipientEmail || !subject || !summary) {
       res.status(400).json({ error: 'Campos obrigatórios de e-mail ausentes.' });
       return;
     }
 
-    const transporter = createSmtpTransporter();
-    const htmlBody = `
-      <div style="font-family: 'DM Sans', Arial, sans-serif; max-width: 560px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; background: #ffffff;">
-        <div style="background: #0f172a; color: #ffffff; padding: 20px 24px;">
-          <h1 style="margin: 0; font-size: 18px; letter-spacing: -0.02em;">Earn Easy</h1>
-          <p style="margin: 4px 0 0; font-size: 12px; color: #94a3b8;">Confirmação de Transação Financeira</p>
-        </div>
-        <div style="padding: 24px; color: #0f172a;">
-          <h2 style="margin: 0 0 12px; font-size: 16px;">${String(subject)}</h2>
-          <p style="margin: 0 0 16px; font-size: 14px; line-height: 1.6; color: #334155;">${String(summary)}</p>
-          <table style="width: 100%; border-collapse: collapse; font-size: 13px; background: #f8fafc; border-radius: 8px;">
-            <tr><td style="padding: 10px 12px; color: #64748b;">Evento</td><td style="padding: 10px 12px; font-weight: 600; text-align: right;">${String(eventType || 'transacao')}</td></tr>
-            ${amountBrl ? `<tr><td style="padding: 10px 12px; color: #64748b;">Valor</td><td style="padding: 10px 12px; font-weight: 700; color: #059669; text-align: right;">${String(amountBrl)}</td></tr>` : ''}
-            ${pixKey ? `<tr><td style="padding: 10px 12px; color: #64748b;">Chave Pix</td><td style="padding: 10px 12px; font-family: monospace; text-align: right;">${String(pixKey)}</td></tr>` : ''}
-            <tr><td style="padding: 10px 12px; color: #64748b;">Referência</td><td style="padding: 10px 12px; font-family: monospace; text-align: right;">${String(referenceId || '-')}</td></tr>
-          </table>
-          <p style="margin: 20px 0 0; font-size: 12px; color: #64748b;">Este é um recibo automático gerado pelo sistema antifraude e financeiro do Earn Easy.</p>
-        </div>
-      </div>
-    `;
+    const result = await sendTransactionalEmail({
+      recipientEmail: String(recipientEmail),
+      eventType: eventType ? String(eventType) : undefined,
+      subject: String(subject),
+      summary: String(summary),
+      referenceId: referenceId ? String(referenceId) : undefined,
+      amountBrl: amountBrl ? String(amountBrl) : undefined,
+      pixKey: pixKey ? String(pixKey) : undefined,
+      inviterName: inviterName ? String(inviterName) : undefined,
+      inviteLink: inviteLink ? String(inviteLink) : undefined,
+      inviteCode: inviteCode ? String(inviteCode) : undefined,
+      invitedDisplayName: invitedDisplayName ? String(invitedDisplayName) : undefined,
+      bonusPoints: typeof bonusPoints === 'number' ? bonusPoints : undefined,
+      commissionPct: typeof commissionPct === 'number' ? commissionPct : undefined,
+      customMessage: customMessage ? String(customMessage) : undefined,
+    });
 
-    if (!transporter) {
-      res.json({
-        deliveryStatus: 'logged_in_app',
-        smtpConfigured: false,
-        message: 'SMTP não configurado no ambiente. Notificação registrada com recibo no histórico da plataforma.',
-      });
+    if (result.deliveryStatus === 'failed') {
+      res.status(result.smtpConfigured ? 502 : 400).json(result);
       return;
     }
+    res.json(result);
+  });
 
-    try {
-      const info = await transporter.sendMail({
-        from: process.env.SMTP_FROM || process.env.SMTP_USER,
-        to: String(recipientEmail),
-        subject: `[Earn Easy] ${String(subject)}`,
-        text: `${String(subject)}\n\n${String(summary)}\nReferência: ${String(referenceId || '-')}`,
-        html: htmlBody,
-      });
-
-      res.json({
-        deliveryStatus: 'sent_smtp',
-        smtpConfigured: true,
-        messageId: info.messageId,
-      });
-    } catch (err) {
-      res.status(502).json({
-        deliveryStatus: 'failed',
-        smtpConfigured: true,
-        error: err instanceof Error ? err.message : 'Erro ao enviar via SMTP.',
-      });
+  app.post('/api/notifications/test', async (req, res) => {
+    const recipientEmail = String(req.body?.recipientEmail || '').trim();
+    if (!recipientEmail) {
+      res.status(400).json({ error: 'Informe um e-mail destinatário para o teste SMTP.' });
+      return;
     }
+    const result = await sendSmtpTestEmail(recipientEmail);
+    if (result.deliveryStatus === 'failed') {
+      res.status(502).json(result);
+      return;
+    }
+    res.json(result);
   });
 
   // 3. Enterprise Financial API v1 (ERP / BI / Accounting Integration)
@@ -213,7 +215,7 @@ async function startServer() {
       service: 'Earn Easy Enterprise Financial API',
       version: 'v1',
       status: 'operational',
-      smtpEnabled: Boolean(process.env.SMTP_HOST && process.env.SMTP_USER),
+      smtpEnabled: getSmtpStatus().configured,
       registeredIntegrations: registeredApiKeys.size,
       timestamp: new Date().toISOString(),
     });
