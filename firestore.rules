@@ -98,6 +98,33 @@ service cloud.firestore {
       return !('publishAt' in promoData) || promoData.publishAt <= request.time;
     }
 
+    function withdrawalSettingsExists() {
+      return exists(/databases/$(database)/documents/appSettings/withdrawal);
+    }
+
+    function withdrawalSettings() {
+      return get(/databases/$(database)/documents/appSettings/withdrawal).data;
+    }
+
+    function activeFirstMinCents() {
+      return withdrawalSettingsExists() ? withdrawalSettings().firstWithdrawalMinCents : 10;
+    }
+
+    function activeStandardMinCents() {
+      return withdrawalSettingsExists() ? withdrawalSettings().standardWithdrawalMinCents : 500;
+    }
+
+    function isFirstWithdrawalEligible(userData) {
+      return userData.totalWithdrawnCents == 0 &&
+        (!('firstWithdrawalUsed' in userData) || userData.firstWithdrawalUsed == false);
+    }
+
+    function requiredWithdrawalMinCents(userData) {
+      return isFirstWithdrawalEligible(userData)
+        ? activeFirstMinCents()
+        : activeStandardMinCents();
+    }
+
     function isValidReferralCommission(comm, referrerUid, invitedUid) {
       return comm >= 1 &&
         comm <= 60 &&
@@ -139,7 +166,7 @@ service cloud.firestore {
         'uid', 'displayName', 'photoURL', 'pointsBalance', 'lifetimePoints',
         'brlBalanceCents', 'totalWithdrawnCents', 'lastConversionDate',
         'status', 'riskScore', 'gamesPlayed', 'banReason', 'banExplanation',
-        'bannedBy', 'lastPromoCode', 'createdAt', 'updatedAt'
+        'bannedBy', 'lastPromoCode', 'firstWithdrawalUsed', 'createdAt', 'updatedAt'
       ]) &&
       isValidId(data.uid) &&
       data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80 &&
@@ -156,6 +183,7 @@ service cloud.firestore {
       (!('banExplanation' in data) || (data.banExplanation is string && data.banExplanation.size() <= 400)) &&
       (!('bannedBy' in data) || (data.bannedBy is string && data.bannedBy.size() <= 160)) &&
       (!('lastPromoCode' in data) || isValidPromoCodeId(data.lastPromoCode)) &&
+      (!('firstWithdrawalUsed' in data) || data.firstWithdrawalUsed is bool) &&
       data.createdAt is timestamp &&
       data.updatedAt is timestamp;
     }
@@ -241,7 +269,7 @@ service cloud.firestore {
       isValidId(data.withdrawalId) &&
       isValidId(data.userId) &&
       data.userDisplayName is string && data.userDisplayName.size() >= 1 && data.userDisplayName.size() <= 80 &&
-      data.amountCents is number && data.amountCents >= 500 &&
+      data.amountCents is number && data.amountCents >= 1 &&
       data.pixKeyType in ['cpf', 'email', 'phone', 'random'] &&
       data.pixKey is string && data.pixKey.size() >= 5 && data.pixKey.size() <= 140 &&
       data.status in ['pending', 'approved', 'paid', 'rejected'] &&
@@ -458,6 +486,58 @@ service cloud.firestore {
       data.createdAt is timestamp;
     }
 
+    function isValidWithdrawalSettings(data) {
+      return data.keys().hasAll([
+        'settingId', 'firstWithdrawalMinCents', 'standardWithdrawalMinCents',
+        'quickAmountsCents', 'updatedBy', 'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'settingId', 'firstWithdrawalMinCents', 'standardWithdrawalMinCents',
+        'quickAmountsCents', 'updatedBy', 'updatedAt'
+      ]) &&
+      data.settingId == 'withdrawal' &&
+      data.firstWithdrawalMinCents is number && data.firstWithdrawalMinCents >= 1 && data.firstWithdrawalMinCents <= 2000 &&
+      data.standardWithdrawalMinCents is number && data.standardWithdrawalMinCents >= 1 && data.standardWithdrawalMinCents <= 2000 &&
+      data.quickAmountsCents is list &&
+      data.quickAmountsCents.size() >= 1 &&
+      data.quickAmountsCents.size() <= 12 &&
+      data.quickAmountsCents[0] is number &&
+      data.quickAmountsCents[0] >= 1 &&
+      data.quickAmountsCents[0] <= 2000 &&
+      data.updatedBy is string && data.updatedBy.size() >= 1 && data.updatedBy.size() <= 160 &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidWithdrawalAttemptLog(data) {
+      return data.keys().hasAll([
+        'attemptId', 'userId', 'userDisplayName', 'withdrawalId', 'amountCents',
+        'pixKeyType', 'pixKey', 'status', 'details', 'deviceFingerprint',
+        'actorUid', 'createdAt'
+      ]) &&
+      data.keys().hasOnly([
+        'attemptId', 'userId', 'userDisplayName', 'withdrawalId', 'amountCents',
+        'pixKeyType', 'pixKey', 'status', 'details', 'deviceFingerprint',
+        'actorUid', 'createdAt'
+      ]) &&
+      isValidId(data.attemptId) &&
+      isValidId(data.userId) &&
+      data.userDisplayName is string && data.userDisplayName.size() >= 1 && data.userDisplayName.size() <= 80 &&
+      data.withdrawalId is string && data.withdrawalId.size() <= 128 &&
+      data.amountCents is number && data.amountCents >= 0 && data.amountCents <= 10000000 &&
+      data.pixKeyType in ['none', 'cpf', 'email', 'phone', 'random'] &&
+      data.pixKey is string && data.pixKey.size() <= 140 &&
+      data.status in [
+        'submitted_pending', 'approved', 'paid', 'rejected',
+        'blocked_min_amount', 'blocked_insufficient_balance',
+        'blocked_invalid_pix', 'blocked_captcha',
+        'blocked_account_status', 'failed_transaction'
+      ] &&
+      data.details is string && data.details.size() >= 2 && data.details.size() <= 300 &&
+      data.deviceFingerprint is string && data.deviceFingerprint.size() <= 128 &&
+      isValidId(data.actorUid) &&
+      data.createdAt is timestamp;
+    }
+
     // --- Collection Rules ---
 
     // 1. Users Collection
@@ -479,6 +559,7 @@ service cloud.firestore {
         !('banExplanation' in incoming()) &&
         !('bannedBy' in incoming()) &&
         !('lastPromoCode' in incoming()) &&
+        !('firstWithdrawalUsed' in incoming()) &&
         incoming().createdAt == request.time &&
         incoming().updatedAt == request.time && (
           (incoming().status == 'active' && incoming().riskScore == 0) ||
@@ -523,12 +604,14 @@ service cloud.firestore {
                 ((existing().pointsBalance - incoming().pointsBalance) % 1000) == 0 &&
                 incoming().brlBalanceCents == existing().brlBalanceCents + ((existing().pointsBalance - incoming().pointsBalance) / 100)
               ) ||
-              // Action D: Pix Withdrawal Deduction (minimum 500 BRL cents = R$ 5.00)
+              // Action D: Pix Withdrawal Deduction (1st withdrawal default 10 cents; configurable 1..2000 cents via admin)
               (
                 incoming().status == existing().status &&
                 incoming().riskScore == existing().riskScore &&
-                incoming().diff(existing()).affectedKeys().hasOnly(['brlBalanceCents', 'updatedAt']) &&
-                (existing().brlBalanceCents - incoming().brlBalanceCents) >= 500
+                incoming().diff(existing()).affectedKeys().hasOnly(['brlBalanceCents', 'firstWithdrawalUsed', 'updatedAt']) &&
+                incoming().firstWithdrawalUsed == true &&
+                incoming().brlBalanceCents < existing().brlBalanceCents &&
+                (existing().brlBalanceCents - incoming().brlBalanceCents) >= requiredWithdrawalMinCents(existing())
               ) ||
               // Action E: Daily Random Check-in (120–200 pts once per UTC day + R$10 / 1000 cents at 30-day streak)
               (
@@ -724,7 +807,11 @@ service cloud.firestore {
         incoming().pixTransactionId == '' &&
         incoming().createdAt == request.time &&
         incoming().updatedAt == request.time &&
-        isActiveUser(request.auth.uid);
+        isActiveUser(request.auth.uid) &&
+        incoming().amountCents >= requiredWithdrawalMinCents(get(/databases/$(database)/documents/users/$(request.auth.uid)).data) &&
+        getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.brlBalanceCents ==
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.brlBalanceCents - incoming().amountCents &&
+        getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.firstWithdrawalUsed == true;
       allow update: if isValidId(withdrawalId) &&
         isAdmin() &&
         isValidWithdrawal(incoming()) &&
@@ -1007,6 +1094,59 @@ service cloud.firestore {
         incoming().createdAt == existing().createdAt;
 
       allow delete: if isValidId(messageId) && isAdmin();
+    }
+
+    // 16. Platform App Settings (configurable Pix withdrawal minimums from 1 to 2000 cents)
+    match /appSettings/{settingId} {
+      allow get: if isValidId(settingId) && settingId == 'withdrawal' && isSignedIn();
+      allow list: if isAdmin();
+
+      allow create: if isValidId(settingId) &&
+        settingId == 'withdrawal' &&
+        isAdmin() &&
+        isValidWithdrawalSettings(incoming()) &&
+        incoming().settingId == settingId &&
+        incoming().updatedAt == request.time;
+
+      allow update: if isValidId(settingId) &&
+        settingId == 'withdrawal' &&
+        isAdmin() &&
+        isValidWithdrawalSettings(incoming()) &&
+        incoming().settingId == existing().settingId &&
+        incoming().updatedAt == request.time;
+
+      allow delete: if isValidId(settingId) && isAdmin();
+    }
+
+    // 17. Pix Withdrawal Attempt Audit Logs (immutable append-only trail for anti-fraud)
+    match /withdrawalAttempts/{attemptId} {
+      allow get: if isValidId(attemptId) && (isAdmin() || (isSignedIn() && existing().userId == request.auth.uid));
+      allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+
+      allow create: if isValidId(attemptId) &&
+        isSignedIn() &&
+        isValidWithdrawalAttemptLog(incoming()) &&
+        incoming().attemptId == attemptId &&
+        incoming().actorUid == request.auth.uid &&
+        incoming().createdAt == request.time && (
+          isAdmin() || (
+            incoming().userId == request.auth.uid &&
+            incoming().status in [
+              'submitted_pending', 'blocked_min_amount',
+              'blocked_insufficient_balance', 'blocked_invalid_pix',
+              'blocked_captcha', 'blocked_account_status',
+              'failed_transaction'
+            ] && (
+              incoming().status != 'submitted_pending' || (
+                isValidId(incoming().withdrawalId) &&
+                existsAfter(/databases/$(database)/documents/withdrawals/$(incoming().withdrawalId))
+              )
+            )
+          )
+        );
+
+      allow update: if false;
+      allow delete: if isValidId(attemptId) && isAdmin();
     }
   }
 }

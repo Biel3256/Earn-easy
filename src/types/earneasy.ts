@@ -25,6 +25,7 @@ export interface UserAccount {
   banExplanation?: string;
   bannedBy?: string;
   lastPromoCode?: string;
+  firstWithdrawalUsed?: boolean;
   createdAt: unknown;
   updatedAt: unknown;
 }
@@ -207,6 +208,42 @@ export interface MailboxMessage {
   createdAt: unknown;
 }
 
+export interface WithdrawalSettings {
+  settingId: 'withdrawal';
+  firstWithdrawalMinCents: number;
+  standardWithdrawalMinCents: number;
+  quickAmountsCents: number[];
+  updatedBy: string;
+  updatedAt: unknown;
+}
+
+export type WithdrawalAttemptStatus =
+  | 'submitted_pending'
+  | 'approved'
+  | 'paid'
+  | 'rejected'
+  | 'blocked_min_amount'
+  | 'blocked_insufficient_balance'
+  | 'blocked_invalid_pix'
+  | 'blocked_captcha'
+  | 'blocked_account_status'
+  | 'failed_transaction';
+
+export interface WithdrawalAttemptLog {
+  attemptId: string;
+  userId: string;
+  userDisplayName: string;
+  withdrawalId: string;
+  amountCents: number;
+  pixKeyType: 'none' | PixKeyType;
+  pixKey: string;
+  status: WithdrawalAttemptStatus;
+  details: string;
+  deviceFingerprint: string;
+  actorUid: string;
+  createdAt: unknown;
+}
+
 export const GAME_LABELS: Record<GameCategory, string> = {
   tic_tac_toe: 'Jogo da Velha',
   dot_link: 'Dot Link',
@@ -218,7 +255,19 @@ export const GAME_LABELS: Record<GameCategory, string> = {
 export const ADMIN_BOOTSTRAP_EMAIL = 'anthonysamuel61500@gmail.com';
 export const POINTS_PER_TEN_CENTS = 1000;
 export const CENTS_PER_BLOCK = 10;
+export const FIRST_PIX_WITHDRAWAL_MIN_CENTS = 10;
 export const MIN_PIX_WITHDRAWAL_CENTS = 500;
+export const MIN_CONFIGURABLE_WITHDRAWAL_CENTS = 1;
+export const MAX_CONFIGURABLE_WITHDRAWAL_CENTS = 2000;
+export const DEFAULT_WITHDRAWAL_QUICK_AMOUNTS_CENTS = [10, 50, 100, 200, 500, 1000, 2000];
+export const DEFAULT_WITHDRAWAL_SETTINGS: WithdrawalSettings = {
+  settingId: 'withdrawal',
+  firstWithdrawalMinCents: FIRST_PIX_WITHDRAWAL_MIN_CENTS,
+  standardWithdrawalMinCents: MIN_PIX_WITHDRAWAL_CENTS,
+  quickAmountsCents: DEFAULT_WITHDRAWAL_QUICK_AMOUNTS_CENTS,
+  updatedBy: 'system',
+  updatedAt: null,
+};
 export const STREAK_TARGET_DAYS = 30;
 export const STREAK_REWARD_CENTS = 1000;
 export const REFERRAL_SIGNUP_BONUS_POINTS = 500;

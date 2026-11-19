@@ -399,9 +399,9 @@ export const AuthGateScreen: React.FC<AuthGateScreenProps> = ({
                   </div>
                   <div className="bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 rounded-xl p-3.5 space-y-1">
                     <Landmark className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-                    <div className="text-xs font-bold text-slate-900 dark:text-zinc-100">Saque Pix R$ 5,00</div>
+                    <div className="text-xs font-bold text-slate-900 dark:text-zinc-100">1º Saque R$ 0,10</div>
                     <div className="text-[11px] text-slate-500 dark:text-zinc-400">
-                      1.000 pts = R$ 0,10 com recibo por e-mail
+                      1.000 pts = R$ 0,10 direto no Pix
                     </div>
                   </div>
                 </div>
@@ -468,9 +468,9 @@ export const AuthGateScreen: React.FC<AuthGateScreenProps> = ({
                   </span>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span>Saque mínimo Pix</span>
+                  <span>1º saque mínimo Pix</span>
                   <span className="font-mono font-semibold text-emerald-700 dark:text-emerald-400 tabular-nums">
-                    R$ 5,00
+                    R$ 0,10
                   </span>
                 </div>
                 <div className="flex items-center justify-between">

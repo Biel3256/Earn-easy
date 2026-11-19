@@ -20,6 +20,7 @@
         "banExplanation": { "type": "string", "maxLength": 400 },
         "bannedBy": { "type": "string", "maxLength": 160 },
         "lastPromoCode": { "type": "string", "maxLength": 128 },
+        "firstWithdrawalUsed": { "type": "boolean" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -123,7 +124,7 @@
     },
     "PixWithdrawal": {
       "title": "PixWithdrawal",
-      "description": "Pix payout request (minimum R$ 5.00 / 500 cents) managed via admin console.",
+      "description": "Pix payout request (first withdrawal default R$ 0.10 / 10 cents; configurable 1 to 2000 cents via admin panel).",
       "type": "object",
       "properties": {
         "withdrawalId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
@@ -392,6 +393,74 @@
         "createdBy",
         "createdAt"
       ]
+    },
+    "WithdrawalSettings": {
+      "title": "WithdrawalSettings",
+      "description": "Admin-managed Pix withdrawal minimums (first withdrawal and standard minimum between 1 and 2000 cents) and quick amount buttons.",
+      "type": "object",
+      "properties": {
+        "settingId": { "type": "string", "maxLength": 32, "pattern": "^withdrawal$" },
+        "firstWithdrawalMinCents": { "type": "number" },
+        "standardWithdrawalMinCents": { "type": "number" },
+        "quickAmountsCents": { "type": "array" },
+        "updatedBy": { "type": "string", "maxLength": 160 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "settingId",
+        "firstWithdrawalMinCents",
+        "standardWithdrawalMinCents",
+        "quickAmountsCents",
+        "updatedBy",
+        "updatedAt"
+      ]
+    },
+    "WithdrawalAttemptLog": {
+      "title": "WithdrawalAttemptLog",
+      "description": "Immutable anti-fraud audit log recording every Pix withdrawal attempt (submitted, blocked, failed, or admin-processed) with status, timestamp, and userId.",
+      "type": "object",
+      "properties": {
+        "attemptId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userDisplayName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "withdrawalId": { "type": "string", "maxLength": 128 },
+        "amountCents": { "type": "number" },
+        "pixKeyType": { "type": "string", "enum": ["none", "cpf", "email", "phone", "random"] },
+        "pixKey": { "type": "string", "maxLength": 140 },
+        "status": {
+          "type": "string",
+          "enum": [
+            "submitted_pending",
+            "approved",
+            "paid",
+            "rejected",
+            "blocked_min_amount",
+            "blocked_insufficient_balance",
+            "blocked_invalid_pix",
+            "blocked_captcha",
+            "blocked_account_status",
+            "failed_transaction"
+          ]
+        },
+        "details": { "type": "string", "minLength": 2, "maxLength": 300 },
+        "deviceFingerprint": { "type": "string", "maxLength": 128 },
+        "actorUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "attemptId",
+        "userId",
+        "userDisplayName",
+        "withdrawalId",
+        "amountCents",
+        "pixKeyType",
+        "pixKey",
+        "status",
+        "details",
+        "deviceFingerprint",
+        "actorUid",
+        "createdAt"
+      ]
     }
   },
   "firestore": {
@@ -458,6 +527,14 @@
     "/mailboxMessages/{messageId}": {
       "schema": { "$ref": "#/entities/MailboxMessage" },
       "description": "Platform-wide Caixa de Correio inbox messages sent when admin generates promo code events."
+    },
+    "/appSettings/{settingId}": {
+      "schema": { "$ref": "#/entities/WithdrawalSettings" },
+      "description": "Admin-configured platform settings such as configurable Pix withdrawal minimums (1 to 2000 cents)."
+    },
+    "/withdrawalAttempts/{attemptId}": {
+      "schema": { "$ref": "#/entities/WithdrawalAttemptLog" },
+      "description": "Detailed anti-fraud audit trail of all Pix withdrawal attempts and status updates."
     }
   }
 }

@@ -61,11 +61,11 @@ const TUTORIAL_STEPS: TutorialStep[] = [
   {
     id: 4,
     kicker: 'Passo 4 de 4 · Primeiro Saque Pix',
-    title: 'Solicite seu saque via Pix a partir de R$ 5,00',
+    title: 'Solicite seu 1º saque via Pix a partir de R$ 0,10',
     description:
-      'Assim que seu saldo em reais atingir R$ 5,00, preencha sua chave Pix (CPF, E-mail, Telefone ou Chave Aleatória) na Carteira Pix e acompanhe o pagamento em tempo real.',
+      'Já na sua primeira conversão (1.000 pts = R$ 0,10), você pode testar seu primeiro saque via Pix! Basta preencher sua chave Pix na Carteira Pix e acompanhar o pagamento em tempo real.',
     highlights: [
-      'Valor mínimo para transferência Pix: R$ 5,00.',
+      'Primeiro saque Pix liberado a partir de R$ 0,10.',
       'Acompanhe o status (Pendente, Aprovado ou Pago) no Histórico de Saques.',
       'Guarde sua chave Pix favorita para agilizar próximos resgates.',
     ],

@@ -30,13 +30,15 @@ import {
   ADMIN_BOOTSTRAP_EMAIL,
   CENTS_PER_BLOCK,
   DailyCheckin,
+  DEFAULT_WITHDRAWAL_SETTINGS,
   EmailNotification,
   FraudEvent,
   GameCategory,
   GameSession,
   LevelReward,
   MailboxMessage,
-  MIN_PIX_WITHDRAWAL_CENTS,
+  MAX_CONFIGURABLE_WITHDRAWAL_CENTS,
+  MIN_CONFIGURABLE_WITHDRAWAL_CENTS,
   PixKeyType,
   PixWithdrawal,
   POINTS_PER_TEN_CENTS,
@@ -50,6 +52,8 @@ import {
   STREAK_TARGET_DAYS,
   UserAccount,
   UserPrivateInfo,
+  WithdrawalAttemptStatus,
+  WithdrawalSettings,
   WithdrawalStatus,
 } from '../types/earneasy';
 import {
@@ -96,6 +100,9 @@ interface AuthContextValue {
   mailboxMessages: MailboxMessage[];
   readMailboxIds: string[];
   unreadMailboxCount: number;
+  withdrawalSettings: WithdrawalSettings;
+  isFirstWithdrawalEligible: boolean;
+  activeMinWithdrawalCents: number;
   needsOnboarding: boolean;
   authError: string | null;
   browserNotifPermission: BrowserNotificationPermissionState;
@@ -140,6 +147,14 @@ interface AuthContextValue {
     severity: FraudEvent['severity'],
     details: string
   ) => Promise<void>;
+  logWithdrawalAttempt: (params: {
+    status: WithdrawalAttemptStatus;
+    amountCents: number;
+    pixKeyType: 'none' | PixKeyType;
+    pixKey: string;
+    withdrawalId?: string;
+    details: string;
+  }) => Promise<void>;
   updateUserProfile: (params: {
     displayName: string;
     photoURL: string;
@@ -239,6 +254,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [myPromoRedemptions, setMyPromoRedemptions] = useState<PromoRedemption[]>([]);
   const [mailboxMessages, setMailboxMessages] = useState<MailboxMessage[]>([]);
   const [readMailboxIds, setReadMailboxIds] = useState<string[]>([]);
+  const [withdrawalSettings, setWithdrawalSettings] =
+    useState<WithdrawalSettings>(DEFAULT_WITHDRAWAL_SETTINGS);
   const [authError, setAuthError] = useState<string | null>(null);
   const [browserNotifPermission, setBrowserNotifPermission] =
     useState<BrowserNotificationPermissionState>(() => getBrowserNotificationPermission());
@@ -304,6 +321,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setMyPromoRedemptions([]);
         setMailboxMessages([]);
         setReadMailboxIds([]);
+        setWithdrawalSettings(DEFAULT_WITHDRAWAL_SETTINGS);
         lastSyncedLbSigRef.current = '';
         withdrawalsInitRef.current = false;
         prevWithdrawalStatusRef.current.clear();
@@ -652,6 +670,49 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       (error) => handleFirestoreError(error, OperationType.LIST, 'mailboxMessages')
     );
 
+    const unsubWithdrawalSettings = onSnapshot(
+      doc(db, 'appSettings', 'withdrawal'),
+      (snap) => {
+        if (!snap.exists()) {
+          setWithdrawalSettings(DEFAULT_WITHDRAWAL_SETTINGS);
+          return;
+        }
+        const raw = snap.data() as Partial<WithdrawalSettings>;
+        const clamp = (val: unknown, fallback: number) => {
+          const n = typeof val === 'number' && Number.isFinite(val) ? Math.round(val) : fallback;
+          return Math.min(MAX_CONFIGURABLE_WITHDRAWAL_CENTS, Math.max(MIN_CONFIGURABLE_WITHDRAWAL_CENTS, n));
+        };
+        const quickList = Array.isArray(raw.quickAmountsCents)
+          ? raw.quickAmountsCents
+              .filter(
+                (v): v is number =>
+                  typeof v === 'number' &&
+                  Number.isFinite(v) &&
+                  v >= MIN_CONFIGURABLE_WITHDRAWAL_CENTS &&
+                  v <= MAX_CONFIGURABLE_WITHDRAWAL_CENTS
+              )
+              .sort((a, b) => a - b)
+          : DEFAULT_WITHDRAWAL_SETTINGS.quickAmountsCents;
+
+        setWithdrawalSettings({
+          settingId: 'withdrawal',
+          firstWithdrawalMinCents: clamp(
+            raw.firstWithdrawalMinCents,
+            DEFAULT_WITHDRAWAL_SETTINGS.firstWithdrawalMinCents
+          ),
+          standardWithdrawalMinCents: clamp(
+            raw.standardWithdrawalMinCents,
+            DEFAULT_WITHDRAWAL_SETTINGS.standardWithdrawalMinCents
+          ),
+          quickAmountsCents:
+            quickList.length > 0 ? quickList : DEFAULT_WITHDRAWAL_SETTINGS.quickAmountsCents,
+          updatedBy: typeof raw.updatedBy === 'string' ? raw.updatedBy : 'admin',
+          updatedAt: raw.updatedAt ?? null,
+        });
+      },
+      (error) => handleFirestoreError(error, OperationType.GET, 'appSettings/withdrawal')
+    );
+
     try {
       const saved = window.localStorage.getItem(`earneasy_read_mail_${uid}`);
       if (saved) {
@@ -697,6 +758,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       unsubPublicPromoEvents();
       unsubPromoRedemptions();
       unsubMailbox();
+      unsubWithdrawalSettings();
     };
   }, [authReady, firebaseUser]);
 
@@ -981,6 +1043,60 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return { brlCentsCredited, emailStatus };
   };
 
+  const isFirstWithdrawalEligible = Boolean(
+    userAccount &&
+      userAccount.totalWithdrawnCents === 0 &&
+      !userAccount.firstWithdrawalUsed &&
+      !myWithdrawals.some((w) => w.status !== 'rejected')
+  );
+
+  const activeMinWithdrawalCents = isFirstWithdrawalEligible
+    ? withdrawalSettings.firstWithdrawalMinCents
+    : withdrawalSettings.standardWithdrawalMinCents;
+
+  const logWithdrawalAttempt = async (params: {
+    status: WithdrawalAttemptStatus;
+    amountCents: number;
+    pixKeyType: 'none' | PixKeyType;
+    pixKey: string;
+    withdrawalId?: string;
+    details: string;
+  }) => {
+    if (!firebaseUser) return;
+    const attemptId = generateId('wat');
+    try {
+      const fingerprint = await getDeviceFingerprint();
+      const safeAmount = Number.isFinite(params.amountCents)
+        ? Math.min(10_000_000, Math.max(0, Math.round(params.amountCents)))
+        : 0;
+      const safeName = (
+        userAccount?.displayName ||
+        firebaseUser.displayName ||
+        'Jogador'
+      )
+        .trim()
+        .slice(0, 80) || 'Jogador';
+      const safeDetails = params.details.trim().slice(0, 300) || 'Tentativa de saque Pix';
+
+      await setDoc(doc(db, 'withdrawalAttempts', attemptId), {
+        attemptId,
+        userId: firebaseUser.uid,
+        userDisplayName: safeName,
+        withdrawalId: (params.withdrawalId || '').slice(0, 128),
+        amountCents: safeAmount,
+        pixKeyType: params.pixKeyType,
+        pixKey: params.pixKey.slice(0, 140),
+        status: params.status,
+        details: safeDetails.length >= 2 ? safeDetails : 'Tentativa registrada',
+        deviceFingerprint: fingerprint.slice(0, 128),
+        actorUid: firebaseUser.uid,
+        createdAt: serverTimestamp(),
+      });
+    } catch {
+      // Do not break user flow if auxiliary audit logging fails
+    }
+  };
+
   const requestPixWithdrawal = async (params: {
     amountCents: number;
     pixKeyType: PixKeyType;
@@ -990,14 +1106,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!firebaseUser || !userAccount) {
       throw new Error('Usuário não autenticado.');
     }
-    if (params.amountCents < MIN_PIX_WITHDRAWAL_CENTS) {
-      throw new Error('O valor mínimo para saque via Pix é de R$ 5,00.');
+    if (params.amountCents < activeMinWithdrawalCents) {
+      void logWithdrawalAttempt({
+        status: 'blocked_min_amount',
+        amountCents: params.amountCents,
+        pixKeyType: params.pixKeyType,
+        pixKey: params.pixKey,
+        details: `Bloqueado abaixo do mínimo vigente (${formatBRL(activeMinWithdrawalCents)}).`,
+      });
+      throw new Error(
+        `O valor mínimo para ${isFirstWithdrawalEligible ? 'o seu primeiro saque' : 'saque'} via Pix é de ${formatBRL(activeMinWithdrawalCents)}.`
+      );
     }
     if (params.amountCents > userAccount.brlBalanceCents) {
+      void logWithdrawalAttempt({
+        status: 'blocked_insufficient_balance',
+        amountCents: params.amountCents,
+        pixKeyType: params.pixKeyType,
+        pixKey: params.pixKey,
+        details: `Saldo insuficiente (${formatBRL(userAccount.brlBalanceCents)} disponível para pedido de ${formatBRL(params.amountCents)}).`,
+      });
       throw new Error('Saldo em reais insuficiente para este saque.');
     }
 
     const withdrawalId = generateId('pix');
+    const attemptId = generateId('wat');
     const requestedDate = getTodayUtcDate();
     const fingerprint = await getDeviceFingerprint();
 
@@ -1011,12 +1144,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (current.status !== 'active') {
           throw new Error('Sua conta está bloqueada para saques no momento.');
         }
+
+        const firstEligibleNow = current.totalWithdrawnCents === 0 && !current.firstWithdrawalUsed;
+        const requiredMinNow = firstEligibleNow
+          ? withdrawalSettings.firstWithdrawalMinCents
+          : withdrawalSettings.standardWithdrawalMinCents;
+
+        if (params.amountCents < requiredMinNow) {
+          throw new Error(`O valor mínimo para saque via Pix é de ${formatBRL(requiredMinNow)}.`);
+        }
         if (current.brlBalanceCents < params.amountCents) {
           throw new Error('Saldo insuficiente.');
         }
 
         tx.update(userRef, {
           brlBalanceCents: current.brlBalanceCents - params.amountCents,
+          firstWithdrawalUsed: true,
           updatedAt: serverTimestamp(),
         });
 
@@ -1034,6 +1177,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           requestedDate,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
+        });
+
+        tx.set(doc(db, 'withdrawalAttempts', attemptId), {
+          attemptId,
+          userId: firebaseUser.uid,
+          userDisplayName: current.displayName.slice(0, 80),
+          withdrawalId,
+          amountCents: params.amountCents,
+          pixKeyType: params.pixKeyType,
+          pixKey: params.pixKey.slice(0, 140),
+          status: 'submitted_pending',
+          details: firstEligibleNow
+            ? `1º saque Pix enviado (${formatBRL(params.amountCents)}) — aguardando análise administrativa.`
+            : `Saque Pix enviado (${formatBRL(params.amountCents)}) — aguardando análise administrativa.`,
+          deviceFingerprint: fingerprint.slice(0, 128),
+          actorUid: firebaseUser.uid,
+          createdAt: serverTimestamp(),
         });
 
         if (params.saveAsDefault) {
@@ -1057,6 +1217,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         });
       });
     } catch (error) {
+      const msg = error instanceof Error ? error.message : 'Falha na transação de saque Pix.';
+      const isAccountBlocked = msg.toLowerCase().includes('bloqueada');
+      void logWithdrawalAttempt({
+        status: isAccountBlocked ? 'blocked_account_status' : 'failed_transaction',
+        amountCents: params.amountCents,
+        pixKeyType: params.pixKeyType,
+        pixKey: params.pixKey,
+        details: msg,
+      });
       handleFirestoreError(error, OperationType.WRITE, `withdrawals/${withdrawalId}`);
     }
 
@@ -1716,6 +1885,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         mailboxMessages,
         readMailboxIds,
         unreadMailboxCount,
+        withdrawalSettings,
+        isFirstWithdrawalEligible,
+        activeMinWithdrawalCents,
         needsOnboarding,
         authError,
         browserNotifPermission,
@@ -1730,6 +1902,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         convertDailyPoints,
         requestPixWithdrawal,
         logFraudAttempt,
+        logWithdrawalAttempt,
         updateUserProfile,
         claimDailyCheckin,
         claimLevelReward,

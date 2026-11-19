@@ -9,7 +9,6 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import {
-  MIN_PIX_WITHDRAWAL_CENTS,
   PixKeyType,
   POINTS_PER_TEN_CENTS,
 } from '../types/earneasy';
@@ -31,10 +30,14 @@ export const WalletSection: React.FC = () => {
     userAccount,
     privateInfo,
     myConversions,
+    withdrawalSettings,
+    isFirstWithdrawalEligible,
+    activeMinWithdrawalCents,
     signInWithGoogle,
     convertDailyPoints,
     requestPixWithdrawal,
     logFraudAttempt,
+    logWithdrawalAttempt,
   } = useAuth();
 
   const [challenge, setChallenge] = useState(() => createHumanChallenge());
@@ -44,12 +47,21 @@ export const WalletSection: React.FC = () => {
 
   const [pixKeyType, setPixKeyType] = useState<PixKeyType>('cpf');
   const [pixKey, setPixKey] = useState('');
-  const [withdrawAmountReais, setWithdrawAmountReais] = useState('5.00');
+  const [withdrawAmountReais, setWithdrawAmountReais] = useState(() =>
+    (activeMinWithdrawalCents / 100).toFixed(2)
+  );
+  const [amountEditedManually, setAmountEditedManually] = useState(false);
   const [saveDefaultPix, setSaveDefaultPix] = useState(true);
   const [pixChallenge, setPixChallenge] = useState(() => createHumanChallenge());
   const [pixChallengeInput, setPixChallengeInput] = useState('');
   const [withdrawFeedback, setWithdrawFeedback] = useState<{ type: 'ok' | 'err'; msg: string } | null>(null);
   const [withdrawing, setWithdrawing] = useState(false);
+
+  useEffect(() => {
+    if (!amountEditedManually) {
+      setWithdrawAmountReais((activeMinWithdrawalCents / 100).toFixed(2));
+    }
+  }, [activeMinWithdrawalCents, amountEditedManually]);
 
   useEffect(() => {
     if (privateInfo && privateInfo.defaultPixKeyType !== 'none' && privateInfo.defaultPixKey && !pixKey) {
@@ -64,7 +76,7 @@ export const WalletSection: React.FC = () => {
         <Lock className="w-8 h-8 text-slate-400 dark:text-zinc-500 mx-auto" />
         <h2 className="text-xl font-bold text-slate-900 dark:text-zinc-50">Carteira & Saques Pix</h2>
         <p className="text-sm text-slate-600 dark:text-zinc-400">
-          Faça login com sua conta Google para converter seus pontos diários em reais e solicitar saques via Pix a partir de R$ 5,00.
+          Faça login com sua conta Google para converter seus pontos diários em reais e solicitar seu primeiro saque Pix a partir de {formatBRL(withdrawalSettings.firstWithdrawalMinCents)}.
         </p>
         <button
           type="button"
@@ -118,29 +130,62 @@ export const WalletSection: React.FC = () => {
     setWithdrawFeedback(null);
 
     const parsedReais = Number(withdrawAmountReais.replace(',', '.'));
-    const amountCents = Math.round(parsedReais * 100);
-    if (Number.isNaN(amountCents) || amountCents < MIN_PIX_WITHDRAWAL_CENTS) {
-      setWithdrawFeedback({ type: 'err', msg: 'O valor mínimo para saque via Pix é R$ 5,00.' });
+    const rawAmountCents = Number.isNaN(parsedReais) ? 0 : Math.max(0, Math.round(parsedReais * 100));
+    if (Number.isNaN(parsedReais) || rawAmountCents < activeMinWithdrawalCents) {
+      void logWithdrawalAttempt({
+        status: 'blocked_min_amount',
+        amountCents: rawAmountCents,
+        pixKeyType,
+        pixKey,
+        details: `Tentativa bloqueada: valor informado (${withdrawAmountReais || '0'}) abaixo do mínimo de ${formatBRL(activeMinWithdrawalCents)}.`,
+      });
+      setWithdrawFeedback({
+        type: 'err',
+        msg: `O valor mínimo para ${isFirstWithdrawalEligible ? 'o 1º saque' : 'saque'} via Pix é ${formatBRL(activeMinWithdrawalCents)}.`,
+      });
       return;
     }
-    if (amountCents > userAccount.brlBalanceCents) {
+    if (rawAmountCents > userAccount.brlBalanceCents) {
+      void logWithdrawalAttempt({
+        status: 'blocked_insufficient_balance',
+        amountCents: rawAmountCents,
+        pixKeyType,
+        pixKey,
+        details: `Tentativa bloqueada por saldo insuficiente (${formatBRL(userAccount.brlBalanceCents)} disponível vs ${formatBRL(rawAmountCents)} solicitado).`,
+      });
       setWithdrawFeedback({ type: 'err', msg: 'Saldo em reais insuficiente para o valor informado.' });
       return;
     }
 
     const pixCheck = validatePixKey(pixKeyType, pixKey);
     if (!pixCheck.valid) {
+      void logWithdrawalAttempt({
+        status: 'blocked_invalid_pix',
+        amountCents: rawAmountCents,
+        pixKeyType,
+        pixKey,
+        details: `Tentativa bloqueada: chave Pix inválida (${pixKeyType}). ${pixCheck.message || ''}`.trim(),
+      });
       setWithdrawFeedback({ type: 'err', msg: pixCheck.message || 'Chave Pix inválida.' });
       return;
     }
 
     if (Number(pixChallengeInput.trim()) !== pixChallenge.answer) {
       await logFraudAttempt('bot_challenge_failed', 'medium', 'Falha na verificação humana ao solicitar saque Pix.');
+      void logWithdrawalAttempt({
+        status: 'blocked_captcha',
+        amountCents: rawAmountCents,
+        pixKeyType,
+        pixKey: pixCheck.normalized,
+        details: `Falha no desafio humano antifraude ao tentar sacar ${formatBRL(rawAmountCents)}.`,
+      });
       setPixChallenge(createHumanChallenge());
       setPixChallengeInput('');
       setWithdrawFeedback({ type: 'err', msg: 'Verificação antifraude incorreta. Resolva o novo cálculo.' });
       return;
     }
+
+    const amountCents = rawAmountCents;
 
     setWithdrawing(true);
     try {
@@ -256,7 +301,9 @@ export const WalletSection: React.FC = () => {
             <div>
               <h2 className="text-lg font-bold text-slate-900 dark:text-zinc-50">Solicitar Saque via Pix</h2>
               <p className="text-xs text-slate-500 dark:text-zinc-400 mt-0.5">
-                Mínimo R$ 5,00 · Transferência processada via painel administrativo
+                {isFirstWithdrawalEligible
+                  ? `1º saque promocional liberado a partir de ${formatBRL(activeMinWithdrawalCents)} (próximos saques: ${formatBRL(withdrawalSettings.standardWithdrawalMinCents)})`
+                  : `Mínimo atual: ${formatBRL(activeMinWithdrawalCents)} · Transferência processada via painel administrativo`}
               </p>
             </div>
             <Landmark className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0" />
@@ -276,6 +323,44 @@ export const WalletSection: React.FC = () => {
           </div>
 
           <form onSubmit={handleWithdraw} className="space-y-4">
+            <div className="space-y-2">
+              <div className="text-xs font-semibold text-slate-700 dark:text-zinc-300">
+                Valores rápidos disponíveis
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {Array.from(
+                  new Set([
+                    activeMinWithdrawalCents,
+                    ...withdrawalSettings.quickAmountsCents.filter((v) => v >= activeMinWithdrawalCents),
+                  ])
+                )
+                  .sort((a, b) => a - b)
+                  .map((cents) => {
+                    const selected =
+                      Math.round(Number(withdrawAmountReais.replace(',', '.')) * 100) === cents;
+                    const disabled = userAccount.brlBalanceCents < cents;
+                    return (
+                      <button
+                        key={cents}
+                        type="button"
+                        disabled={disabled}
+                        onClick={() => {
+                          setAmountEditedManually(true);
+                          setWithdrawAmountReais((cents / 100).toFixed(2));
+                        }}
+                        className={`px-2.5 py-1.5 text-xs font-mono font-semibold rounded-lg border transition-colors cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed ${
+                          selected
+                            ? 'bg-emerald-600 text-white border-emerald-600'
+                            : 'bg-slate-50 dark:bg-zinc-950 text-slate-800 dark:text-zinc-200 border-slate-200 dark:border-zinc-800 hover:border-emerald-400'
+                        }`}
+                      >
+                        {formatBRL(cents)}
+                      </button>
+                    );
+                  })}
+              </div>
+            </div>
+
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300 mb-1">Tipo de Chave Pix</label>
@@ -297,8 +382,11 @@ export const WalletSection: React.FC = () => {
                   type="text"
                   required
                   value={withdrawAmountReais}
-                  onChange={(e) => setWithdrawAmountReais(e.target.value)}
-                  placeholder="5.00"
+                  onChange={(e) => {
+                    setAmountEditedManually(true);
+                    setWithdrawAmountReais(e.target.value);
+                  }}
+                  placeholder={(activeMinWithdrawalCents / 100).toFixed(2)}
                   className="w-full px-3 py-2 text-sm font-mono bg-white dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900 dark:focus:ring-emerald-500"
                 />
               </div>
@@ -368,13 +456,13 @@ export const WalletSection: React.FC = () => {
 
             <button
               type="submit"
-              disabled={withdrawing || userAccount.brlBalanceCents < MIN_PIX_WITHDRAWAL_CENTS || userAccount.status !== 'active'}
+              disabled={withdrawing || userAccount.brlBalanceCents < activeMinWithdrawalCents || userAccount.status !== 'active'}
               className="w-full py-2.5 px-4 bg-emerald-600 text-white text-sm font-semibold rounded-lg hover:bg-emerald-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
             >
               {withdrawing
                 ? 'Registrando saque Pix...'
-                : userAccount.brlBalanceCents < MIN_PIX_WITHDRAWAL_CENTS
-                  ? 'Saldo mínimo de R$ 5,00 não atingido'
+                : userAccount.brlBalanceCents < activeMinWithdrawalCents
+                  ? `Saldo mínimo de ${formatBRL(activeMinWithdrawalCents)} não atingido`
                   : 'Solicitar Saque via Pix'}
             </button>
           </form>

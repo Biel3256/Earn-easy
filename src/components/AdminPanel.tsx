@@ -19,13 +19,16 @@ import {
   CheckCircle2,
   Clock,
   Copy,
+  History,
   KeyRound,
   Landmark,
   Mail,
   RefreshCw,
+  Search,
   Send,
   ShieldAlert,
   ShieldCheck,
+  SlidersHorizontal,
   Ticket,
   Users,
   Webhook,
@@ -39,12 +42,16 @@ import {
   FraudEvent,
   GAME_LABELS,
   GameSession,
+  MAX_CONFIGURABLE_WITHDRAWAL_CENTS,
   MAX_PROMO_CODE_POINTS,
+  MIN_CONFIGURABLE_WITHDRAWAL_CENTS,
   PixWithdrawal,
   PromoCode,
   Referral,
   UserAccount,
   UserPrivateInfo,
+  WithdrawalAttemptLog,
+  WithdrawalAttemptStatus,
 } from '../types/earneasy';
 import { generateId, sha256Hex } from '../utils/antifraud';
 import {
@@ -57,6 +64,75 @@ import {
 
 type AdminTab = 'payouts' | 'users' | 'codes' | 'antifraud' | 'api';
 
+const ATTEMPT_STATUS_META: Record<
+  WithdrawalAttemptStatus,
+  { label: string; badgeClass: string; category: 'blocked' | 'submitted_pending' | 'approved' | 'paid' | 'rejected' }
+> = {
+  submitted_pending: {
+    label: 'Solicitado (Pendente)',
+    badgeClass: 'bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800',
+    category: 'submitted_pending',
+  },
+  approved: {
+    label: 'Aprovado pelo Admin',
+    badgeClass: 'bg-sky-50 dark:bg-sky-950/40 text-sky-700 dark:text-sky-300 border-sky-200 dark:border-sky-800',
+    category: 'approved',
+  },
+  paid: {
+    label: 'Pago via Pix',
+    badgeClass: 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800',
+    category: 'paid',
+  },
+  rejected: {
+    label: 'Recusado & Estornado',
+    badgeClass: 'bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-300 border-red-200 dark:border-red-800',
+    category: 'rejected',
+  },
+  blocked_min_amount: {
+    label: 'Bloqueado: Abaixo do Mínimo',
+    badgeClass: 'bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 border-rose-200 dark:border-rose-800',
+    category: 'blocked',
+  },
+  blocked_insufficient_balance: {
+    label: 'Bloqueado: Saldo Insuficiente',
+    badgeClass: 'bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 border-rose-200 dark:border-rose-800',
+    category: 'blocked',
+  },
+  blocked_invalid_pix: {
+    label: 'Bloqueado: Chave Pix Inválida',
+    badgeClass: 'bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 border-rose-200 dark:border-rose-800',
+    category: 'blocked',
+  },
+  blocked_captcha: {
+    label: 'Bloqueado: Desafio Antibot',
+    badgeClass: 'bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 border-rose-200 dark:border-rose-800',
+    category: 'blocked',
+  },
+  blocked_account_status: {
+    label: 'Bloqueado: Conta Restrita',
+    badgeClass: 'bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-300 border-red-200 dark:border-red-800',
+    category: 'blocked',
+  },
+  failed_transaction: {
+    label: 'Falha na Transação',
+    badgeClass: 'bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-300 border-red-200 dark:border-red-800',
+    category: 'blocked',
+  },
+};
+
+function formatAttemptTimestamp(ts: unknown): string {
+  const ms = timestampToMillis(ts);
+  if (!ms) return 'Agora mesmo';
+  return new Date(ms).toLocaleString('pt-BR', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+}
+
 function buildRandomPromoCode(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let suffix = '';
@@ -66,8 +142,10 @@ function buildRandomPromoCode(): string {
   return `EE-${suffix}`;
 }
 
+const ADMIN_QUICK_AMOUNT_CHOICES = [1, 5, 10, 25, 50, 100, 200, 500, 1000, 2000];
+
 export const AdminPanel: React.FC = () => {
-  const { firebaseUser, isAdmin } = useAuth();
+  const { firebaseUser, isAdmin, withdrawalSettings } = useAuth();
   const [tab, setTab] = useState<AdminTab>('payouts');
   const [users, setUsers] = useState<UserAccount[]>([]);
   const [privateMap, setPrivateMap] = useState<Record<string, UserPrivateInfo>>({});
@@ -77,11 +155,40 @@ export const AdminPanel: React.FC = () => {
   const [integrations, setIntegrations] = useState<EnterpriseIntegration[]>([]);
   const [promoCodes, setPromoCodes] = useState<PromoCode[]>([]);
   const [referrals, setReferrals] = useState<Referral[]>([]);
+  const [withdrawalAttempts, setWithdrawalAttempts] = useState<WithdrawalAttemptLog[]>([]);
 
   const [payoutFilter, setPayoutFilter] = useState<'all' | 'pending' | 'approved' | 'paid' | 'rejected'>('all');
+  const [attemptFilter, setAttemptFilter] = useState<
+    'all' | 'blocked' | 'submitted_pending' | 'approved' | 'paid' | 'rejected'
+  >('all');
+  const [attemptSearch, setAttemptSearch] = useState('');
+  const [copiedId, setCopiedId] = useState<string | null>(null);
   const [userSearch, setUserSearch] = useState('');
   const [actionMsg, setActionMsg] = useState<string | null>(null);
   const [txIds, setTxIds] = useState<Record<string, string>>({});
+
+  // Pix withdrawal minimum & values settings state
+  const [firstMinReais, setFirstMinReais] = useState(
+    (withdrawalSettings.firstWithdrawalMinCents / 100).toFixed(2)
+  );
+  const [standardMinReais, setStandardMinReais] = useState(
+    (withdrawalSettings.standardWithdrawalMinCents / 100).toFixed(2)
+  );
+  const [quickAmountsSelected, setQuickAmountsSelected] = useState<number[]>(
+    withdrawalSettings.quickAmountsCents
+  );
+  const [savingSettings, setSavingSettings] = useState(false);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setFirstMinReais((withdrawalSettings.firstWithdrawalMinCents / 100).toFixed(2));
+    setStandardMinReais((withdrawalSettings.standardWithdrawalMinCents / 100).toFixed(2));
+    setQuickAmountsSelected(withdrawalSettings.quickAmountsCents);
+  }, [
+    withdrawalSettings.firstWithdrawalMinCents,
+    withdrawalSettings.standardWithdrawalMinCents,
+    withdrawalSettings.quickAmountsCents,
+  ]);
 
   // Promo Code Event form state
   const [promoCodeInput, setPromoCodeInput] = useState(() => buildRandomPromoCode());
@@ -184,6 +291,12 @@ export const AdminPanel: React.FC = () => {
       (err) => handleFirestoreError(err, OperationType.LIST, 'referrals')
     );
 
+    const u8 = onSnapshot(
+      query(collection(db, 'withdrawalAttempts'), orderBy('createdAt', 'desc')),
+      (snap) => setWithdrawalAttempts(snap.docs.map((d) => d.data() as WithdrawalAttemptLog)),
+      (err) => handleFirestoreError(err, OperationType.LIST, 'withdrawalAttempts')
+    );
+
     return () => {
       u1();
       u2();
@@ -192,6 +305,7 @@ export const AdminPanel: React.FC = () => {
       u5();
       u6();
       u7();
+      u8();
     };
   }, [firebaseUser, isAdmin]);
 
@@ -321,8 +435,17 @@ export const AdminPanel: React.FC = () => {
             updatedAt: serverTimestamp(),
           });
         } else if (nextStatus === 'rejected') {
+          const hasOtherActiveWithdrawal = withdrawals.some(
+            (other) =>
+              other.userId === w.userId &&
+              other.withdrawalId !== w.withdrawalId &&
+              other.status !== 'rejected'
+          );
           tx.update(uRef, {
             brlBalanceCents: uData.brlBalanceCents + w.amountCents,
+            ...(uData.totalWithdrawnCents === 0 && !hasOtherActiveWithdrawal
+              ? { firstWithdrawalUsed: false }
+              : {}),
             updatedAt: serverTimestamp(),
           });
           if (uData.status === 'active') {
@@ -338,6 +461,28 @@ export const AdminPanel: React.FC = () => {
             });
           }
         }
+
+        const attemptId = generateId('wat');
+        const attemptDetails =
+          nextStatus === 'paid'
+            ? `Pagamento Pix liquidado pelo admin. Comprovante: ${pixTxId}.`
+            : nextStatus === 'rejected'
+              ? `Solicitação recusada na análise admin; ${formatBRL(w.amountCents)} estornados.`
+              : 'Solicitação aprovada pelo admin e encaminhada para liquidação Pix.';
+        tx.set(doc(db, 'withdrawalAttempts', attemptId), {
+          attemptId,
+          userId: w.userId,
+          userDisplayName: (w.userDisplayName || uData.displayName || 'Jogador').slice(0, 80),
+          withdrawalId: w.withdrawalId,
+          amountCents: w.amountCents,
+          pixKeyType: w.pixKeyType,
+          pixKey: w.pixKey.slice(0, 140),
+          status: nextStatus,
+          details: attemptDetails.slice(0, 300),
+          deviceFingerprint: (privateMap[w.userId]?.deviceFingerprint || 'admin-review').slice(0, 128),
+          actorUid: firebaseUser?.uid || 'admin',
+          createdAt: serverTimestamp(),
+        });
       });
 
       if (nextStatus === 'paid') {
@@ -359,6 +504,75 @@ export const AdminPanel: React.FC = () => {
       setActionMsg(`Saque ${w.withdrawalId} atualizado para "${nextStatus}".`);
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `withdrawals/${w.withdrawalId}`);
+    }
+  };
+
+  const toggleQuickAmountChoice = (cents: number) => {
+    setQuickAmountsSelected((prev) => {
+      if (prev.includes(cents)) {
+        if (prev.length <= 1) return prev;
+        return prev.filter((v) => v !== cents);
+      }
+      return [...prev, cents].sort((a, b) => a - b);
+    });
+  };
+
+  const handleSaveWithdrawalSettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!firebaseUser) return;
+    setSettingsError(null);
+
+    const parsedFirst = Math.round(Number(firstMinReais.replace(',', '.')) * 100);
+    const parsedStandard = Math.round(Number(standardMinReais.replace(',', '.')) * 100);
+
+    if (
+      !Number.isFinite(parsedFirst) ||
+      parsedFirst < MIN_CONFIGURABLE_WITHDRAWAL_CENTS ||
+      parsedFirst > MAX_CONFIGURABLE_WITHDRAWAL_CENTS
+    ) {
+      setSettingsError('O mínimo do 1º saque deve ficar entre R$ 0,01 e R$ 20,00.');
+      return;
+    }
+    if (
+      !Number.isFinite(parsedStandard) ||
+      parsedStandard < MIN_CONFIGURABLE_WITHDRAWAL_CENTS ||
+      parsedStandard > MAX_CONFIGURABLE_WITHDRAWAL_CENTS
+    ) {
+      setSettingsError('O mínimo dos demais saques deve ficar entre R$ 0,01 e R$ 20,00.');
+      return;
+    }
+
+    const sanitizedQuick = quickAmountsSelected
+      .filter(
+        (v) =>
+          Number.isFinite(v) &&
+          v >= MIN_CONFIGURABLE_WITHDRAWAL_CENTS &&
+          v <= MAX_CONFIGURABLE_WITHDRAWAL_CENTS
+      )
+      .sort((a, b) => a - b);
+
+    const finalQuick = sanitizedQuick.length > 0 ? sanitizedQuick.slice(0, 10) : [parsedFirst, parsedStandard];
+
+    setSavingSettings(true);
+    try {
+      await setDoc(doc(db, 'appSettings', 'withdrawal'), {
+        settingId: 'withdrawal',
+        firstWithdrawalMinCents: parsedFirst,
+        standardWithdrawalMinCents: parsedStandard,
+        quickAmountsCents: finalQuick,
+        updatedBy: (firebaseUser.email || firebaseUser.uid).slice(0, 160),
+        updatedAt: serverTimestamp(),
+      });
+      setActionMsg(
+        `Valores de saque atualizados: 1º saque mínimo ${formatBRL(parsedFirst)} · Demais saques a partir de ${formatBRL(parsedStandard)}.`
+      );
+    } catch (err) {
+      setSettingsError(
+        err instanceof Error ? err.message : 'Erro ao salvar configurações de saque.'
+      );
+      handleFirestoreError(err, OperationType.WRITE, 'appSettings/withdrawal');
+    } finally {
+      setSavingSettings(false);
     }
   };
 
@@ -800,11 +1014,135 @@ export const AdminPanel: React.FC = () => {
 
       {/* TAB 1: PAYOUTS */}
       {tab === 'payouts' && (
-        <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-6 space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <h3 className="text-base font-bold text-slate-900 dark:text-zinc-50">Solicitações de Saque Pix</h3>
-            <div className="flex items-center gap-1 p-1 bg-slate-100 dark:bg-zinc-950 border border-transparent dark:border-zinc-800 rounded-lg">
-              {(['all', 'pending', 'approved', 'paid', 'rejected'] as const).map((st) => (
+        <div className="space-y-6">
+          {/* Configurable Pix Withdrawal Minimums & Quick Amounts (R$ 0,01 to R$ 20,00) */}
+          <form
+            onSubmit={handleSaveWithdrawalSettings}
+            className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-6 space-y-5"
+          >
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-zinc-800 pb-4">
+              <div className="flex items-start gap-3">
+                <div className="w-9 h-9 rounded-lg bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-400 flex items-center justify-center shrink-0">
+                  <SlidersHorizontal className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900 dark:text-zinc-50">
+                    Configurar Valores e Mínimo de Saque Pix
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-zinc-400 mt-0.5">
+                    Ajuste livremente o mínimo do 1º saque e dos próximos saques entre R$ 0,01 e R$ 20,00.
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={savingSettings}
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                {savingSettings ? 'Salvando...' : 'Salvar Valores de Saque'}
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+              <div className="space-y-2">
+                <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300">
+                  Mínimo do 1º Saque (R$ 0,01 a R$ 20,00)
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={firstMinReais}
+                  onChange={(e) => setFirstMinReais(e.target.value)}
+                  placeholder="0.10"
+                  className="w-full px-3 py-2 text-sm font-mono bg-white dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+                <div className="flex flex-wrap gap-1.5">
+                  {[1, 10, 50, 100, 500, 1000, 2000].map((c) => (
+                    <button
+                      key={`first-${c}`}
+                      type="button"
+                      onClick={() => setFirstMinReais((c / 100).toFixed(2))}
+                      className={`px-2 py-1 text-[11px] font-mono rounded border transition-colors cursor-pointer ${
+                        Math.round(Number(firstMinReais.replace(',', '.')) * 100) === c
+                          ? 'bg-emerald-600 text-white border-emerald-600'
+                          : 'bg-slate-50 dark:bg-zinc-950 text-slate-700 dark:text-zinc-300 border-slate-200 dark:border-zinc-800 hover:border-emerald-400'
+                      }`}
+                    >
+                      {formatBRL(c)}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300">
+                  Mínimo dos Demais Saques (R$ 0,01 a R$ 20,00)
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={standardMinReais}
+                  onChange={(e) => setStandardMinReais(e.target.value)}
+                  placeholder="5.00"
+                  className="w-full px-3 py-2 text-sm font-mono bg-white dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+                <div className="flex flex-wrap gap-1.5">
+                  {[1, 10, 50, 100, 200, 500, 1000, 2000].map((c) => (
+                    <button
+                      key={`std-${c}`}
+                      type="button"
+                      onClick={() => setStandardMinReais((c / 100).toFixed(2))}
+                      className={`px-2 py-1 text-[11px] font-mono rounded border transition-colors cursor-pointer ${
+                        Math.round(Number(standardMinReais.replace(',', '.')) * 100) === c
+                          ? 'bg-slate-900 dark:bg-emerald-600 text-white border-transparent'
+                          : 'bg-slate-50 dark:bg-zinc-950 text-slate-700 dark:text-zinc-300 border-slate-200 dark:border-zinc-800 hover:border-slate-400'
+                      }`}
+                    >
+                      {formatBRL(c)}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-2 pt-2 border-t border-slate-100 dark:border-zinc-800">
+              <div className="text-xs font-semibold text-slate-700 dark:text-zinc-300">
+                Botões de Valores Rápidos na Carteira (clique para ativar/desativar entre R$ 0,01 e R$ 20,00)
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {ADMIN_QUICK_AMOUNT_CHOICES.map((cents) => {
+                  const active = quickAmountsSelected.includes(cents);
+                  return (
+                    <button
+                      key={`quick-${cents}`}
+                      type="button"
+                      onClick={() => toggleQuickAmountChoice(cents)}
+                      className={`px-2.5 py-1.5 text-xs font-mono font-semibold rounded-lg border transition-colors cursor-pointer ${
+                        active
+                          ? 'bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700'
+                          : 'bg-white dark:bg-zinc-950 text-slate-500 dark:text-zinc-400 border-slate-200 dark:border-zinc-800 hover:text-slate-900 dark:hover:text-zinc-100'
+                      }`}
+                    >
+                      {formatBRL(cents)}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {settingsError && (
+              <div className="p-3 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 rounded-lg text-xs text-red-700 dark:text-red-300">
+                {settingsError}
+              </div>
+            )}
+          </form>
+
+          <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-6 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h3 className="text-base font-bold text-slate-900 dark:text-zinc-50">Solicitações de Saque Pix</h3>
+              <div className="flex items-center gap-1 p-1 bg-slate-100 dark:bg-zinc-950 border border-transparent dark:border-zinc-800 rounded-lg">
+                {(['all', 'pending', 'approved', 'paid', 'rejected'] as const).map((st) => (
                 <button
                   key={st}
                   type="button"
@@ -919,6 +1257,7 @@ export const AdminPanel: React.FC = () => {
               </tbody>
             </table>
           </div>
+        </div>
         </div>
       )}
 
@@ -1345,71 +1684,249 @@ export const AdminPanel: React.FC = () => {
       )}
 
       {/* TAB 4: ANTIFRAUD */}
-      {tab === 'antifraud' && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-6 space-y-4">
-            <h3 className="text-base font-bold text-slate-900 dark:text-zinc-50">Eventos Antifraude</h3>
-            {fraudLogs.length === 0 ? (
-              <p className="text-sm text-slate-500 dark:text-zinc-400 py-6 text-center">Nenhum incidente antifraude registrado.</p>
-            ) : (
-              <div className="divide-y divide-slate-100 dark:divide-zinc-800">
-                {fraudLogs.slice(0, 20).map((f) => {
-                  const targetUser = users.find((u) => u.uid === f.userId);
-                  const eventLabel =
-                    f.eventType === 'admin_ban'
-                      ? 'Banimento Administrativo'
-                      : f.eventType === 'profanity_username_ban'
-                        ? 'Banimento por Palavrão'
-                        : f.eventType;
-                  return (
-                  <div key={f.logId} className="py-3 flex items-start justify-between gap-3">
-                    <div className="space-y-1">
-                      <div className="text-xs font-mono text-slate-500 dark:text-zinc-400">
-                        {eventLabel} · severidade {f.severity} · {targetUser?.displayName || f.userId.slice(0, 10)}
-                      </div>
-                      <div className="text-xs font-medium text-slate-900 dark:text-zinc-100">{f.details}</div>
-                    </div>
-                    {!f.resolved ? (
-                      <button
-                        type="button"
-                        onClick={() => resolveFraudLog(f.logId)}
-                        className="px-2.5 py-1 text-xs bg-slate-900 dark:bg-zinc-800 text-white rounded hover:bg-slate-800 dark:hover:bg-zinc-700 shrink-0 cursor-pointer"
-                      >
-                        Resolver
-                      </button>
-                    ) : (
-                      <span className="text-xs text-emerald-700 dark:text-emerald-400 font-medium shrink-0">Resolvido</span>
-                    )}
-                  </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
+      {tab === 'antifraud' && (() => {
+        const searchTerm = attemptSearch.trim().toLowerCase();
+        const filteredAttempts = withdrawalAttempts.filter((a) => {
+          const meta = ATTEMPT_STATUS_META[a.status];
+          if (attemptFilter !== 'all' && meta.category !== attemptFilter) return false;
+          if (!searchTerm) return true;
+          return (
+            a.userId.toLowerCase().includes(searchTerm) ||
+            a.userDisplayName.toLowerCase().includes(searchTerm) ||
+            a.pixKey.toLowerCase().includes(searchTerm) ||
+            a.withdrawalId.toLowerCase().includes(searchTerm) ||
+            a.attemptId.toLowerCase().includes(searchTerm) ||
+            a.details.toLowerCase().includes(searchTerm)
+          );
+        });
+        const blockedCount = withdrawalAttempts.filter(
+          (a) => ATTEMPT_STATUS_META[a.status].category === 'blocked' || a.status === 'rejected'
+        ).length;
 
-          <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-6 space-y-4">
-            <h3 className="text-base font-bold text-slate-900 dark:text-zinc-50">Partidas Sinalizadas</h3>
-            {flaggedSessions.length === 0 ? (
-              <p className="text-sm text-slate-500 dark:text-zinc-400 py-6 text-center">Todas as partidas passaram na verificação de integridade.</p>
-            ) : (
-              <div className="divide-y divide-slate-100 dark:divide-zinc-800">
-                {flaggedSessions.slice(0, 15).map((s) => (
-                  <div key={s.sessionId} className="py-3 space-y-1">
-                    <div className="flex items-center justify-between text-xs">
-                      <span className="font-semibold text-slate-900 dark:text-zinc-100">{GAME_LABELS[s.gameCategory]}</span>
-                      <span className="font-mono text-amber-700 dark:text-amber-400">{s.verificationStatus}</span>
-                    </div>
-                    <div className="text-xs text-slate-600 dark:text-zinc-400">{s.fraudReason}</div>
-                    <div className="text-[11px] font-mono text-slate-400 dark:text-zinc-500">
-                      Usuário: {s.userId} · {(s.durationMs / 1000).toFixed(1)}s
-                    </div>
+        const handleCopyUid = (uid: string, key: string) => {
+          navigator.clipboard?.writeText(uid).catch(() => {});
+          setCopiedId(key);
+          window.setTimeout(() => setCopiedId((prev) => (prev === key ? null : prev)), 1500);
+        };
+
+        return (
+          <div className="space-y-6">
+            {/* Detailed Pix Withdrawal Attempt Log */}
+            <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-6 space-y-4">
+              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-slate-100 dark:border-zinc-800 pb-4">
+                <div className="flex items-start gap-3">
+                  <div className="w-9 h-9 rounded-lg bg-slate-100 dark:bg-zinc-800 text-slate-700 dark:text-zinc-200 flex items-center justify-center shrink-0">
+                    <History className="w-4 h-4" />
                   </div>
-                ))}
+                  <div>
+                    <h3 className="text-base font-bold text-slate-900 dark:text-zinc-50">
+                      Log Detalhado de Tentativas de Saque Pix
+                    </h3>
+                    <p className="text-xs text-slate-500 dark:text-zinc-400 mt-0.5">
+                      Registro cronológico com status, data/hora exata, chave Pix, dispositivo e ID completo do usuário para rastreamento antifraude.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-3 text-xs">
+                  <div className="px-3 py-1.5 rounded-lg bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 font-mono tabular-nums text-slate-700 dark:text-zinc-300">
+                    Total: <strong className="text-slate-900 dark:text-zinc-50">{withdrawalAttempts.length}</strong>
+                  </div>
+                  <div className="px-3 py-1.5 rounded-lg bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900 font-mono tabular-nums text-rose-700 dark:text-rose-300">
+                    Bloqueios / Recusas: <strong>{blockedCount}</strong>
+                  </div>
+                </div>
               </div>
-            )}
+
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                <div className="relative flex-1 max-w-md">
+                  <Search className="w-3.5 h-3.5 text-slate-400 dark:text-zinc-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  <input
+                    type="text"
+                    value={attemptSearch}
+                    onChange={(e) => setAttemptSearch(e.target.value)}
+                    placeholder="Buscar por ID do usuário (UID), nome, chave Pix ou saque..."
+                    className="w-full pl-9 pr-3 py-2 text-xs bg-white dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                </div>
+
+                <div className="flex flex-wrap gap-1.5">
+                  {(
+                    [
+                      { id: 'all', label: 'Todos' },
+                      { id: 'blocked', label: 'Bloqueados' },
+                      { id: 'submitted_pending', label: 'Pendentes' },
+                      { id: 'approved', label: 'Aprovados' },
+                      { id: 'paid', label: 'Pagos' },
+                      { id: 'rejected', label: 'Recusados' },
+                    ] as const
+                  ).map((f) => (
+                    <button
+                      key={f.id}
+                      type="button"
+                      onClick={() => setAttemptFilter(f.id)}
+                      className={`px-2.5 py-1.5 text-[11px] font-semibold rounded-md border transition-colors cursor-pointer ${
+                        attemptFilter === f.id
+                          ? 'bg-slate-900 dark:bg-emerald-600 text-white border-slate-900 dark:border-emerald-600'
+                          : 'bg-slate-50 dark:bg-zinc-950 text-slate-600 dark:text-zinc-300 border-slate-200 dark:border-zinc-800 hover:border-slate-300 dark:hover:border-zinc-700'
+                      }`}
+                    >
+                      {f.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {filteredAttempts.length === 0 ? (
+                <p className="text-sm text-slate-500 dark:text-zinc-400 py-8 text-center">
+                  {withdrawalAttempts.length === 0
+                    ? 'Nenhuma tentativa de saque Pix registrada ainda.'
+                    : 'Nenhuma tentativa encontrada para o filtro ou busca informada.'}
+                </p>
+              ) : (
+                <div className="overflow-x-auto -mx-2 px-2">
+                  <div className="min-w-[760px] divide-y divide-slate-100 dark:divide-zinc-800">
+                    {filteredAttempts.slice(0, 60).map((attempt) => {
+                      const meta = ATTEMPT_STATUS_META[attempt.status];
+                      return (
+                        <div
+                          key={attempt.attemptId}
+                          className="py-3.5 grid grid-cols-12 gap-3 items-start text-xs"
+                        >
+                          <div className="col-span-3 space-y-1">
+                            <span
+                              className={`inline-flex items-center px-2 py-0.5 text-[11px] font-semibold rounded border ${meta.badgeClass}`}
+                            >
+                              {meta.label}
+                            </span>
+                            <div className="text-[11px] font-mono text-slate-500 dark:text-zinc-400 tabular-nums">
+                              {formatAttemptTimestamp(attempt.createdAt)}
+                            </div>
+                            <div className="text-[10px] font-mono text-slate-400 dark:text-zinc-500">
+                              Log: {attempt.attemptId}
+                            </div>
+                          </div>
+
+                          <div className="col-span-4 space-y-1 min-w-0">
+                            <div className="font-semibold text-slate-900 dark:text-zinc-100 truncate">
+                              {attempt.userDisplayName}
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              <code className="text-[11px] font-mono text-slate-600 dark:text-zinc-300 bg-slate-100 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 px-1.5 py-0.5 rounded break-all">
+                                UID: {attempt.userId}
+                              </code>
+                              <button
+                                type="button"
+                                onClick={() => handleCopyUid(attempt.userId, attempt.attemptId)}
+                                className="p-1 text-slate-500 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-zinc-100 shrink-0 cursor-pointer"
+                                title="Copiar ID do usuário"
+                              >
+                                {copiedId === attempt.attemptId ? (
+                                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                                ) : (
+                                  <Copy className="w-3.5 h-3.5" />
+                                )}
+                              </button>
+                            </div>
+                            <div className="text-[11px] font-mono text-slate-400 dark:text-zinc-500 truncate">
+                              Dispositivo: {attempt.deviceFingerprint || 'n/d'}
+                              {attempt.actorUid !== attempt.userId ? ` · Ação Admin: ${attempt.actorUid}` : ''}
+                            </div>
+                          </div>
+
+                          <div className="col-span-2 space-y-1">
+                            <div className="font-mono font-bold text-slate-900 dark:text-zinc-50 tabular-nums">
+                              {formatBRL(attempt.amountCents)}
+                            </div>
+                            <div className="text-[11px] font-mono text-slate-500 dark:text-zinc-400 break-all">
+                              {attempt.pixKeyType !== 'none'
+                                ? `${attempt.pixKeyType.toUpperCase()}: ${attempt.pixKey || '—'}`
+                                : 'Chave não informada'}
+                            </div>
+                            {attempt.withdrawalId && (
+                              <div className="text-[10px] font-mono text-emerald-700 dark:text-emerald-400 truncate">
+                                Saque: {attempt.withdrawalId}
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="col-span-3 text-slate-700 dark:text-zinc-300 leading-relaxed">
+                            {attempt.details}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-6 space-y-4">
+                <h3 className="text-base font-bold text-slate-900 dark:text-zinc-50">Eventos Antifraude</h3>
+                {fraudLogs.length === 0 ? (
+                  <p className="text-sm text-slate-500 dark:text-zinc-400 py-6 text-center">Nenhum incidente antifraude registrado.</p>
+                ) : (
+                  <div className="divide-y divide-slate-100 dark:divide-zinc-800">
+                    {fraudLogs.slice(0, 20).map((f) => {
+                      const targetUser = users.find((u) => u.uid === f.userId);
+                      const eventLabel =
+                        f.eventType === 'admin_ban'
+                          ? 'Banimento Administrativo'
+                          : f.eventType === 'profanity_username_ban'
+                            ? 'Banimento por Palavrão'
+                            : f.eventType;
+                      return (
+                      <div key={f.logId} className="py-3 flex items-start justify-between gap-3">
+                        <div className="space-y-1">
+                          <div className="text-xs font-mono text-slate-500 dark:text-zinc-400">
+                            {eventLabel} · severidade {f.severity} · {targetUser?.displayName || f.userId.slice(0, 10)}
+                          </div>
+                          <div className="text-xs font-medium text-slate-900 dark:text-zinc-100">{f.details}</div>
+                        </div>
+                        {!f.resolved ? (
+                          <button
+                            type="button"
+                            onClick={() => resolveFraudLog(f.logId)}
+                            className="px-2.5 py-1 text-xs bg-slate-900 dark:bg-zinc-800 text-white rounded hover:bg-slate-800 dark:hover:bg-zinc-700 shrink-0 cursor-pointer"
+                          >
+                            Resolver
+                          </button>
+                        ) : (
+                          <span className="text-xs text-emerald-700 dark:text-emerald-400 font-medium shrink-0">Resolvido</span>
+                        )}
+                      </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-6 space-y-4">
+                <h3 className="text-base font-bold text-slate-900 dark:text-zinc-50">Partidas Sinalizadas</h3>
+                {flaggedSessions.length === 0 ? (
+                  <p className="text-sm text-slate-500 dark:text-zinc-400 py-6 text-center">Todas as partidas passaram na verificação de integridade.</p>
+                ) : (
+                  <div className="divide-y divide-slate-100 dark:divide-zinc-800">
+                    {flaggedSessions.slice(0, 15).map((s) => (
+                      <div key={s.sessionId} className="py-3 space-y-1">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="font-semibold text-slate-900 dark:text-zinc-100">{GAME_LABELS[s.gameCategory]}</span>
+                          <span className="font-mono text-amber-700 dark:text-amber-400">{s.verificationStatus}</span>
+                        </div>
+                        <div className="text-xs text-slate-600 dark:text-zinc-400">{s.fraudReason}</div>
+                        <div className="text-[11px] font-mono text-slate-400 dark:text-zinc-500">
+                          Usuário: {s.userId} · {(s.durationMs / 1000).toFixed(1)}s
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* TAB 4: ENTERPRISE API & WEBHOOKS */}
       {tab === 'api' && (
