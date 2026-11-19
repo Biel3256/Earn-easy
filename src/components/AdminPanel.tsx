@@ -18,9 +18,11 @@ import {
   Copy,
   KeyRound,
   Landmark,
+  RefreshCw,
   Send,
   ShieldAlert,
   ShieldCheck,
+  Ticket,
   Users,
   Webhook,
   X,
@@ -34,13 +36,24 @@ import {
   GAME_LABELS,
   GameSession,
   PixWithdrawal,
+  PromoCode,
+  Referral,
   UserAccount,
   UserPrivateInfo,
 } from '../types/earneasy';
 import { generateId, sha256Hex } from '../utils/antifraud';
 import { formatBRL, formatPoints } from '../utils/pix';
 
-type AdminTab = 'payouts' | 'users' | 'antifraud' | 'api';
+type AdminTab = 'payouts' | 'users' | 'codes' | 'antifraud' | 'api';
+
+function buildRandomPromoCode(): string {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let suffix = '';
+  for (let i = 0; i < 6; i += 1) {
+    suffix += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return `EE-${suffix}`;
+}
 
 export const AdminPanel: React.FC = () => {
   const { firebaseUser, isAdmin } = useAuth();
@@ -51,11 +64,22 @@ export const AdminPanel: React.FC = () => {
   const [fraudLogs, setFraudLogs] = useState<FraudEvent[]>([]);
   const [flaggedSessions, setFlaggedSessions] = useState<GameSession[]>([]);
   const [integrations, setIntegrations] = useState<EnterpriseIntegration[]>([]);
+  const [promoCodes, setPromoCodes] = useState<PromoCode[]>([]);
+  const [referrals, setReferrals] = useState<Referral[]>([]);
 
   const [payoutFilter, setPayoutFilter] = useState<'all' | 'pending' | 'approved' | 'paid' | 'rejected'>('all');
   const [userSearch, setUserSearch] = useState('');
   const [actionMsg, setActionMsg] = useState<string | null>(null);
   const [txIds, setTxIds] = useState<Record<string, string>>({});
+
+  // Promo Code Event form state
+  const [promoCodeInput, setPromoCodeInput] = useState(() => buildRandomPromoCode());
+  const [promoTitle, setPromoTitle] = useState('');
+  const [promoPoints, setPromoPoints] = useState('500');
+  const [promoMaxRedemptions, setPromoMaxRedemptions] = useState('100');
+  const [promoPublicEvent, setPromoPublicEvent] = useState(true);
+  const [promoSubmitting, setPromoSubmitting] = useState(false);
+  const [promoError, setPromoError] = useState<string | null>(null);
 
   // Ban modal state
   const [banTarget, setBanTarget] = useState<UserAccount | null>(null);
@@ -135,12 +159,26 @@ export const AdminPanel: React.FC = () => {
       (err) => handleFirestoreError(err, OperationType.LIST, 'integrations')
     );
 
+    const u6 = onSnapshot(
+      query(collection(db, 'promoCodes'), orderBy('createdAt', 'desc')),
+      (snap) => setPromoCodes(snap.docs.map((d) => d.data() as PromoCode)),
+      (err) => handleFirestoreError(err, OperationType.LIST, 'promoCodes')
+    );
+
+    const u7 = onSnapshot(
+      query(collection(db, 'referrals'), orderBy('createdAt', 'desc')),
+      (snap) => setReferrals(snap.docs.map((d) => d.data() as Referral)),
+      (err) => handleFirestoreError(err, OperationType.LIST, 'referrals')
+    );
+
     return () => {
       u1();
       u2();
       u3();
       u4();
       u5();
+      u6();
+      u7();
     };
   }, [firebaseUser, isAdmin]);
 
@@ -334,6 +372,17 @@ export const AdminPanel: React.FC = () => {
     setBanError(null);
   };
 
+  useEffect(() => {
+    if (!banTarget) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        closeBanModal();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [banTarget, banSubmitting]);
+
   const confirmBanUser = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!banTarget) return;
@@ -513,6 +562,90 @@ export const AdminPanel: React.FC = () => {
     }
   };
 
+  const handleCreatePromoCode = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!firebaseUser) return;
+    setPromoError(null);
+
+    const normalizedCode = promoCodeInput.trim().toUpperCase();
+    const cleanTitle = promoTitle.trim().slice(0, 120);
+    const pointsNum = Math.round(Number(promoPoints));
+    const maxRedeemNum = Math.round(Number(promoMaxRedemptions));
+
+    if (!/^[A-Z0-9_-]{3,40}$/.test(normalizedCode)) {
+      setPromoError('O código deve ter de 3 a 40 caracteres (A-Z, 0-9, "-" ou "_"), sem espaços.');
+      return;
+    }
+    if (cleanTitle.length < 3) {
+      setPromoError('Informe o nome/título do evento (mínimo 3 caracteres).');
+      return;
+    }
+    if (!Number.isFinite(pointsNum) || pointsNum < 10 || pointsNum > 50000) {
+      setPromoError('Valor em pontos deve ficar entre 10 e 50.000.');
+      return;
+    }
+    if (!Number.isFinite(maxRedeemNum) || maxRedeemNum < 1 || maxRedeemNum > 100000) {
+      setPromoError('Limite de resgates deve ficar entre 1 e 100.000.');
+      return;
+    }
+    if (promoCodes.some((c) => c.code === normalizedCode)) {
+      setPromoError(`O código ${normalizedCode} já existe. Gere outro código.`);
+      return;
+    }
+
+    setPromoSubmitting(true);
+    try {
+      await setDoc(doc(db, 'promoCodes', normalizedCode), {
+        code: normalizedCode,
+        title: cleanTitle,
+        pointsValue: pointsNum,
+        maxRedemptions: maxRedeemNum,
+        redemptionCount: 0,
+        active: true,
+        publicEvent: promoPublicEvent,
+        createdBy: firebaseUser.uid,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      setActionMsg(
+        `Evento "${cleanTitle}" (${normalizedCode} = +${formatPoints(pointsNum)} pts) enviado com sucesso${promoPublicEvent ? ' e publicado na aba Convites & Códigos dos jogadores' : ' (modo código privado)'}.`
+      );
+      setPromoCodeInput(buildRandomPromoCode());
+      setPromoTitle('');
+    } catch (err) {
+      setPromoError(err instanceof Error ? err.message : 'Erro ao criar evento de código.');
+      handleFirestoreError(err, OperationType.CREATE, `promoCodes/${normalizedCode}`);
+    } finally {
+      setPromoSubmitting(false);
+    }
+  };
+
+  const togglePromoActive = async (p: PromoCode) => {
+    try {
+      await updateDoc(doc(db, 'promoCodes', p.code), {
+        active: !p.active,
+        updatedAt: serverTimestamp(),
+      });
+      setActionMsg(`Código ${p.code} ${!p.active ? 'ativado' : 'pausado'}.`);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `promoCodes/${p.code}`);
+    }
+  };
+
+  const togglePromoPublic = async (p: PromoCode) => {
+    try {
+      await updateDoc(doc(db, 'promoCodes', p.code), {
+        publicEvent: !p.publicEvent,
+        updatedAt: serverTimestamp(),
+      });
+      setActionMsg(
+        `Evento ${p.code} agora está ${!p.publicEvent ? 'visível publicamente no app' : 'em modo privado (somente quem digitar o código)'}.`
+      );
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `promoCodes/${p.code}`);
+    }
+  };
+
   const filteredWithdrawals = withdrawals.filter((w) =>
     payoutFilter === 'all' ? true : w.status === payoutFilter
   );
@@ -543,6 +676,7 @@ export const AdminPanel: React.FC = () => {
             [
               { id: 'payouts', label: 'Pagamentos Pix', Icon: Landmark },
               { id: 'users', label: 'Usuários', Icon: Users },
+              { id: 'codes', label: 'Códigos & Eventos', Icon: Ticket },
               { id: 'antifraud', label: 'Antifraude', Icon: ShieldCheck },
               { id: 'api', label: 'API Empresarial', Icon: Webhook },
             ] as const
@@ -751,7 +885,13 @@ export const AdminPanel: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-zinc-800">
-                {filteredUsers.map((u) => (
+                {filteredUsers.map((u) => {
+                  const userBanHistory = fraudLogs.filter(
+                    (f) =>
+                      f.userId === u.uid &&
+                      (f.eventType === 'admin_ban' || f.eventType === 'profanity_username_ban')
+                  );
+                  return (
                   <tr key={u.uid} className="min-h-[48px]">
                     <td className="py-2.5 pr-3">
                       <div className="font-semibold text-slate-900 dark:text-zinc-100">{u.displayName}</div>
@@ -759,7 +899,7 @@ export const AdminPanel: React.FC = () => {
                         {privateMap[u.uid]?.email || u.uid}
                       </div>
                       {u.status === 'suspended' && (u.banReason || u.banExplanation) && (
-                        <div className="mt-1 text-[11px] text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/70 rounded px-2 py-1 max-w-md">
+                        <div className="mt-1 text-[11px] text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/70 rounded px-2 py-1 max-w-md space-y-0.5">
                           {u.banReason && (
                             <div>
                               <span className="font-semibold">Motivo:</span> {u.banReason}
@@ -770,6 +910,16 @@ export const AdminPanel: React.FC = () => {
                               <span className="font-semibold">Por quê:</span> {u.banExplanation}
                             </div>
                           )}
+                          {u.bannedBy && (
+                            <div className="text-[10px] font-mono text-red-600/80 dark:text-red-400/80">
+                              Banido por: {u.bannedBy}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      {u.status === 'active' && userBanHistory.length > 0 && (
+                        <div className="mt-1 text-[11px] text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/60 rounded px-2 py-0.5 max-w-md">
+                          Histórico anterior ({userBanHistory.length}): {userBanHistory[0].details}
                         </div>
                       )}
                     </td>
@@ -812,14 +962,243 @@ export const AdminPanel: React.FC = () => {
                       </button>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>
         </div>
       )}
 
-      {/* TAB 3: ANTIFRAUD */}
+      {/* TAB 3: CÓDIGOS DE EVENTO & CONVITES */}
+      {tab === 'codes' && (
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+          <div className="lg:col-span-5 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-6 space-y-4">
+            <div className="flex items-center gap-2">
+              <Ticket className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
+              <div>
+                <h3 className="text-base font-bold text-slate-900 dark:text-zinc-50">
+                  Gerar e Enviar Evento de Código
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-zinc-400">
+                  Crie códigos valendo pontos e envie para os jogadores resgatarem no app.
+                </p>
+              </div>
+            </div>
+
+            <form onSubmit={handleCreatePromoCode} className="space-y-3.5">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300 mb-1">
+                  Código do Evento
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    required
+                    minLength={3}
+                    maxLength={40}
+                    value={promoCodeInput}
+                    onChange={(e) => setPromoCodeInput(e.target.value.toUpperCase().replace(/[^A-Z0-9_-]/g, ''))}
+                    placeholder="EE-BONUS500"
+                    className="flex-1 px-3 py-2 text-sm font-mono uppercase bg-white dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-lg"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setPromoCodeInput(buildRandomPromoCode())}
+                    className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold bg-slate-100 dark:bg-zinc-800 text-slate-800 dark:text-zinc-200 border border-slate-200 dark:border-zinc-700 rounded-lg hover:bg-slate-200 dark:hover:bg-zinc-700 cursor-pointer shrink-0"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    Gerar Aleatório
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300 mb-1">
+                  Título / Descrição do Evento
+                </label>
+                <input
+                  type="text"
+                  required
+                  minLength={3}
+                  maxLength={120}
+                  value={promoTitle}
+                  onChange={(e) => setPromoTitle(e.target.value)}
+                  placeholder="Ex: Evento Relâmpago de Fim de Semana"
+                  className="w-full px-3 py-2 text-sm bg-white dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-lg"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300 mb-1">
+                    Pontos por Resgate
+                  </label>
+                  <input
+                    type="number"
+                    required
+                    min={10}
+                    max={50000}
+                    value={promoPoints}
+                    onChange={(e) => setPromoPoints(e.target.value)}
+                    className="w-full px-3 py-2 text-sm font-mono bg-white dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-lg"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300 mb-1">
+                    Limite de Resgates
+                  </label>
+                  <input
+                    type="number"
+                    required
+                    min={1}
+                    max={100000}
+                    value={promoMaxRedemptions}
+                    onChange={(e) => setPromoMaxRedemptions(e.target.value)}
+                    className="w-full px-3 py-2 text-sm font-mono bg-white dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-lg"
+                  />
+                </div>
+              </div>
+
+              <label className="flex items-start gap-2.5 p-3 rounded-lg bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={promoPublicEvent}
+                  onChange={(e) => setPromoPublicEvent(e.target.checked)}
+                  className="mt-0.5 rounded border-slate-300 text-emerald-600 focus:ring-emerald-600"
+                />
+                <div className="text-xs">
+                  <div className="font-semibold text-slate-900 dark:text-zinc-100">
+                    Enviar e exibir evento publicamente no app
+                  </div>
+                  <div className="text-[11px] text-slate-500 dark:text-zinc-400">
+                    Se marcado, aparece na lista de Eventos Ativos dos usuários. Se desmarcado, apenas quem receber o código de você poderá digitá-lo e resgatar.
+                  </div>
+                </div>
+              </label>
+
+              {promoError && (
+                <div className="p-3 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 rounded-lg text-xs text-red-700 dark:text-red-300">
+                  {promoError}
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={promoSubmitting}
+                className="w-full inline-flex items-center justify-center gap-2 py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-semibold rounded-lg transition-colors cursor-pointer"
+              >
+                <Send className="w-3.5 h-3.5" />
+                {promoSubmitting ? 'Enviando evento...' : 'Gerar e Enviar Evento de Código'}
+              </button>
+            </form>
+          </div>
+
+          <div className="lg:col-span-7 space-y-6">
+            <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-6 space-y-4">
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="text-base font-bold text-slate-900 dark:text-zinc-50">
+                  Eventos de Código Gerados ({promoCodes.length})
+                </h3>
+                <span className="text-xs text-slate-500 dark:text-zinc-400">
+                  {promoCodes.filter((c) => c.active).length} ativos
+                </span>
+              </div>
+
+              {promoCodes.length === 0 ? (
+                <p className="text-xs text-slate-500 dark:text-zinc-400 py-6 text-center">
+                  Nenhum código promocional gerado ainda. Crie o primeiro evento ao lado!
+                </p>
+              ) : (
+                <div className="divide-y divide-slate-100 dark:divide-zinc-800">
+                  {promoCodes.map((p) => (
+                    <div key={p.code} className="py-3.5 flex flex-wrap items-center justify-between gap-3">
+                      <div className="space-y-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <code className="px-2 py-0.5 text-xs font-mono font-bold bg-slate-100 dark:bg-zinc-800 text-slate-900 dark:text-zinc-100 rounded border border-slate-200 dark:border-zinc-700">
+                            {p.code}
+                          </code>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              navigator.clipboard.writeText(p.code);
+                              setActionMsg(`Código ${p.code} copiado!`);
+                            }}
+                            className="p-1 text-slate-400 hover:text-slate-700 dark:hover:text-zinc-200 cursor-pointer"
+                            title="Copiar código"
+                          >
+                            <Copy className="w-3.5 h-3.5" />
+                          </button>
+                          <span className="text-xs font-mono font-bold text-emerald-700 dark:text-emerald-400 tabular-nums">
+                            +{formatPoints(p.pointsValue)} pts
+                          </span>
+                        </div>
+                        <div className="text-xs font-medium text-slate-800 dark:text-zinc-200">
+                          {p.title}
+                        </div>
+                        <div className="text-[11px] font-mono text-slate-500 dark:text-zinc-400 tabular-nums">
+                          Resgates: {p.redemptionCount} / {p.maxRedemptions} ·{' '}
+                          {p.publicEvent ? 'Evento Público' : 'Código Privado'} ·{' '}
+                          {p.active ? 'Ativo' : 'Pausado'}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => togglePromoPublic(p)}
+                          className="px-2.5 py-1 text-[11px] font-semibold rounded border border-slate-200 dark:border-zinc-700 bg-slate-50 dark:bg-zinc-800 text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-700 cursor-pointer"
+                        >
+                          {p.publicEvent ? 'Tornar Privado' : 'Publicar no App'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => togglePromoActive(p)}
+                          className={`px-2.5 py-1 text-[11px] font-semibold rounded border cursor-pointer ${
+                            p.active
+                              ? 'bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800'
+                              : 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800'
+                          }`}
+                        >
+                          {p.active ? 'Pausar' : 'Reativar'}
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-6 space-y-3">
+              <h3 className="text-base font-bold text-slate-900 dark:text-zinc-50">
+                Auditoria de Convites (+500 pts & 12%)
+              </h3>
+              <div className="grid grid-cols-3 gap-3 text-xs">
+                <div className="p-3 rounded-lg bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800">
+                  <div className="text-slate-500 dark:text-zinc-400">Indicações</div>
+                  <div className="text-lg font-mono font-bold text-slate-900 dark:text-zinc-50 tabular-nums">
+                    {referrals.length}
+                  </div>
+                </div>
+                <div className="p-3 rounded-lg bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800">
+                  <div className="text-slate-500 dark:text-zinc-400">Bônus +500</div>
+                  <div className="text-lg font-mono font-bold text-emerald-700 dark:text-emerald-400 tabular-nums">
+                    {formatPoints(referrals.reduce((s, r) => s + r.signupBonusPoints, 0))}
+                  </div>
+                </div>
+                <div className="p-3 rounded-lg bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800">
+                  <div className="text-slate-500 dark:text-zinc-400">Comissões 12%</div>
+                  <div className="text-lg font-mono font-bold text-emerald-700 dark:text-emerald-400 tabular-nums">
+                    {formatPoints(referrals.reduce((s, r) => s + r.totalCommissionPointsEarned, 0))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 4: ANTIFRAUD */}
       {tab === 'antifraud' && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-6 space-y-4">
@@ -828,11 +1207,19 @@ export const AdminPanel: React.FC = () => {
               <p className="text-sm text-slate-500 dark:text-zinc-400 py-6 text-center">Nenhum incidente antifraude registrado.</p>
             ) : (
               <div className="divide-y divide-slate-100 dark:divide-zinc-800">
-                {fraudLogs.slice(0, 20).map((f) => (
+                {fraudLogs.slice(0, 20).map((f) => {
+                  const targetUser = users.find((u) => u.uid === f.userId);
+                  const eventLabel =
+                    f.eventType === 'admin_ban'
+                      ? 'Banimento Administrativo'
+                      : f.eventType === 'profanity_username_ban'
+                        ? 'Banimento por Palavrão'
+                        : f.eventType;
+                  return (
                   <div key={f.logId} className="py-3 flex items-start justify-between gap-3">
                     <div className="space-y-1">
                       <div className="text-xs font-mono text-slate-500 dark:text-zinc-400">
-                        {f.eventType} · severidade {f.severity} · {f.userId.slice(0, 10)}
+                        {eventLabel} · severidade {f.severity} · {targetUser?.displayName || f.userId.slice(0, 10)}
                       </div>
                       <div className="text-xs font-medium text-slate-900 dark:text-zinc-100">{f.details}</div>
                     </div>
@@ -848,7 +1235,8 @@ export const AdminPanel: React.FC = () => {
                       <span className="text-xs text-emerald-700 dark:text-emerald-400 font-medium shrink-0">Resolvido</span>
                     )}
                   </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -1062,7 +1450,7 @@ Header: x-api-key: ee_live_sua_chave_aqui`}
 
               <div className="space-y-2">
                 <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300">
-                  Motivo do banimento
+                  Motivo do banimento <span className="text-red-500">*</span>
                 </label>
                 <div className="flex flex-wrap gap-1.5">
                   {BAN_REASON_SUGGESTIONS.map((suggestion) => (
@@ -1094,7 +1482,7 @@ Header: x-api-key: ee_live_sua_chave_aqui`}
 
               <div className="space-y-1.5">
                 <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300">
-                  Por quê? (Explicação detalhada)
+                  Por quê? (Descrição detalhada obrigatória) <span className="text-red-500">*</span>
                 </label>
                 <textarea
                   required
@@ -1103,11 +1491,11 @@ Header: x-api-key: ee_live_sua_chave_aqui`}
                   rows={3}
                   value={banExplanation}
                   onChange={(e) => setBanExplanation(e.target.value)}
-                  placeholder="Descreva o porquê do banimento (ex: Detectamos múltiplas partidas abaixo de 3 segundos e tentativa de fraude no Pix)..."
+                  placeholder="Descreva detalhadamente o motivo e o porquê do banimento para referência futura..."
                   className="w-full px-3 py-2 text-sm bg-white dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 resize-none"
                 />
                 <div className="flex items-center justify-between text-[11px] text-slate-500 dark:text-zinc-400">
-                  <span>Este motivo e explicação ficarão registrados e visíveis para o usuário banido.</span>
+                  <span>Salvo no Firestore (perfil e auditoria antifraude) para referência futura.</span>
                   <span className="font-mono tabular-nums">{banExplanation.length}/400</span>
                 </div>
               </div>
@@ -1129,8 +1517,8 @@ Header: x-api-key: ee_live_sua_chave_aqui`}
                 </button>
                 <button
                   type="submit"
-                  disabled={banSubmitting}
-                  className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold bg-red-600 hover:bg-red-700 disabled:opacity-60 text-white rounded-lg transition-colors cursor-pointer"
+                  disabled={banSubmitting || banReason.trim().length < 3 || banExplanation.trim().length < 5}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg transition-colors cursor-pointer"
                 >
                   <Ban className="w-3.5 h-3.5" />
                   {banSubmitting ? 'Banindo...' : 'Confirmar Banimento'}

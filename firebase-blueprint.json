@@ -19,6 +19,7 @@
         "banReason": { "type": "string", "maxLength": 120 },
         "banExplanation": { "type": "string", "maxLength": 400 },
         "bannedBy": { "type": "string", "maxLength": 160 },
+        "lastPromoCode": { "type": "string", "maxLength": 128 },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -277,6 +278,89 @@
         "brlBonusCents",
         "createdAt"
       ]
+    },
+    "LevelReward": {
+      "title": "LevelReward",
+      "description": "One-time level-up bonus reward claimed by a player upon reaching a target XP threshold.",
+      "type": "object",
+      "properties": {
+        "rewardId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "level": { "type": "number" },
+        "rewardPoints": { "type": "number" },
+        "xpAtClaim": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["rewardId", "userId", "level", "rewardPoints", "xpAtClaim", "createdAt"]
+    },
+    "Referral": {
+      "title": "Referral",
+      "description": "Verified referral link relationship granting 500 immediate points to referrer plus 12% commission on invited user's point earnings.",
+      "type": "object",
+      "properties": {
+        "referralId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "referrerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "invitedUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "invitedDisplayName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "signupBonusPoints": { "type": "number" },
+        "commissionRatePct": { "type": "number" },
+        "totalCommissionPointsEarned": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "referralId",
+        "referrerUid",
+        "invitedUid",
+        "invitedDisplayName",
+        "signupBonusPoints",
+        "commissionRatePct",
+        "totalCommissionPointsEarned",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "PromoCode": {
+      "title": "PromoCode",
+      "description": "Admin-generated promotional event code worth redeemable points.",
+      "type": "object",
+      "properties": {
+        "code": { "type": "string", "minLength": 3, "maxLength": 40, "pattern": "^[A-Z0-9_\\-]+$" },
+        "title": { "type": "string", "minLength": 3, "maxLength": 120 },
+        "pointsValue": { "type": "number" },
+        "maxRedemptions": { "type": "number" },
+        "redemptionCount": { "type": "number" },
+        "active": { "type": "boolean" },
+        "publicEvent": { "type": "boolean" },
+        "createdBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "code",
+        "title",
+        "pointsValue",
+        "maxRedemptions",
+        "redemptionCount",
+        "active",
+        "publicEvent",
+        "createdBy",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "PromoRedemption": {
+      "title": "PromoRedemption",
+      "description": "Deterministic one-time redemption of an admin promo code per user (prm_{uid}_{code}).",
+      "type": "object",
+      "properties": {
+        "redemptionId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "code": { "type": "string", "minLength": 3, "maxLength": 40, "pattern": "^[A-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "pointsAwarded": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["redemptionId", "code", "userId", "pointsAwarded", "createdAt"]
     }
   },
   "firestore": {
@@ -323,6 +407,22 @@
     "/dailyCheckins/{checkinId}": {
       "schema": { "$ref": "#/entities/DailyCheckin" },
       "description": "Deterministic daily random check-in claims (1 per UTC day)."
+    },
+    "/levelRewards/{rewardId}": {
+      "schema": { "$ref": "#/entities/LevelReward" },
+      "description": "Deterministic one-time level-up bonus claims (lvl_{uid}_{level})."
+    },
+    "/referrals/{invitedUid}": {
+      "schema": { "$ref": "#/entities/Referral" },
+      "description": "Referral relationships granting 500 immediate signup pts and 12% ongoing earnings commission."
+    },
+    "/promoCodes/{code}": {
+      "schema": { "$ref": "#/entities/PromoCode" },
+      "description": "Admin-generated promotional event codes redeemable for points."
+    },
+    "/promoRedemptions/{redemptionId}": {
+      "schema": { "$ref": "#/entities/PromoRedemption" },
+      "description": "One-time promo code redemptions per user (prm_{uid}_{code})."
     }
   }
 }

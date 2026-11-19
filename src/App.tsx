@@ -6,6 +6,7 @@ import {
   MoreVertical,
   Settings,
   ShieldAlert,
+  Ticket,
   User,
   Wallet,
   X,
@@ -15,6 +16,7 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 import { AuthGateScreen } from './components/AuthGateScreen';
 import { GamesHub } from './components/GamesHub';
 import { GlobalRanking } from './components/GlobalRanking';
+import { InvitesAndCodesSection } from './components/InvitesAndCodesSection';
 import { PlayerProfile, ProfileAvatar } from './components/PlayerProfile';
 import { WalletSection } from './components/WalletSection';
 import { DashboardSection } from './components/DashboardSection';
@@ -27,7 +29,15 @@ const AdminPanel = lazy(() =>
   import('./components/AdminPanel').then((mod) => ({ default: mod.AdminPanel }))
 );
 
-type NavTab = 'games' | 'ranking' | 'wallet' | 'dashboard' | 'notifications' | 'profile' | 'settings';
+type NavTab =
+  | 'games'
+  | 'invites'
+  | 'ranking'
+  | 'wallet'
+  | 'dashboard'
+  | 'notifications'
+  | 'profile'
+  | 'settings';
 
 const THEME_STORAGE_KEY = 'earneasy_theme';
 
@@ -90,6 +100,15 @@ function MainShell() {
   }, [accountMenuOpen]);
 
   useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const refUid = (params.get('ref') || params.get('convite') || '').trim();
+      if (refUid && /^[a-zA-Z0-9_-]{1,128}$/.test(refUid)) {
+        window.localStorage.setItem('earneasy_ref_uid', refUid);
+      }
+    } catch {
+      // Ignore URL/storage errors
+    }
     const syncRoute = () => setIsBackofficeRoute(isPrivateBackofficeUrl());
     window.addEventListener('popstate', syncRoute);
     window.addEventListener('hashchange', syncRoute);
@@ -120,6 +139,7 @@ function MainShell() {
 
   const navItems: { id: NavTab; label: string }[] = [
     { id: 'games', label: 'Jogos' },
+    { id: 'invites', label: 'Convites & Códigos' },
     { id: 'ranking', label: 'Ranking Global' },
     { id: 'wallet', label: 'Carteira Pix' },
     { id: 'dashboard', label: 'Dashboard' },
@@ -353,6 +373,18 @@ function MainShell() {
                     </button>
                     <button
                       type="button"
+                      onClick={() => handleSelectTab('invites')}
+                      className={`w-full text-left px-4 py-2 text-xs font-medium flex items-center gap-2 cursor-pointer ${
+                        isDarkView
+                          ? 'text-zinc-200 hover:bg-zinc-800'
+                          : 'text-slate-700 hover:bg-slate-50'
+                      }`}
+                    >
+                      <Ticket className="w-3.5 h-3.5" />
+                      Convites & Códigos
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => handleSelectTab('settings')}
                       className={`w-full text-left px-4 py-2 text-xs font-medium flex items-center justify-between cursor-pointer ${
                         isDarkView
@@ -556,6 +588,7 @@ function MainShell() {
                 onNavigateProfile={() => setActiveTab('profile')}
               />
             )}
+            {activeTab === 'invites' && <InvitesAndCodesSection />}
             {activeTab === 'ranking' && (
               <GlobalRanking
                 onGoToGames={() => setActiveTab('games')}

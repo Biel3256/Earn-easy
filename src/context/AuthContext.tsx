@@ -9,6 +9,7 @@ import {
   collection,
   doc,
   getDoc,
+  increment,
   onSnapshot,
   orderBy,
   query,
@@ -33,11 +34,17 @@ import {
   FraudEvent,
   GameCategory,
   GameSession,
+  LevelReward,
   MIN_PIX_WITHDRAWAL_CENTS,
   PixKeyType,
   PixWithdrawal,
   POINTS_PER_TEN_CENTS,
   PointConversion,
+  PromoCode,
+  PromoRedemption,
+  REFERRAL_COMMISSION_RATE,
+  REFERRAL_SIGNUP_BONUS_POINTS,
+  Referral,
   STREAK_REWARD_CENTS,
   STREAK_TARGET_DAYS,
   UserAccount,
@@ -49,6 +56,7 @@ import {
   sha256Hex,
   verifyGameSessionWithServer,
 } from '../utils/antifraud';
+import { PLAYER_LEVELS } from '../utils/levels';
 import { checkUsernameProfanity, validateUsernameInput } from '../utils/moderation';
 import { formatBRL, getTodayUtcDate, getUtcDateDaysAgo } from '../utils/pix';
 
@@ -64,6 +72,11 @@ interface AuthContextValue {
   myNotifications: EmailNotification[];
   myFraudLogs: FraudEvent[];
   myCheckins: DailyCheckin[];
+  myLevelRewards: LevelReward[];
+  myReferral: Referral | null;
+  myInvitedReferrals: Referral[];
+  publicPromoEvents: PromoCode[];
+  myPromoRedemptions: PromoRedemption[];
   needsOnboarding: boolean;
   authError: string | null;
   signInWithGoogle: () => Promise<void>;
@@ -71,7 +84,8 @@ interface AuthContextValue {
   createUserAccount: (params: {
     displayName: string;
     photoURL: string;
-  }) => Promise<{ status: 'active' | 'suspended'; message?: string }>;
+    referralCode?: string;
+  }) => Promise<{ status: 'active' | 'suspended'; message?: string; referralApplied?: boolean }>;
   recordGameReward: (params: {
     gameCategory: GameCategory;
     scoreEarned: number;
@@ -110,6 +124,16 @@ interface AuthContextValue {
     streakDay: number;
     brlBonusCents: number;
     streakBroken: boolean;
+  }>;
+  claimLevelReward: (level: number) => Promise<{
+    level: number;
+    title: string;
+    rewardPoints: number;
+  }>;
+  redeemPromoCode: (rawCode: string) => Promise<{
+    code: string;
+    title: string;
+    pointsAwarded: number;
   }>;
 }
 
@@ -182,7 +206,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [myNotifications, setMyNotifications] = useState<EmailNotification[]>([]);
   const [myFraudLogs, setMyFraudLogs] = useState<FraudEvent[]>([]);
   const [myCheckins, setMyCheckins] = useState<DailyCheckin[]>([]);
+  const [myLevelRewards, setMyLevelRewards] = useState<LevelReward[]>([]);
+  const [myReferral, setMyReferral] = useState<Referral | null>(null);
+  const [myInvitedReferrals, setMyInvitedReferrals] = useState<Referral[]>([]);
+  const [publicPromoEvents, setPublicPromoEvents] = useState<PromoCode[]>([]);
+  const [myPromoRedemptions, setMyPromoRedemptions] = useState<PromoRedemption[]>([]);
   const [authError, setAuthError] = useState<string | null>(null);
+  const lastSyncedLbSigRef = React.useRef<string>('');
 
   useEffect(() => {
     const unsubAuth = onAuthStateChanged(auth, async (user) => {
@@ -199,6 +229,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setMyNotifications([]);
         setMyFraudLogs([]);
         setMyCheckins([]);
+        setMyLevelRewards([]);
+        setMyReferral(null);
+        setMyInvitedReferrals([]);
+        setPublicPromoEvents([]);
+        setMyPromoRedemptions([]);
+        lastSyncedLbSigRef.current = '';
         setAuthReady(true);
         return;
       }
@@ -288,7 +324,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       doc(db, 'users', uid),
       (snap) => {
         if (snap.exists()) {
-          setUserAccount(snap.data() as UserAccount);
+          const uData = snap.data() as UserAccount;
+          setUserAccount(uData);
+          if (uData.status === 'active') {
+            const sig = `${uData.pointsBalance}|${uData.brlBalanceCents}|${uData.gamesPlayed}|${uData.displayName}|${uData.photoURL}|${uData.status}`;
+            if (lastSyncedLbSigRef.current && lastSyncedLbSigRef.current !== sig) {
+              setDoc(doc(db, 'leaderboard', uid), {
+                uid: uData.uid,
+                displayName: uData.displayName,
+                photoURL: uData.photoURL,
+                brlBalanceCents: uData.brlBalanceCents,
+                pointsBalance: uData.pointsBalance,
+                gamesPlayed: uData.gamesPlayed,
+                status: uData.status,
+                updatedAt: serverTimestamp(),
+              }).catch(() => {});
+            }
+            lastSyncedLbSigRef.current = sig;
+          }
         }
       },
       (error) => handleFirestoreError(error, OperationType.GET, `users/${uid}`)
@@ -345,6 +398,59 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       (error) => handleFirestoreError(error, OperationType.LIST, 'dailyCheckins')
     );
 
+    const unsubLevelRewards = onSnapshot(
+      query(collection(db, 'levelRewards'), where('userId', '==', uid)),
+      (snap) => {
+        const list = snap.docs
+          .map((d) => d.data() as LevelReward)
+          .sort((a, b) => a.level - b.level);
+        setMyLevelRewards(list);
+      },
+      (error) => handleFirestoreError(error, OperationType.LIST, 'levelRewards')
+    );
+
+    const unsubMyReferral = onSnapshot(
+      doc(db, 'referrals', uid),
+      (snap) => {
+        setMyReferral(snap.exists() ? (snap.data() as Referral) : null);
+      },
+      (error) => handleFirestoreError(error, OperationType.GET, `referrals/${uid}`)
+    );
+
+    const unsubInvitedReferrals = onSnapshot(
+      query(collection(db, 'referrals'), where('referrerUid', '==', uid)),
+      (snap) => {
+        const list = snap.docs
+          .map((d) => d.data() as Referral)
+          .sort((a, b) => b.totalCommissionPointsEarned - a.totalCommissionPointsEarned);
+        setMyInvitedReferrals(list);
+      },
+      (error) => handleFirestoreError(error, OperationType.LIST, 'referrals')
+    );
+
+    const unsubPublicPromoEvents = onSnapshot(
+      query(
+        collection(db, 'promoCodes'),
+        where('active', '==', true),
+        where('publicEvent', '==', true)
+      ),
+      (snap) => {
+        const list = snap.docs
+          .map((d) => d.data() as PromoCode)
+          .sort((a, b) => b.pointsValue - a.pointsValue);
+        setPublicPromoEvents(list);
+      },
+      (error) => handleFirestoreError(error, OperationType.LIST, 'promoCodes')
+    );
+
+    const unsubPromoRedemptions = onSnapshot(
+      query(collection(db, 'promoRedemptions'), where('userId', '==', uid)),
+      (snap) => {
+        setMyPromoRedemptions(snap.docs.map((d) => d.data() as PromoRedemption));
+      },
+      (error) => handleFirestoreError(error, OperationType.LIST, 'promoRedemptions')
+    );
+
     return () => {
       unsubUser();
       unsubPrivate();
@@ -354,6 +460,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       unsubNotifications();
       unsubFraud();
       unsubCheckins();
+      unsubLevelRewards();
+      unsubMyReferral();
+      unsubInvitedReferrals();
+      unsubPublicPromoEvents();
+      unsubPromoRedemptions();
     };
   }, [authReady, firebaseUser]);
 
@@ -421,11 +532,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       await runTransaction(db, async (tx) => {
         const userRef = doc(db, 'users', firebaseUser.uid);
-        const snap = await tx.get(userRef);
+        const referralRef = doc(db, 'referrals', firebaseUser.uid);
+        const [snap, refSnap] = await Promise.all([tx.get(userRef), tx.get(referralRef)]);
         if (!snap.exists()) throw new Error('Conta de usuário não encontrada.');
         const current = snap.data() as UserAccount;
         if (current.status !== 'active') {
           throw new Error('Conta bloqueada para pontuação.');
+        }
+
+        const commission = credited > 0 ? Math.floor(credited * REFERRAL_COMMISSION_RATE) : 0;
+        let activeReferrerData: Referral | null = null;
+        if (refSnap.exists() && commission >= 1) {
+          const candidateRef = refSnap.data() as Referral;
+          const refLbSnap = await tx.get(doc(db, 'leaderboard', candidateRef.referrerUid));
+          if (refLbSnap.exists() && refLbSnap.data().status === 'active') {
+            activeReferrerData = candidateRef;
+          }
         }
 
         tx.set(doc(db, 'gameSessions', sessionId), {
@@ -448,6 +570,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           gamesPlayed: current.gamesPlayed + 1,
           updatedAt: serverTimestamp(),
         });
+
+        if (activeReferrerData && commission >= 1) {
+          tx.update(referralRef, {
+            totalCommissionPointsEarned: activeReferrerData.totalCommissionPointsEarned + commission,
+            updatedAt: serverTimestamp(),
+          });
+          tx.update(doc(db, 'users', activeReferrerData.referrerUid), {
+            pointsBalance: increment(commission),
+            updatedAt: serverTimestamp(),
+          });
+        }
 
         tx.set(doc(db, 'leaderboard', firebaseUser.uid), {
           uid: firebaseUser.uid,
@@ -666,7 +799,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const createUserAccount = async (params: {
     displayName: string;
     photoURL: string;
-  }): Promise<{ status: 'active' | 'suspended'; message?: string }> => {
+    referralCode?: string;
+  }): Promise<{ status: 'active' | 'suspended'; message?: string; referralApplied?: boolean }> => {
     if (!firebaseUser) {
       throw new Error('Autentique-se com sua conta Google primeiro.');
     }
@@ -682,6 +816,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const fingerprint = await getDeviceFingerprint();
     const userRef = doc(db, 'users', firebaseUser.uid);
     const privateRef = doc(db, 'users', firebaseUser.uid, 'private', 'info');
+
+    const candidateRefUid = (params.referralCode || '').trim();
+    let validReferrerUid: string | null = null;
+    if (
+      !profanity.blocked &&
+      candidateRefUid &&
+      candidateRefUid !== firebaseUser.uid &&
+      /^[a-zA-Z0-9_-]{1,128}$/.test(candidateRefUid)
+    ) {
+      try {
+        const refLbSnap = await getDoc(doc(db, 'leaderboard', candidateRefUid));
+        if (refLbSnap.exists() && refLbSnap.data().status === 'active') {
+          validReferrerUid = candidateRefUid;
+        }
+      } catch {
+        validReferrerUid = null;
+      }
+    }
 
     try {
       const batch = writeBatch(db);
@@ -760,8 +912,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         status: 'active',
         updatedAt: serverTimestamp(),
       });
+
+      if (validReferrerUid) {
+        batch.set(doc(db, 'referrals', firebaseUser.uid), {
+          referralId: firebaseUser.uid,
+          referrerUid: validReferrerUid,
+          invitedUid: firebaseUser.uid,
+          invitedDisplayName: cleanName,
+          signupBonusPoints: REFERRAL_SIGNUP_BONUS_POINTS,
+          commissionRatePct: 12,
+          totalCommissionPointsEarned: 0,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+        batch.update(doc(db, 'users', validReferrerUid), {
+          pointsBalance: increment(REFERRAL_SIGNUP_BONUS_POINTS),
+          updatedAt: serverTimestamp(),
+        });
+      }
+
       await batch.commit();
-      return { status: 'active' };
+      try {
+        window.localStorage.removeItem('earneasy_ref_uid');
+      } catch {
+        // Ignore storage error
+      }
+      return { status: 'active', referralApplied: Boolean(validReferrerUid) };
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, `users/${firebaseUser.uid}`);
       throw error;
@@ -887,10 +1063,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const userRef = doc(db, 'users', firebaseUser.uid);
         const checkinRef = doc(db, 'dailyCheckins', checkinId);
         const yesterdayRef = doc(db, 'dailyCheckins', yesterdayCheckinId);
-        const [userSnap, checkinSnap, yesterdaySnap] = await Promise.all([
+        const referralRef = doc(db, 'referrals', firebaseUser.uid);
+        const [userSnap, checkinSnap, yesterdaySnap, refSnap] = await Promise.all([
           tx.get(userRef),
           tx.get(checkinRef),
           tx.get(yesterdayRef),
+          tx.get(referralRef),
         ]);
 
         if (!userSnap.exists()) throw new Error('Conta de usuário não encontrada.');
@@ -901,6 +1079,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const current = userSnap.data() as UserAccount;
         if (current.status !== 'active') {
           throw new Error('Sua conta está em revisão antifraude.');
+        }
+
+        const commission = Math.floor(pointsAwarded * REFERRAL_COMMISSION_RATE);
+        let activeReferrerData: Referral | null = null;
+        if (refSnap.exists() && commission >= 1) {
+          const candidateRef = refSnap.data() as Referral;
+          const refLbSnap = await tx.get(doc(db, 'leaderboard', candidateRef.referrerUid));
+          if (refLbSnap.exists() && refLbSnap.data().status === 'active') {
+            activeReferrerData = candidateRef;
+          }
         }
 
         if (yesterdaySnap.exists()) {
@@ -932,6 +1120,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           brlBalanceCents: current.brlBalanceCents + brlBonusCents,
           updatedAt: serverTimestamp(),
         });
+
+        if (activeReferrerData && commission >= 1) {
+          tx.update(referralRef, {
+            totalCommissionPointsEarned: activeReferrerData.totalCommissionPointsEarned + commission,
+            updatedAt: serverTimestamp(),
+          });
+          tx.update(doc(db, 'users', activeReferrerData.referrerUid), {
+            pointsBalance: increment(commission),
+            updatedAt: serverTimestamp(),
+          });
+        }
 
         tx.set(doc(db, 'leaderboard', firebaseUser.uid), {
           uid: firebaseUser.uid,
@@ -970,6 +1169,180 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   };
 
+  const claimLevelReward = async (level: number) => {
+    if (!firebaseUser || !userAccount) {
+      throw new Error('Faça login para resgatar recompensas de nível.');
+    }
+    if (userAccount.status !== 'active') {
+      throw new Error('Sua conta está em revisão antifraude.');
+    }
+
+    const tier = PLAYER_LEVELS.find((t) => t.level === level);
+    if (!tier || tier.rewardPoints <= 0) {
+      throw new Error('Este nível não possui recompensa resgatável.');
+    }
+    if (myLevelRewards.some((r) => r.level === level)) {
+      throw new Error(`A recompensa do Nível ${level} já foi resgatada.`);
+    }
+
+    const rewardId = `lvl_${firebaseUser.uid}_${level}`;
+
+    try {
+      await runTransaction(db, async (tx) => {
+        const userRef = doc(db, 'users', firebaseUser.uid);
+        const rewardRef = doc(db, 'levelRewards', rewardId);
+        const [userSnap, rewardSnap] = await Promise.all([
+          tx.get(userRef),
+          tx.get(rewardRef),
+        ]);
+
+        if (!userSnap.exists()) throw new Error('Conta não encontrada.');
+        if (rewardSnap.exists()) {
+          throw new Error(`Recompensa do Nível ${level} já resgatada.`);
+        }
+
+        const current = userSnap.data() as UserAccount;
+        if (current.status !== 'active') {
+          throw new Error('Sua conta está suspensa.');
+        }
+
+        const currentXp = Math.max(0, Math.round(current.lifetimePoints)) + Math.max(0, Math.round(current.gamesPlayed)) * 25;
+        if (currentXp < tier.minXp) {
+          throw new Error(`Você precisa de ${tier.minXp.toLocaleString('pt-BR')} XP para desbloquear o Nível ${level}.`);
+        }
+
+        tx.set(rewardRef, {
+          rewardId,
+          userId: firebaseUser.uid,
+          level: tier.level,
+          rewardPoints: tier.rewardPoints,
+          xpAtClaim: currentXp,
+          createdAt: serverTimestamp(),
+        });
+
+        tx.update(userRef, {
+          pointsBalance: current.pointsBalance + tier.rewardPoints,
+          updatedAt: serverTimestamp(),
+        });
+
+        tx.set(doc(db, 'leaderboard', firebaseUser.uid), {
+          uid: firebaseUser.uid,
+          displayName: current.displayName,
+          photoURL: current.photoURL,
+          brlBalanceCents: current.brlBalanceCents,
+          pointsBalance: current.pointsBalance + tier.rewardPoints,
+          gamesPlayed: current.gamesPlayed,
+          status: current.status,
+          updatedAt: serverTimestamp(),
+        });
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, `levelRewards/${rewardId}`);
+    }
+
+    return {
+      level: tier.level,
+      title: tier.title,
+      rewardPoints: tier.rewardPoints,
+    };
+  };
+
+  const redeemPromoCode = async (rawCode: string) => {
+    if (!firebaseUser || !userAccount) {
+      throw new Error('Faça login para resgatar códigos promocionais.');
+    }
+    if (userAccount.status !== 'active') {
+      throw new Error('Sua conta está suspensa ou em revisão antifraude.');
+    }
+
+    const code = rawCode.trim().toUpperCase();
+    if (!/^[A-Z0-9_-]{3,40}$/.test(code)) {
+      throw new Error('Código inválido. Use apenas letras maiúsculas, números, "-" ou "_" (mínimo 3 caracteres).');
+    }
+    if (myPromoRedemptions.some((r) => r.code === code)) {
+      throw new Error(`Você já resgatou o código ${code}.`);
+    }
+
+    const redemptionId = `prm_${firebaseUser.uid}_${code}`;
+    let redeemedTitle = '';
+    let redeemedPoints = 0;
+
+    try {
+      await runTransaction(db, async (tx) => {
+        const userRef = doc(db, 'users', firebaseUser.uid);
+        const promoRef = doc(db, 'promoCodes', code);
+        const redemptionRef = doc(db, 'promoRedemptions', redemptionId);
+        const [userSnap, promoSnap, redemptionSnap] = await Promise.all([
+          tx.get(userRef),
+          tx.get(promoRef),
+          tx.get(redemptionRef),
+        ]);
+
+        if (!userSnap.exists()) throw new Error('Conta de usuário não encontrada.');
+        const current = userSnap.data() as UserAccount;
+        if (current.status !== 'active') {
+          throw new Error('Sua conta está suspensa.');
+        }
+
+        if (!promoSnap.exists()) {
+          throw new Error('Código não encontrado. Confira se digitou exatamente como enviado pelo admin.');
+        }
+        const promo = promoSnap.data() as PromoCode;
+        if (!promo.active) {
+          throw new Error('Este evento de código já foi encerrado ou pausado pelo administrador.');
+        }
+        if (promo.redemptionCount >= promo.maxRedemptions) {
+          throw new Error('Este código atingiu o limite máximo de resgates disponíveis.');
+        }
+        if (redemptionSnap.exists()) {
+          throw new Error(`Você já resgatou o código ${code} anteriormente.`);
+        }
+
+        redeemedTitle = promo.title;
+        redeemedPoints = promo.pointsValue;
+
+        tx.set(redemptionRef, {
+          redemptionId,
+          code,
+          userId: firebaseUser.uid,
+          pointsAwarded: promo.pointsValue,
+          createdAt: serverTimestamp(),
+        });
+
+        tx.update(promoRef, {
+          redemptionCount: promo.redemptionCount + 1,
+          updatedAt: serverTimestamp(),
+        });
+
+        tx.update(userRef, {
+          pointsBalance: current.pointsBalance + promo.pointsValue,
+          lastPromoCode: code,
+          updatedAt: serverTimestamp(),
+        });
+
+        tx.set(doc(db, 'leaderboard', firebaseUser.uid), {
+          uid: firebaseUser.uid,
+          displayName: current.displayName,
+          photoURL: current.photoURL,
+          brlBalanceCents: current.brlBalanceCents,
+          pointsBalance: current.pointsBalance + promo.pointsValue,
+          gamesPlayed: current.gamesPlayed,
+          status: current.status,
+          updatedAt: serverTimestamp(),
+        });
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, `promoRedemptions/${redemptionId}`);
+      throw error;
+    }
+
+    return {
+      code,
+      title: redeemedTitle,
+      pointsAwarded: redeemedPoints,
+    };
+  };
+
   const needsOnboarding = authReady && Boolean(firebaseUser) && !userAccount;
 
   return (
@@ -986,6 +1359,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         myNotifications,
         myFraudLogs,
         myCheckins,
+        myLevelRewards,
+        myReferral,
+        myInvitedReferrals,
+        publicPromoEvents,
+        myPromoRedemptions,
         needsOnboarding,
         authError,
         signInWithGoogle,
@@ -997,6 +1375,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         logFraudAttempt,
         updateUserProfile,
         claimDailyCheckin,
+        claimLevelReward,
+        redeemPromoCode,
       }}
     >
       {children}

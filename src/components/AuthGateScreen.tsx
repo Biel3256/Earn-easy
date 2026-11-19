@@ -91,6 +91,20 @@ export const AuthGateScreen: React.FC<AuthGateScreenProps> = ({
   } = useAuth();
 
   const [username, setUsername] = useState('');
+  const [referralCode, setReferralCode] = useState(() => {
+    if (typeof window === 'undefined') return '';
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const fromUrl = (params.get('ref') || params.get('convite') || '').trim();
+      if (fromUrl) {
+        window.localStorage.setItem('earneasy_ref_uid', fromUrl);
+        return fromUrl;
+      }
+      return window.localStorage.getItem('earneasy_ref_uid') || '';
+    } catch {
+      return '';
+    }
+  });
   const [selectedPhoto, setSelectedPhoto] = useState(ONBOARDING_AVATARS[0].persistedPath);
   const [submitting, setSubmitting] = useState(false);
   const [signingIn, setSigningIn] = useState(false);
@@ -117,6 +131,7 @@ export const AuthGateScreen: React.FC<AuthGateScreenProps> = ({
       const result = await createUserAccount({
         displayName: username,
         photoURL: selectedPhoto,
+        referralCode: referralCode.trim() || undefined,
       });
       if (result.status === 'suspended') {
         setFormError(
@@ -264,6 +279,25 @@ export const AuthGateScreen: React.FC<AuthGateScreenProps> = ({
                 <p className="mt-2 text-xs text-amber-700 dark:text-amber-400 leading-relaxed">
                   Aviso de tolerância zero: é proibido usar palavrões, ofensas ou termos impróprios no nome de usuário. Qualquer violação resulta em banimento imediato.
                 </p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300 mb-1.5">
+                  Código de Convite (opcional)
+                </label>
+                <input
+                  type="text"
+                  maxLength={128}
+                  value={referralCode}
+                  onChange={(e) => setReferralCode(e.target.value)}
+                  placeholder="Cole o código de quem te convidou (preenchido automático pelo link)"
+                  className="w-full px-3.5 py-2 text-xs font-mono bg-white dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-600"
+                />
+                {referralCode.trim() && (
+                  <p className="mt-1 text-[11px] text-emerald-700 dark:text-emerald-400">
+                    Convite vinculado: quem te indicou receberá +500 pts imediatos e 12% bônus sobre seus ganhos.
+                  </p>
+                )}
               </div>
 
               <div>

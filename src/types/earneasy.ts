@@ -24,6 +24,7 @@ export interface UserAccount {
   banReason?: string;
   banExplanation?: string;
   bannedBy?: string;
+  lastPromoCode?: string;
   createdAt: unknown;
   updatedAt: unknown;
 }
@@ -149,6 +150,48 @@ export interface DailyCheckin {
   createdAt: unknown;
 }
 
+export interface LevelReward {
+  rewardId: string;
+  userId: string;
+  level: number;
+  rewardPoints: number;
+  xpAtClaim: number;
+  createdAt: unknown;
+}
+
+export interface Referral {
+  referralId: string;
+  referrerUid: string;
+  invitedUid: string;
+  invitedDisplayName: string;
+  signupBonusPoints: number;
+  commissionRatePct: number;
+  totalCommissionPointsEarned: number;
+  createdAt: unknown;
+  updatedAt: unknown;
+}
+
+export interface PromoCode {
+  code: string;
+  title: string;
+  pointsValue: number;
+  maxRedemptions: number;
+  redemptionCount: number;
+  active: boolean;
+  publicEvent: boolean;
+  createdBy: string;
+  createdAt: unknown;
+  updatedAt: unknown;
+}
+
+export interface PromoRedemption {
+  redemptionId: string;
+  code: string;
+  userId: string;
+  pointsAwarded: number;
+  createdAt: unknown;
+}
+
 export const GAME_LABELS: Record<GameCategory, string> = {
   tic_tac_toe: 'Jogo da Velha',
   dot_link: 'Dot Link',
@@ -163,3 +206,5 @@ export const CENTS_PER_BLOCK = 10;
 export const MIN_PIX_WITHDRAWAL_CENTS = 500;
 export const STREAK_TARGET_DAYS = 30;
 export const STREAK_REWARD_CENTS = 1000;
+export const REFERRAL_SIGNUP_BONUS_POINTS = 500;
+export const REFERRAL_COMMISSION_RATE = 0.12;

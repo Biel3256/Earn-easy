@@ -3,13 +3,15 @@ import {
   AlertCircle,
   Award,
   CheckCircle2,
+  Gamepad2,
+  Gift,
   Lock,
   RotateCcw,
   UserCheck,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { AVATAR_PRESETS, resolveAvatarSrc } from '../utils/avatars';
-import { calculatePlayerLevel, PLAYER_LEVELS } from '../utils/levels';
+import { calculateGamesXp, calculatePlayerLevel, PLAYER_LEVELS } from '../utils/levels';
 import { formatBRL, formatPoints } from '../utils/pix';
 
 export const ProfileAvatar: React.FC<{
@@ -56,13 +58,24 @@ export const ProfileAvatar: React.FC<{
 };
 
 export const PlayerProfile: React.FC = () => {
-  const { firebaseUser, userAccount, privateInfo, signInWithGoogle, updateUserProfile } = useAuth();
+  const {
+    firebaseUser,
+    userAccount,
+    privateInfo,
+    mySessions,
+    myLevelRewards,
+    signInWithGoogle,
+    updateUserProfile,
+    claimLevelReward,
+  } = useAuth();
 
   const [displayName, setDisplayName] = useState('');
   const [selectedPhoto, setSelectedPhoto] = useState('');
   const [customUrl, setCustomUrl] = useState('');
   const [saving, setSaving] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'ok' | 'err'; msg: string } | null>(null);
+  const [claimingLevel, setClaimingLevel] = useState<number | null>(null);
+  const [rewardFeedback, setRewardFeedback] = useState<{ type: 'ok' | 'err'; msg: string } | null>(null);
 
   useEffect(() => {
     if (userAccount) {
@@ -94,6 +107,31 @@ export const PlayerProfile: React.FC = () => {
   }
 
   const levelInfo = calculatePlayerLevel(userAccount.lifetimePoints, userAccount.gamesPlayed);
+  const gamesXp = calculateGamesXp(mySessions);
+  const claimedLevelsSet = new Set(myLevelRewards.map((r) => r.level));
+  const claimableTiers = PLAYER_LEVELS.filter(
+    (t) => t.rewardPoints > 0 && levelInfo.xp >= t.minXp && !claimedLevelsSet.has(t.level)
+  );
+  const totalRewardableLevels = PLAYER_LEVELS.filter((t) => t.rewardPoints > 0).length;
+
+  const handleClaimLevel = async (level: number) => {
+    setRewardFeedback(null);
+    setClaimingLevel(level);
+    try {
+      const res = await claimLevelReward(level);
+      setRewardFeedback({
+        type: 'ok',
+        msg: `Recompensa do Nível ${res.level} (${res.title}) resgatada: +${formatPoints(res.rewardPoints)} pontos adicionados ao seu saldo!`,
+      });
+    } catch (err) {
+      setRewardFeedback({
+        type: 'err',
+        msg: err instanceof Error ? err.message : 'Não foi possível resgatar a recompensa deste nível.',
+      });
+    } finally {
+      setClaimingLevel(null);
+    }
+  };
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -189,30 +227,120 @@ export const PlayerProfile: React.FC = () => {
           </div>
         </div>
 
-        {/* XP Progress Bar */}
-        <div className="bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 rounded-lg p-4 space-y-2.5">
-          <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-            <span className="font-semibold text-slate-800 dark:text-zinc-200 inline-flex items-center gap-1.5">
-              <Award className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-              Nível {levelInfo.level}: {levelInfo.title}
-            </span>
-            <span className="font-mono tabular-nums text-slate-600 dark:text-zinc-400">
-              {levelInfo.isMaxLevel
-                ? `Nível máximo atingido (${formatPoints(levelInfo.xp)} XP)`
-                : `Faltam ${formatPoints(levelInfo.xpRemaining)} XP para Nível ${levelInfo.level + 1} (${levelInfo.nextTitle})`}
-            </span>
-          </div>
-          <div className="w-full h-2.5 bg-slate-200 dark:bg-zinc-800 rounded-full overflow-hidden">
+        {/* XP Progress Bar & Games Experience Breakdown */}
+        <div className="bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 rounded-lg p-4 sm:p-5 space-y-4">
+          <div className="space-y-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+              <span className="font-semibold text-slate-800 dark:text-zinc-200 inline-flex items-center gap-1.5">
+                <Award className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                Nível {levelInfo.level}: {levelInfo.title}
+              </span>
+              <span className="font-mono tabular-nums text-slate-600 dark:text-zinc-400">
+                {levelInfo.isMaxLevel
+                  ? `Nível máximo atingido (${formatPoints(levelInfo.xp)} XP)`
+                  : `Faltam ${formatPoints(levelInfo.xpRemaining)} XP para Nível ${levelInfo.level + 1} (${levelInfo.nextTitle})`}
+              </span>
+            </div>
+
             <div
-              className="h-full bg-emerald-600 dark:bg-emerald-500 transition-all duration-300"
-              style={{ width: `${levelInfo.progressPct}%` }}
-            />
+              role="progressbar"
+              aria-valuenow={levelInfo.progressPct}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-label={`Progresso para o próximo nível: ${levelInfo.progressPct}%`}
+              className="w-full h-3 bg-slate-200 dark:bg-zinc-800 rounded-full overflow-hidden"
+            >
+              <div
+                className="h-full bg-emerald-600 dark:bg-emerald-500 transition-all duration-300"
+                style={{ width: `${levelInfo.progressPct}%` }}
+              />
+            </div>
+
+            <div className="flex items-center justify-between text-[11px] font-mono tabular-nums text-slate-500 dark:text-zinc-400">
+              <span>{formatPoints(levelInfo.currentFloorXp)} XP</span>
+              <span className="font-semibold text-slate-700 dark:text-zinc-300">
+                {formatPoints(levelInfo.xp)} XP ({levelInfo.progressPct}%)
+              </span>
+              <span>{levelInfo.nextLevelXp !== null ? `${formatPoints(levelInfo.nextLevelXp)} XP` : 'Máximo'}</span>
+            </div>
           </div>
-          <div className="flex items-center justify-between text-[11px] font-mono tabular-nums text-slate-500 dark:text-zinc-400">
-            <span>{formatPoints(levelInfo.currentFloorXp)} XP</span>
-            <span>{levelInfo.progressPct}%</span>
-            <span>{levelInfo.nextLevelXp !== null ? `${formatPoints(levelInfo.nextLevelXp)} XP` : 'Máximo'}</span>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-3 border-t border-slate-200 dark:border-zinc-800">
+            <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-lg px-3.5 py-2.5">
+              <div className="text-[11px] text-slate-500 dark:text-zinc-400 flex items-center gap-1.5">
+                <Gamepad2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                Experiência ganha nos jogos
+              </div>
+              <div className="text-sm font-mono font-bold text-slate-900 dark:text-zinc-50 tabular-nums mt-0.5">
+                {formatPoints(gamesXp.totalGameXp)} XP
+              </div>
+              <div className="text-[11px] text-slate-500 dark:text-zinc-400 mt-0.5 tabular-nums">
+                {gamesXp.verifiedGames} partidas ({formatPoints(gamesXp.verifiedScorePoints)} pts + {formatPoints(gamesXp.matchBonusXp)} XP bônus)
+              </div>
+            </div>
+
+            <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-lg px-3.5 py-2.5">
+              <div className="text-[11px] text-slate-500 dark:text-zinc-400">Experiência Total da Conta</div>
+              <div className="text-sm font-mono font-bold text-slate-900 dark:text-zinc-50 tabular-nums mt-0.5">
+                {formatPoints(levelInfo.xp)} XP
+              </div>
+              <div className="text-[11px] text-slate-500 dark:text-zinc-400 mt-0.5 tabular-nums">
+                Jogos + check-ins acumulados
+              </div>
+            </div>
+
+            <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-lg px-3.5 py-2.5">
+              <div className="text-[11px] text-slate-500 dark:text-zinc-400 flex items-center gap-1.5">
+                <Gift className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                Recompensas por Nível
+              </div>
+              <div className="text-sm font-mono font-bold text-emerald-700 dark:text-emerald-400 tabular-nums mt-0.5">
+                {claimedLevelsSet.size} / {totalRewardableLevels} resgatadas
+              </div>
+              <div className="text-[11px] text-slate-500 dark:text-zinc-400 mt-0.5">
+                {claimableTiers.length > 0
+                  ? `${claimableTiers.length} recompensa(s) pronta(s)!`
+                  : 'Suba de nível jogando'}
+              </div>
+            </div>
           </div>
+
+          {claimableTiers.length > 0 && (
+            <div className="bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-lg p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="text-xs text-emerald-900 dark:text-emerald-200">
+                <span className="font-bold">Recompensa de nível disponível!</span> Você desbloqueou{' '}
+                {claimableTiers.map((t) => `Nível ${t.level} (+${formatPoints(t.rewardPoints)} pts)`).join(', ')}.
+              </div>
+              <button
+                type="button"
+                disabled={claimingLevel !== null}
+                onClick={() => handleClaimLevel(claimableTiers[0].level)}
+                className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-semibold rounded-lg transition-colors whitespace-nowrap cursor-pointer shrink-0"
+              >
+                <Gift className="w-3.5 h-3.5" />
+                {claimingLevel === claimableTiers[0].level
+                  ? 'Resgatando...'
+                  : `Resgatar Nível ${claimableTiers[0].level} (+${formatPoints(claimableTiers[0].rewardPoints)} pts)`}
+              </button>
+            </div>
+          )}
+
+          {rewardFeedback && (
+            <div
+              className={`p-3 rounded-lg border text-xs flex items-start gap-2 ${
+                rewardFeedback.type === 'ok'
+                  ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300'
+                  : 'bg-red-50 dark:bg-red-950/40 border-red-200 dark:border-red-800 text-red-800 dark:text-red-300'
+              }`}
+            >
+              {rewardFeedback.type === 'ok' ? (
+                <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
+              ) : (
+                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+              )}
+              <span>{rewardFeedback.msg}</span>
+            </div>
+          )}
         </div>
       </section>
 
@@ -338,12 +466,12 @@ export const PlayerProfile: React.FC = () => {
           </form>
         </section>
 
-        {/* Levels Progression List */}
+        {/* Levels Progression & Rewards List */}
         <section className="lg:col-span-5 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-6 space-y-4">
           <div className="border-b border-slate-100 dark:border-zinc-800 pb-4">
-            <h2 className="text-base font-bold text-slate-900 dark:text-zinc-50">Sistema de Níveis</h2>
+            <h2 className="text-base font-bold text-slate-900 dark:text-zinc-50">Sistema de Níveis e Recompensas</h2>
             <p className="text-xs text-slate-500 dark:text-zinc-400 mt-0.5">
-              Cada ponto ganho (+1 XP) e cada partida concluída (+25 XP) aumentam seu nível
+              Cada ponto ganho (+1 XP) e partida jogada (+25 XP) liberam bônus ao subir de nível
             </p>
           </div>
 
@@ -351,30 +479,57 @@ export const PlayerProfile: React.FC = () => {
             {PLAYER_LEVELS.map((tier) => {
               const unlocked = levelInfo.xp >= tier.minXp;
               const isCurrent = levelInfo.level === tier.level;
+              const isClaimed = claimedLevelsSet.has(tier.level);
+              const canClaim = tier.rewardPoints > 0 && unlocked && !isClaimed;
               return (
                 <div
                   key={tier.level}
-                  className={`py-3 flex items-start justify-between gap-3 ${
+                  className={`py-3.5 flex items-start justify-between gap-3 ${
                     isCurrent ? 'bg-emerald-50/60 dark:bg-emerald-950/35 -mx-3 px-3 rounded-lg' : ''
                   }`}
                 >
-                  <div className="space-y-0.5">
-                    <div className="text-xs font-bold text-slate-900 dark:text-zinc-100">
-                      Nível {tier.level} · {tier.title}
+                  <div className="space-y-1 min-w-0">
+                    <div className="text-xs font-bold text-slate-900 dark:text-zinc-100 flex flex-wrap items-center gap-2">
+                      <span>Nível {tier.level} · {tier.title}</span>
+                      {tier.rewardPoints > 0 && (
+                        <span className="font-mono text-[11px] font-semibold text-emerald-700 dark:text-emerald-400">
+                          +{formatPoints(tier.rewardPoints)} pts
+                        </span>
+                      )}
                     </div>
                     <div className="text-xs text-slate-500 dark:text-zinc-400">{tier.perk}</div>
                   </div>
-                  <div className="text-right shrink-0">
+                  <div className="text-right shrink-0 space-y-1">
                     <div className="text-xs font-mono tabular-nums font-semibold text-slate-700 dark:text-zinc-300">
                       {formatPoints(tier.minXp)} XP
                     </div>
-                    <div
-                      className={`text-[11px] font-medium ${
-                        unlocked ? 'text-emerald-700 dark:text-emerald-400' : 'text-slate-400 dark:text-zinc-600'
-                      }`}
-                    >
-                      {isCurrent ? 'Atual' : unlocked ? 'Desbloqueado' : 'Bloqueado'}
-                    </div>
+                    {canClaim ? (
+                      <button
+                        type="button"
+                        disabled={claimingLevel !== null}
+                        onClick={() => handleClaimLevel(tier.level)}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-[11px] font-semibold rounded-md transition-colors cursor-pointer"
+                      >
+                        <Gift className="w-3 h-3" />
+                        {claimingLevel === tier.level ? 'Resgatando...' : 'Resgatar'}
+                      </button>
+                    ) : (
+                      <div
+                        className={`text-[11px] font-medium ${
+                          isClaimed || (tier.rewardPoints === 0 && unlocked)
+                            ? 'text-emerald-700 dark:text-emerald-400'
+                            : 'text-slate-400 dark:text-zinc-600'
+                        }`}
+                      >
+                        {tier.rewardPoints === 0
+                          ? isCurrent
+                            ? 'Nível Atual'
+                            : 'Inicial'
+                          : isClaimed
+                            ? 'Resgatado'
+                            : `Faltam ${formatPoints(Math.max(0, tier.minXp - levelInfo.xp))} XP`}
+                      </div>
+                    )}
                   </div>
                 </div>
               );

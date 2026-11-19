@@ -17,6 +17,10 @@ service cloud.firestore {
       return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
+    function isValidPromoCodeId(code) {
+      return code is string && code.size() >= 3 && code.size() <= 40 && code.matches('^[A-Z0-9_\\-]+$');
+    }
+
     function incoming() {
       return request.resource.data;
     }
@@ -73,9 +77,51 @@ service cloud.firestore {
       return 'chk_' + userId + '_' + yesterdayDateStr();
     }
 
+    function levelRewardDocId(userId, lvl) {
+      return 'lvl_' + userId + '_' + string(lvl);
+    }
+
+    function promoRedemptionDocId(userId, code) {
+      return 'prm_' + userId + '_' + code;
+    }
+
+    function userXp(data) {
+      return data.lifetimePoints + (data.gamesPlayed * 25);
+    }
+
     function isActiveUser(userId) {
       return exists(/databases/$(database)/documents/users/$(userId)) &&
         get(/databases/$(database)/documents/users/$(userId)).data.status == 'active';
+    }
+
+    function isValidReferralCommission(comm, referrerUid, invitedUid) {
+      return comm >= 1 &&
+        comm <= 60 &&
+        exists(/databases/$(database)/documents/referrals/$(invitedUid)) &&
+        existsAfter(/databases/$(database)/documents/referrals/$(invitedUid)) &&
+        get(/databases/$(database)/documents/referrals/$(invitedUid)).data.referrerUid == referrerUid &&
+        (
+          getAfter(/databases/$(database)/documents/referrals/$(invitedUid)).data.totalCommissionPointsEarned -
+          get(/databases/$(database)/documents/referrals/$(invitedUid)).data.totalCommissionPointsEarned
+        ) == comm &&
+        exists(/databases/$(database)/documents/users/$(invitedUid)) &&
+        existsAfter(/databases/$(database)/documents/users/$(invitedUid)) &&
+        (
+          getAfter(/databases/$(database)/documents/users/$(invitedUid)).data.lifetimePoints -
+          get(/databases/$(database)/documents/users/$(invitedUid)).data.lifetimePoints
+        ) > 0 &&
+        (comm * 100) <= (
+          (
+            getAfter(/databases/$(database)/documents/users/$(invitedUid)).data.lifetimePoints -
+            get(/databases/$(database)/documents/users/$(invitedUid)).data.lifetimePoints
+          ) * 12
+        ) &&
+        ((comm + 1) * 100) > (
+          (
+            getAfter(/databases/$(database)/documents/users/$(invitedUid)).data.lifetimePoints -
+            get(/databases/$(database)/documents/users/$(invitedUid)).data.lifetimePoints
+          ) * 12
+        );
     }
 
     // --- Validation Blueprints ---
@@ -89,7 +135,7 @@ service cloud.firestore {
         'uid', 'displayName', 'photoURL', 'pointsBalance', 'lifetimePoints',
         'brlBalanceCents', 'totalWithdrawnCents', 'lastConversionDate',
         'status', 'riskScore', 'gamesPlayed', 'banReason', 'banExplanation',
-        'bannedBy', 'createdAt', 'updatedAt'
+        'bannedBy', 'lastPromoCode', 'createdAt', 'updatedAt'
       ]) &&
       isValidId(data.uid) &&
       data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80 &&
@@ -105,6 +151,7 @@ service cloud.firestore {
       (!('banReason' in data) || (data.banReason is string && data.banReason.size() <= 120)) &&
       (!('banExplanation' in data) || (data.banExplanation is string && data.banExplanation.size() <= 400)) &&
       (!('bannedBy' in data) || (data.bannedBy is string && data.bannedBy.size() <= 160)) &&
+      (!('lastPromoCode' in data) || isValidPromoCodeId(data.lastPromoCode)) &&
       data.createdAt is timestamp &&
       data.updatedAt is timestamp;
     }
@@ -305,6 +352,84 @@ service cloud.firestore {
       data.createdAt is timestamp;
     }
 
+    function isValidLevelReward(data) {
+      return data.keys().hasAll([
+        'rewardId', 'userId', 'level', 'rewardPoints', 'xpAtClaim', 'createdAt'
+      ]) &&
+      data.keys().hasOnly([
+        'rewardId', 'userId', 'level', 'rewardPoints', 'xpAtClaim', 'createdAt'
+      ]) &&
+      isValidId(data.rewardId) &&
+      isValidId(data.userId) &&
+      data.level in [2, 3, 4, 5, 6] &&
+      data.rewardPoints is number && (
+        (data.level == 2 && data.rewardPoints == 200) ||
+        (data.level == 3 && data.rewardPoints == 400) ||
+        (data.level == 4 && data.rewardPoints == 800) ||
+        (data.level == 5 && data.rewardPoints == 1500) ||
+        (data.level == 6 && data.rewardPoints == 3000)
+      ) &&
+      data.xpAtClaim is number && data.xpAtClaim >= 1000 &&
+      data.createdAt is timestamp;
+    }
+
+    function isValidReferral(data) {
+      return data.keys().hasAll([
+        'referralId', 'referrerUid', 'invitedUid', 'invitedDisplayName',
+        'signupBonusPoints', 'commissionRatePct', 'totalCommissionPointsEarned',
+        'createdAt', 'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'referralId', 'referrerUid', 'invitedUid', 'invitedDisplayName',
+        'signupBonusPoints', 'commissionRatePct', 'totalCommissionPointsEarned',
+        'createdAt', 'updatedAt'
+      ]) &&
+      isValidId(data.referralId) &&
+      isValidId(data.referrerUid) &&
+      isValidId(data.invitedUid) &&
+      data.invitedDisplayName is string && data.invitedDisplayName.size() >= 1 && data.invitedDisplayName.size() <= 80 &&
+      data.signupBonusPoints == 500 &&
+      data.commissionRatePct == 12 &&
+      data.totalCommissionPointsEarned is number && data.totalCommissionPointsEarned >= 0 &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidPromoCode(data) {
+      return data.keys().hasAll([
+        'code', 'title', 'pointsValue', 'maxRedemptions', 'redemptionCount',
+        'active', 'publicEvent', 'createdBy', 'createdAt', 'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'code', 'title', 'pointsValue', 'maxRedemptions', 'redemptionCount',
+        'active', 'publicEvent', 'createdBy', 'createdAt', 'updatedAt'
+      ]) &&
+      isValidPromoCodeId(data.code) &&
+      data.title is string && data.title.size() >= 3 && data.title.size() <= 120 &&
+      data.pointsValue is number && data.pointsValue >= 10 && data.pointsValue <= 50000 &&
+      data.maxRedemptions is number && data.maxRedemptions >= 1 && data.maxRedemptions <= 100000 &&
+      data.redemptionCount is number && data.redemptionCount >= 0 && data.redemptionCount <= data.maxRedemptions &&
+      data.active is bool &&
+      data.publicEvent is bool &&
+      isValidId(data.createdBy) &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidPromoRedemption(data) {
+      return data.keys().hasAll([
+        'redemptionId', 'code', 'userId', 'pointsAwarded', 'createdAt'
+      ]) &&
+      data.keys().hasOnly([
+        'redemptionId', 'code', 'userId', 'pointsAwarded', 'createdAt'
+      ]) &&
+      isValidId(data.redemptionId) &&
+      isValidPromoCodeId(data.code) &&
+      isValidId(data.userId) &&
+      data.pointsAwarded is number && data.pointsAwarded >= 10 && data.pointsAwarded <= 50000 &&
+      data.createdAt is timestamp;
+    }
+
     // --- Collection Rules ---
 
     // 1. Users Collection
@@ -325,6 +450,7 @@ service cloud.firestore {
         !('banReason' in incoming()) &&
         !('banExplanation' in incoming()) &&
         !('bannedBy' in incoming()) &&
+        !('lastPromoCode' in incoming()) &&
         incoming().createdAt == request.time &&
         incoming().updatedAt == request.time && (
           (incoming().status == 'active' && incoming().riskScore == 0) ||
@@ -401,6 +527,83 @@ service cloud.firestore {
                 incoming().diff(existing()).affectedKeys().hasOnly(['status', 'riskScore', 'updatedAt']) &&
                 incoming().status == 'suspended' &&
                 incoming().riskScore == 100
+              ) ||
+              // Action G: One-Time Level-Up Reward Claim (levels 2..6 verified via XP + atomic levelRewards doc)
+              (
+                incoming().status == existing().status &&
+                incoming().riskScore == existing().riskScore &&
+                incoming().diff(existing()).affectedKeys().hasOnly(['pointsBalance', 'updatedAt']) &&
+                (
+                  (
+                    (incoming().pointsBalance - existing().pointsBalance) == 200 &&
+                    userXp(existing()) >= 1000 &&
+                    !exists(/databases/$(database)/documents/levelRewards/$(levelRewardDocId(userId, 2))) &&
+                    existsAfter(/databases/$(database)/documents/levelRewards/$(levelRewardDocId(userId, 2)))
+                  ) ||
+                  (
+                    (incoming().pointsBalance - existing().pointsBalance) == 400 &&
+                    userXp(existing()) >= 3000 &&
+                    !exists(/databases/$(database)/documents/levelRewards/$(levelRewardDocId(userId, 3))) &&
+                    existsAfter(/databases/$(database)/documents/levelRewards/$(levelRewardDocId(userId, 3)))
+                  ) ||
+                  (
+                    (incoming().pointsBalance - existing().pointsBalance) == 800 &&
+                    userXp(existing()) >= 7000 &&
+                    !exists(/databases/$(database)/documents/levelRewards/$(levelRewardDocId(userId, 4))) &&
+                    existsAfter(/databases/$(database)/documents/levelRewards/$(levelRewardDocId(userId, 4)))
+                  ) ||
+                  (
+                    (incoming().pointsBalance - existing().pointsBalance) == 1500 &&
+                    userXp(existing()) >= 15000 &&
+                    !exists(/databases/$(database)/documents/levelRewards/$(levelRewardDocId(userId, 5))) &&
+                    existsAfter(/databases/$(database)/documents/levelRewards/$(levelRewardDocId(userId, 5)))
+                  ) ||
+                  (
+                    (incoming().pointsBalance - existing().pointsBalance) == 3000 &&
+                    userXp(existing()) >= 30000 &&
+                    !exists(/databases/$(database)/documents/levelRewards/$(levelRewardDocId(userId, 6))) &&
+                    existsAfter(/databases/$(database)/documents/levelRewards/$(levelRewardDocId(userId, 6)))
+                  )
+                )
+              ) ||
+              // Action J: One-Time Admin Promo Code Redemption
+              (
+                incoming().status == existing().status &&
+                incoming().riskScore == existing().riskScore &&
+                incoming().diff(existing()).affectedKeys().hasOnly(['pointsBalance', 'lastPromoCode', 'updatedAt']) &&
+                ('lastPromoCode' in incoming()) &&
+                isValidPromoCodeId(incoming().lastPromoCode) &&
+                !exists(/databases/$(database)/documents/promoRedemptions/$(promoRedemptionDocId(userId, incoming().lastPromoCode))) &&
+                existsAfter(/databases/$(database)/documents/promoRedemptions/$(promoRedemptionDocId(userId, incoming().lastPromoCode))) &&
+                exists(/databases/$(database)/documents/promoCodes/$(incoming().lastPromoCode)) &&
+                get(/databases/$(database)/documents/promoCodes/$(incoming().lastPromoCode)).data.active == true &&
+                get(/databases/$(database)/documents/promoCodes/$(incoming().lastPromoCode)).data.redemptionCount < get(/databases/$(database)/documents/promoCodes/$(incoming().lastPromoCode)).data.maxRedemptions &&
+                (incoming().pointsBalance - existing().pointsBalance) == get(/databases/$(database)/documents/promoCodes/$(incoming().lastPromoCode)).data.pointsValue &&
+                getAfter(/databases/$(database)/documents/promoRedemptions/$(promoRedemptionDocId(userId, incoming().lastPromoCode))).data.pointsAwarded == (incoming().pointsBalance - existing().pointsBalance)
+              )
+            )
+          ) || (
+            // Cross-User Atomic Referral Credits to Referrer Account
+            request.auth.uid != userId &&
+            existing().status == 'active' &&
+            incoming().status == existing().status &&
+            incoming().riskScore == existing().riskScore &&
+            incoming().totalWithdrawnCents == existing().totalWithdrawnCents &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['pointsBalance', 'updatedAt']) && (
+              // Action H: +500 points immediate referral signup bonus
+              (
+                (incoming().pointsBalance - existing().pointsBalance) == 500 &&
+                !exists(/databases/$(database)/documents/referrals/$(request.auth.uid)) &&
+                existsAfter(/databases/$(database)/documents/referrals/$(request.auth.uid)) &&
+                getAfter(/databases/$(database)/documents/referrals/$(request.auth.uid)).data.referrerUid == userId &&
+                getAfter(/databases/$(database)/documents/referrals/$(request.auth.uid)).data.invitedUid == request.auth.uid &&
+                getAfter(/databases/$(database)/documents/referrals/$(request.auth.uid)).data.signupBonusPoints == 500
+              ) ||
+              // Action I: 12% ongoing commission on invited user's verified earnings
+              isValidReferralCommission(
+                incoming().pointsBalance - existing().pointsBalance,
+                userId,
+                request.auth.uid
               )
             )
           )
@@ -618,6 +821,141 @@ service cloud.firestore {
           )
         );
       allow update, delete: if isValidId(checkinId) && isAdmin();
+    }
+
+    // 11. Level-Up Rewards (Deterministic 1-time claim per level 2..6: lvl_{uid}_{level})
+    match /levelRewards/{rewardId} {
+      allow get: if isValidId(rewardId) && (isAdmin() || (isSignedIn() && existing().userId == request.auth.uid));
+      allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow create: if isValidId(rewardId) &&
+        isSignedIn() &&
+        isValidLevelReward(incoming()) &&
+        incoming().rewardId == rewardId &&
+        incoming().userId == request.auth.uid &&
+        rewardId == levelRewardDocId(request.auth.uid, incoming().level) &&
+        incoming().createdAt == request.time &&
+        isActiveUser(request.auth.uid) &&
+        incoming().xpAtClaim == userXp(get(/databases/$(database)/documents/users/$(request.auth.uid)).data) &&
+        getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.pointsBalance ==
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.pointsBalance + incoming().rewardPoints && (
+          (incoming().level == 2 && incoming().xpAtClaim >= 1000) ||
+          (incoming().level == 3 && incoming().xpAtClaim >= 3000) ||
+          (incoming().level == 4 && incoming().xpAtClaim >= 7000) ||
+          (incoming().level == 5 && incoming().xpAtClaim >= 15000) ||
+          (incoming().level == 6 && incoming().xpAtClaim >= 30000)
+        );
+      allow update, delete: if isValidId(rewardId) && isAdmin();
+    }
+
+    // 12. Referral Program (500 immediate signup pts + 12% ongoing earnings commission)
+    match /referrals/{invitedUid} {
+      allow get: if isValidId(invitedUid) && isSignedIn() && (
+        isAdmin() || isOwner(invitedUid) || existing().referrerUid == request.auth.uid
+      );
+      allow list: if isAdmin() || (isSignedIn() && resource.data.referrerUid == request.auth.uid);
+
+      allow create: if isValidId(invitedUid) &&
+        isOwner(invitedUid) &&
+        isValidReferral(incoming()) &&
+        incoming().referralId == invitedUid &&
+        incoming().invitedUid == invitedUid &&
+        incoming().referrerUid != invitedUid &&
+        incoming().signupBonusPoints == 500 &&
+        incoming().commissionRatePct == 12 &&
+        incoming().totalCommissionPointsEarned == 0 &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        getAfter(/databases/$(database)/documents/users/$(invitedUid)).data.status == 'active' &&
+        exists(/databases/$(database)/documents/leaderboard/$(incoming().referrerUid)) &&
+        get(/databases/$(database)/documents/leaderboard/$(incoming().referrerUid)).data.status == 'active' &&
+        existsAfter(/databases/$(database)/documents/users/$(incoming().referrerUid)) &&
+        getAfter(/databases/$(database)/documents/users/$(incoming().referrerUid)).data.pointsBalance ==
+          get(/databases/$(database)/documents/users/$(incoming().referrerUid)).data.pointsBalance + 500;
+
+      allow update: if isValidId(invitedUid) &&
+        isSignedIn() &&
+        isValidReferral(incoming()) &&
+        incoming().referralId == existing().referralId &&
+        incoming().referrerUid == existing().referrerUid &&
+        incoming().invitedUid == existing().invitedUid &&
+        incoming().signupBonusPoints == existing().signupBonusPoints &&
+        incoming().commissionRatePct == existing().commissionRatePct &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          isAdmin() || (
+            isOwner(invitedUid) &&
+            isActiveUser(invitedUid) &&
+            incoming().invitedDisplayName == existing().invitedDisplayName &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['totalCommissionPointsEarned', 'updatedAt']) &&
+            incoming().totalCommissionPointsEarned > existing().totalCommissionPointsEarned &&
+            incoming().totalCommissionPointsEarned <= existing().totalCommissionPointsEarned + 60 &&
+            existsAfter(/databases/$(database)/documents/users/$(existing().referrerUid)) &&
+            getAfter(/databases/$(database)/documents/users/$(existing().referrerUid)).data.pointsBalance ==
+              get(/databases/$(database)/documents/users/$(existing().referrerUid)).data.pointsBalance +
+              (incoming().totalCommissionPointsEarned - existing().totalCommissionPointsEarned)
+          )
+        );
+
+      allow delete: if isValidId(invitedUid) && isAdmin();
+    }
+
+    // 13. Admin-Generated Promo Code Events
+    match /promoCodes/{code} {
+      allow get: if isValidPromoCodeId(code) && isSignedIn();
+      allow list: if isAdmin() || (
+        isSignedIn() && resource.data.active == true && resource.data.publicEvent == true
+      );
+
+      allow create: if isValidPromoCodeId(code) &&
+        isAdmin() &&
+        isValidPromoCode(incoming()) &&
+        incoming().code == code &&
+        incoming().redemptionCount == 0 &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+
+      allow update: if isValidPromoCodeId(code) &&
+        isSignedIn() &&
+        isValidPromoCode(incoming()) &&
+        incoming().code == existing().code &&
+        incoming().createdBy == existing().createdBy &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          isAdmin() || (
+            isActiveUser(request.auth.uid) &&
+            existing().active == true &&
+            existing().redemptionCount < existing().maxRedemptions &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['redemptionCount', 'updatedAt']) &&
+            incoming().redemptionCount == existing().redemptionCount + 1 &&
+            !exists(/databases/$(database)/documents/promoRedemptions/$(promoRedemptionDocId(request.auth.uid, code))) &&
+            existsAfter(/databases/$(database)/documents/promoRedemptions/$(promoRedemptionDocId(request.auth.uid, code)))
+          )
+        );
+
+      allow delete: if isValidPromoCodeId(code) && isAdmin();
+    }
+
+    // 14. Promo Code Redemptions (Deterministic one-time per user: prm_{uid}_{code})
+    match /promoRedemptions/{redemptionId} {
+      allow get: if isValidId(redemptionId) && (isAdmin() || (isSignedIn() && existing().userId == request.auth.uid));
+      allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+
+      allow create: if isValidId(redemptionId) &&
+        isSignedIn() &&
+        isValidPromoRedemption(incoming()) &&
+        incoming().redemptionId == redemptionId &&
+        incoming().userId == request.auth.uid &&
+        redemptionId == promoRedemptionDocId(request.auth.uid, incoming().code) &&
+        incoming().createdAt == request.time &&
+        isActiveUser(request.auth.uid) &&
+        exists(/databases/$(database)/documents/promoCodes/$(incoming().code)) &&
+        get(/databases/$(database)/documents/promoCodes/$(incoming().code)).data.active == true &&
+        get(/databases/$(database)/documents/promoCodes/$(incoming().code)).data.redemptionCount < get(/databases/$(database)/documents/promoCodes/$(incoming().code)).data.maxRedemptions &&
+        incoming().pointsAwarded == get(/databases/$(database)/documents/promoCodes/$(incoming().code)).data.pointsValue &&
+        getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.pointsBalance ==
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.pointsBalance + incoming().pointsAwarded;
+
+      allow update, delete: if isValidId(redemptionId) && isAdmin();
     }
   }
 }
