@@ -1,0 +1,6 @@
+{
+  "name": "Earn Easy",
+  "description": "Plataforma de jogos premiados com conversão diária de pontos para saldo em reais, saque via Pix, verificação antifraude, relatórios em Excel e painel administrativo.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

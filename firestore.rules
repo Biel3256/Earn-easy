@@ -1,0 +1,460 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Pillar 1: Global Default-Deny Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Connectivity health check document
+    match /test/connection {
+      allow get: if true;
+    }
+
+    // --- Global Security Primitives ---
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isBootstrappedAdmin() {
+      return isSignedIn() && request.auth.token.email == 'anthonysamuel61500@gmail.com';
+    }
+
+    function isAdmin() {
+      return isBootstrappedAdmin() || (
+        isSignedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function isValidDateStr(d) {
+      return d is string && d.size() == 10 && d.matches('^\\d{4}-\\d{2}-\\d{2}$');
+    }
+
+    function isValidOptionalDateStr(d) {
+      return d is string && (d == '' || (d.size() == 10 && d.matches('^\\d{4}-\\d{2}-\\d{2}$')));
+    }
+
+    function serverDateStr() {
+      return string(request.time.year()) + '-' +
+        (request.time.month() < 10 ? '0' + string(request.time.month()) : string(request.time.month())) + '-' +
+        (request.time.day() < 10 ? '0' + string(request.time.day()) : string(request.time.day()));
+    }
+
+    function isActiveUser(userId) {
+      return exists(/databases/$(database)/documents/users/$(userId)) &&
+        get(/databases/$(database)/documents/users/$(userId)).data.status == 'active';
+    }
+
+    // --- Validation Blueprints ---
+    function isValidUserAccount(data) {
+      return data.keys().hasAll([
+        'uid', 'displayName', 'photoURL', 'pointsBalance', 'lifetimePoints',
+        'brlBalanceCents', 'totalWithdrawnCents', 'lastConversionDate',
+        'status', 'riskScore', 'gamesPlayed', 'createdAt', 'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'uid', 'displayName', 'photoURL', 'pointsBalance', 'lifetimePoints',
+        'brlBalanceCents', 'totalWithdrawnCents', 'lastConversionDate',
+        'status', 'riskScore', 'gamesPlayed', 'createdAt', 'updatedAt'
+      ]) &&
+      isValidId(data.uid) &&
+      data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80 &&
+      data.photoURL is string && data.photoURL.size() <= 500 &&
+      data.pointsBalance is number && data.pointsBalance >= 0 &&
+      data.lifetimePoints is number && data.lifetimePoints >= 0 &&
+      data.brlBalanceCents is number && data.brlBalanceCents >= 0 &&
+      data.totalWithdrawnCents is number && data.totalWithdrawnCents >= 0 &&
+      isValidOptionalDateStr(data.lastConversionDate) &&
+      data.status in ['active', 'suspended', 'flagged'] &&
+      data.riskScore is number && data.riskScore >= 0 && data.riskScore <= 100 &&
+      data.gamesPlayed is number && data.gamesPlayed >= 0 &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidUserPrivateInfo(data) {
+      return data.keys().hasAll([
+        'uid', 'email', 'defaultPixKeyType', 'defaultPixKey', 'deviceFingerprint', 'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'uid', 'email', 'defaultPixKeyType', 'defaultPixKey', 'deviceFingerprint', 'updatedAt'
+      ]) &&
+      isValidId(data.uid) &&
+      data.email is string && data.email.size() >= 3 && data.email.size() <= 160 &&
+      data.defaultPixKeyType in ['none', 'cpf', 'email', 'phone', 'random'] &&
+      data.defaultPixKey is string && data.defaultPixKey.size() <= 140 &&
+      data.deviceFingerprint is string && data.deviceFingerprint.size() <= 128 &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidAdminRole(data) {
+      return data.keys().hasAll(['uid', 'email', 'grantedBy', 'createdAt']) &&
+      data.keys().hasOnly(['uid', 'email', 'grantedBy', 'createdAt']) &&
+      isValidId(data.uid) &&
+      data.email is string && data.email.size() >= 3 && data.email.size() <= 160 &&
+      data.grantedBy is string && data.grantedBy.size() >= 1 && data.grantedBy.size() <= 128 &&
+      data.createdAt is timestamp;
+    }
+
+    function isValidGameSession(data) {
+      return data.keys().hasAll([
+        'sessionId', 'userId', 'gameCategory', 'scoreEarned', 'durationMs',
+        'movesCount', 'integrityHash', 'verificationStatus', 'fraudReason',
+        'playedDate', 'createdAt'
+      ]) &&
+      data.keys().hasOnly([
+        'sessionId', 'userId', 'gameCategory', 'scoreEarned', 'durationMs',
+        'movesCount', 'integrityHash', 'verificationStatus', 'fraudReason',
+        'playedDate', 'createdAt'
+      ]) &&
+      isValidId(data.sessionId) &&
+      isValidId(data.userId) &&
+      data.gameCategory in ['tic_tac_toe', 'dot_link', 'word_search', 'math_sprint', 'memory_match'] &&
+      data.scoreEarned is number && data.scoreEarned >= 0 && data.scoreEarned <= 500 &&
+      data.durationMs is number && data.durationMs >= 3000 &&
+      data.movesCount is number && data.movesCount >= 1 &&
+      data.integrityHash is string && data.integrityHash.size() >= 16 && data.integrityHash.size() <= 128 &&
+      data.verificationStatus in ['verified', 'flagged', 'rejected'] &&
+      data.fraudReason is string && data.fraudReason.size() <= 200 &&
+      isValidDateStr(data.playedDate) &&
+      data.createdAt is timestamp;
+    }
+
+    function isValidConversion(data) {
+      return data.keys().hasAll([
+        'conversionId', 'userId', 'pointsConverted', 'brlCentsCredited',
+        'conversionDate', 'captchaVerified', 'integrityToken', 'createdAt'
+      ]) &&
+      data.keys().hasOnly([
+        'conversionId', 'userId', 'pointsConverted', 'brlCentsCredited',
+        'conversionDate', 'captchaVerified', 'integrityToken', 'createdAt'
+      ]) &&
+      isValidId(data.conversionId) &&
+      isValidId(data.userId) &&
+      data.pointsConverted is number && data.pointsConverted >= 1000 && (data.pointsConverted % 1000) == 0 &&
+      data.brlCentsCredited is number && data.brlCentsCredited == (data.pointsConverted / 100) &&
+      isValidDateStr(data.conversionDate) &&
+      data.captchaVerified == true &&
+      data.integrityToken is string && data.integrityToken.size() >= 12 && data.integrityToken.size() <= 128 &&
+      data.createdAt is timestamp;
+    }
+
+    function isValidWithdrawal(data) {
+      return data.keys().hasAll([
+        'withdrawalId', 'userId', 'userDisplayName', 'amountCents', 'pixKeyType',
+        'pixKey', 'status', 'fraudCheckPassed', 'adminNote', 'pixTransactionId',
+        'requestedDate', 'createdAt', 'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'withdrawalId', 'userId', 'userDisplayName', 'amountCents', 'pixKeyType',
+        'pixKey', 'status', 'fraudCheckPassed', 'adminNote', 'pixTransactionId',
+        'requestedDate', 'createdAt', 'updatedAt'
+      ]) &&
+      isValidId(data.withdrawalId) &&
+      isValidId(data.userId) &&
+      data.userDisplayName is string && data.userDisplayName.size() >= 1 && data.userDisplayName.size() <= 80 &&
+      data.amountCents is number && data.amountCents >= 500 &&
+      data.pixKeyType in ['cpf', 'email', 'phone', 'random'] &&
+      data.pixKey is string && data.pixKey.size() >= 5 && data.pixKey.size() <= 140 &&
+      data.status in ['pending', 'approved', 'paid', 'rejected'] &&
+      data.fraudCheckPassed is bool &&
+      data.adminNote is string && data.adminNote.size() <= 300 &&
+      data.pixTransactionId is string && data.pixTransactionId.size() <= 120 &&
+      isValidDateStr(data.requestedDate) &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidFraudEvent(data) {
+      return data.keys().hasAll([
+        'logId', 'userId', 'eventType', 'severity', 'details', 'resolved', 'createdAt'
+      ]) &&
+      data.keys().hasOnly([
+        'logId', 'userId', 'eventType', 'severity', 'details', 'resolved', 'createdAt'
+      ]) &&
+      isValidId(data.logId) &&
+      isValidId(data.userId) &&
+      data.eventType in [
+        'speed_anomaly', 'score_cap_exceeded', 'double_conversion_attempt',
+        'bot_challenge_failed', 'suspicious_withdrawal', 'manual_flag'
+      ] &&
+      data.severity in ['low', 'medium', 'high', 'critical'] &&
+      data.details is string && data.details.size() >= 3 && data.details.size() <= 400 &&
+      data.resolved is bool &&
+      data.createdAt is timestamp;
+    }
+
+    function isValidEmailNotification(data) {
+      return data.keys().hasAll([
+        'notificationId', 'userId', 'recipientEmail', 'eventType',
+        'subject', 'summary', 'deliveryStatus', 'referenceId', 'createdAt'
+      ]) &&
+      data.keys().hasOnly([
+        'notificationId', 'userId', 'recipientEmail', 'eventType',
+        'subject', 'summary', 'deliveryStatus', 'referenceId', 'createdAt'
+      ]) &&
+      isValidId(data.notificationId) &&
+      isValidId(data.userId) &&
+      data.recipientEmail is string && data.recipientEmail.size() >= 3 && data.recipientEmail.size() <= 160 &&
+      data.eventType in ['conversion_confirmed', 'withdrawal_requested', 'withdrawal_paid', 'withdrawal_rejected'] &&
+      data.subject is string && data.subject.size() >= 3 && data.subject.size() <= 160 &&
+      data.summary is string && data.summary.size() >= 3 && data.summary.size() <= 500 &&
+      data.deliveryStatus in ['sent_smtp', 'logged_in_app', 'failed'] &&
+      data.referenceId is string && data.referenceId.size() <= 128 &&
+      data.createdAt is timestamp;
+    }
+
+    function isValidIntegration(data) {
+      return data.keys().hasAll([
+        'integrationId', 'name', 'providerType', 'endpointUrl', 'apiKeyPrefix',
+        'apiKeyHash', 'active', 'lastTriggeredAt', 'createdBy', 'createdAt', 'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'integrationId', 'name', 'providerType', 'endpointUrl', 'apiKeyPrefix',
+        'apiKeyHash', 'active', 'lastTriggeredAt', 'createdBy', 'createdAt', 'updatedAt'
+      ]) &&
+      isValidId(data.integrationId) &&
+      data.name is string && data.name.size() >= 2 && data.name.size() <= 80 &&
+      data.providerType in ['erp_webhook', 'accounting_api', 'pix_gateway', 'bi_export'] &&
+      data.endpointUrl is string && data.endpointUrl.size() <= 300 &&
+      data.apiKeyPrefix is string && data.apiKeyPrefix.size() <= 24 &&
+      data.apiKeyHash is string && data.apiKeyHash.size() <= 128 &&
+      data.active is bool &&
+      data.lastTriggeredAt is string && data.lastTriggeredAt.size() <= 40 &&
+      isValidId(data.createdBy) &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    // --- Collection Rules ---
+
+    // 1. Users Collection
+    match /users/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isAdmin();
+
+      allow create: if isValidId(userId) &&
+        isOwner(userId) &&
+        isValidUserAccount(incoming()) &&
+        incoming().uid == userId &&
+        incoming().pointsBalance == 0 &&
+        incoming().lifetimePoints == 0 &&
+        incoming().brlBalanceCents == 0 &&
+        incoming().totalWithdrawnCents == 0 &&
+        incoming().lastConversionDate == '' &&
+        incoming().status == 'active' &&
+        incoming().riskScore == 0 &&
+        incoming().gamesPlayed == 0 &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+
+      allow update: if isValidId(userId) &&
+        isSignedIn() &&
+        isValidUserAccount(incoming()) &&
+        incoming().uid == existing().uid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          isAdmin() || (
+            isOwner(userId) &&
+            existing().status == 'active' &&
+            incoming().status == existing().status &&
+            incoming().riskScore == existing().riskScore &&
+            incoming().totalWithdrawnCents == existing().totalWithdrawnCents && (
+              // Action A: Profile Update
+              incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL', 'updatedAt']) ||
+              // Action B: Game Score Credit (bounded <= 500 pts per match)
+              (
+                incoming().diff(existing()).affectedKeys().hasOnly(['pointsBalance', 'lifetimePoints', 'gamesPlayed', 'updatedAt']) &&
+                incoming().pointsBalance >= existing().pointsBalance &&
+                incoming().pointsBalance <= existing().pointsBalance + 500 &&
+                incoming().lifetimePoints == existing().lifetimePoints + (incoming().pointsBalance - existing().pointsBalance) &&
+                incoming().gamesPlayed == existing().gamesPlayed + 1
+              ) ||
+              // Action C: Once-Per-Day Conversion locked to server UTC date (1000 pts = 10 BRL cents)
+              (
+                incoming().diff(existing()).affectedKeys().hasOnly(['pointsBalance', 'brlBalanceCents', 'lastConversionDate', 'updatedAt']) &&
+                incoming().lastConversionDate == serverDateStr() &&
+                incoming().lastConversionDate != existing().lastConversionDate &&
+                incoming().pointsBalance < existing().pointsBalance &&
+                (existing().pointsBalance - incoming().pointsBalance) >= 1000 &&
+                ((existing().pointsBalance - incoming().pointsBalance) % 1000) == 0 &&
+                incoming().brlBalanceCents == existing().brlBalanceCents + ((existing().pointsBalance - incoming().pointsBalance) / 100)
+              ) ||
+              // Action D: Pix Withdrawal Deduction (minimum 500 BRL cents = R$ 5.00)
+              (
+                incoming().diff(existing()).affectedKeys().hasOnly(['brlBalanceCents', 'updatedAt']) &&
+                (existing().brlBalanceCents - incoming().brlBalanceCents) >= 500
+              )
+            )
+          )
+        );
+
+      allow delete: if isValidId(userId) && isAdmin();
+
+      // Isolated PII Subcollection
+      match /private/{docId} {
+        allow get: if isValidId(userId) && isValidId(docId) && (isOwner(userId) || isAdmin());
+        allow list: if isAdmin();
+        allow create: if isValidId(userId) && isValidId(docId) &&
+          docId == 'info' &&
+          isOwner(userId) &&
+          isValidUserPrivateInfo(incoming()) &&
+          incoming().uid == userId &&
+          incoming().updatedAt == request.time;
+        allow update: if isValidId(userId) && isValidId(docId) &&
+          docId == 'info' &&
+          isSignedIn() &&
+          isValidUserPrivateInfo(incoming()) &&
+          incoming().uid == existing().uid &&
+          incoming().updatedAt == request.time && (
+            isAdmin() || (
+              isOwner(userId) &&
+              incoming().diff(existing()).affectedKeys().hasOnly([
+                'defaultPixKeyType', 'defaultPixKey', 'deviceFingerprint', 'updatedAt'
+              ])
+            )
+          );
+        allow delete: if isValidId(userId) && isValidId(docId) && isAdmin();
+      }
+    }
+
+    // 2. Admins Registry
+    match /admins/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isAdmin();
+      allow create, update: if isValidId(userId) && isAdmin() && isValidAdminRole(incoming()) && incoming().uid == userId;
+      allow delete: if isValidId(userId) && isAdmin();
+    }
+
+    // 3. Game Sessions
+    match /gameSessions/{sessionId} {
+      allow get: if isValidId(sessionId) && (isAdmin() || (isSignedIn() && existing().userId == request.auth.uid));
+      allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow create: if isValidId(sessionId) &&
+        isSignedIn() &&
+        isValidGameSession(incoming()) &&
+        incoming().sessionId == sessionId &&
+        incoming().userId == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        isActiveUser(request.auth.uid);
+      allow update: if isValidId(sessionId) &&
+        isAdmin() &&
+        isValidGameSession(incoming()) &&
+        incoming().sessionId == existing().sessionId &&
+        incoming().userId == existing().userId &&
+        incoming().createdAt == existing().createdAt;
+      allow delete: if isValidId(sessionId) && isAdmin();
+    }
+
+    // 4. Daily Point Conversions
+    match /conversions/{conversionId} {
+      allow get: if isValidId(conversionId) && (isAdmin() || (isSignedIn() && existing().userId == request.auth.uid));
+      allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow create: if isValidId(conversionId) &&
+        isSignedIn() &&
+        isValidConversion(incoming()) &&
+        incoming().conversionId == conversionId &&
+        incoming().userId == request.auth.uid &&
+        incoming().conversionDate == serverDateStr() &&
+        incoming().createdAt == request.time &&
+        isActiveUser(request.auth.uid);
+      allow update, delete: if isValidId(conversionId) && isAdmin();
+    }
+
+    // 5. Pix Withdrawals
+    match /withdrawals/{withdrawalId} {
+      allow get: if isValidId(withdrawalId) && (isAdmin() || (isSignedIn() && existing().userId == request.auth.uid));
+      allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow create: if isValidId(withdrawalId) &&
+        isSignedIn() &&
+        isValidWithdrawal(incoming()) &&
+        incoming().withdrawalId == withdrawalId &&
+        incoming().userId == request.auth.uid &&
+        incoming().status == 'pending' &&
+        incoming().adminNote == '' &&
+        incoming().pixTransactionId == '' &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        isActiveUser(request.auth.uid);
+      allow update: if isValidId(withdrawalId) &&
+        isAdmin() &&
+        isValidWithdrawal(incoming()) &&
+        incoming().withdrawalId == existing().withdrawalId &&
+        incoming().userId == existing().userId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        existing().status in ['pending', 'approved'];
+      allow delete: if isValidId(withdrawalId) && isAdmin();
+    }
+
+    // 6. Anti-Fraud Logs
+    match /fraudLogs/{logId} {
+      allow get: if isValidId(logId) && (isAdmin() || (isSignedIn() && existing().userId == request.auth.uid));
+      allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow create: if isValidId(logId) &&
+        isSignedIn() &&
+        isValidFraudEvent(incoming()) &&
+        incoming().logId == logId &&
+        (isAdmin() || incoming().userId == request.auth.uid) &&
+        incoming().resolved == false &&
+        incoming().createdAt == request.time;
+      allow update: if isValidId(logId) &&
+        isAdmin() &&
+        isValidFraudEvent(incoming()) &&
+        incoming().logId == existing().logId &&
+        incoming().userId == existing().userId &&
+        incoming().createdAt == existing().createdAt;
+      allow delete: if isValidId(logId) && isAdmin();
+    }
+
+    // 7. Email Notifications Log
+    match /emailNotifications/{notificationId} {
+      allow get: if isValidId(notificationId) && (isAdmin() || (isSignedIn() && existing().userId == request.auth.uid));
+      allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow create: if isValidId(notificationId) &&
+        isSignedIn() &&
+        isValidEmailNotification(incoming()) &&
+        incoming().notificationId == notificationId &&
+        (isAdmin() || incoming().userId == request.auth.uid) &&
+        incoming().createdAt == request.time;
+      allow update, delete: if isValidId(notificationId) && isAdmin();
+    }
+
+    // 8. Enterprise Financial Integrations
+    match /integrations/{integrationId} {
+      allow get: if isValidId(integrationId) && isAdmin();
+      allow list: if isAdmin();
+      allow create: if isValidId(integrationId) &&
+        isAdmin() &&
+        isValidIntegration(incoming()) &&
+        incoming().integrationId == integrationId &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isValidId(integrationId) &&
+        isAdmin() &&
+        isValidIntegration(incoming()) &&
+        incoming().integrationId == existing().integrationId &&
+        incoming().createdBy == existing().createdBy &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time;
+      allow delete: if isValidId(integrationId) && isAdmin();
+    }
+  }
+}

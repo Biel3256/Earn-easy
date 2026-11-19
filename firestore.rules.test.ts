@@ -1,0 +1,88 @@
+// Phase 0 Security Test Specification for Earn Easy Firestore Rules
+// Verifies the 12 adversarial payloads ("Dirty Dozen") against our ruleset invariants.
+export const DIRTY_DOZEN_CASES = [
+  {
+    id: 1,
+    name: 'Unverified Email Spoof',
+    collection: 'withdrawals',
+    expected: 'PERMISSION_DENIED',
+    reason: 'request.auth.token.email_verified must be true',
+  },
+  {
+    id: 2,
+    name: 'Self-Admin Escalation',
+    collection: 'admins/{uid}',
+    expected: 'PERMISSION_DENIED',
+    reason: 'Non-admin cannot create or update admins registry',
+  },
+  {
+    id: 3,
+    name: 'Direct Money Minting',
+    collection: 'users/{uid}',
+    expected: 'PERMISSION_DENIED',
+    reason: 'brlBalanceCents increase requires Action C conversion math + serverDateStr()',
+  },
+  {
+    id: 4,
+    name: 'Below-Minimum Pix Withdrawal',
+    collection: 'withdrawals/{id}',
+    expected: 'PERMISSION_DENIED',
+    reason: 'amountCents < 500 rejected by isValidWithdrawal',
+  },
+  {
+    id: 5,
+    name: 'Self-Paid Withdrawal',
+    collection: 'withdrawals/{id}',
+    expected: 'PERMISSION_DENIED',
+    reason: 'Non-admin cannot update withdrawals',
+  },
+  {
+    id: 6,
+    name: 'Double Daily Conversion',
+    collection: 'users/{uid}',
+    expected: 'PERMISSION_DENIED',
+    reason: 'lastConversionDate != existing().lastConversionDate && == serverDateStr()',
+  },
+  {
+    id: 7,
+    name: 'Invalid Conversion Math',
+    collection: 'conversions/{id}',
+    expected: 'PERMISSION_DENIED',
+    reason: 'brlCentsCredited must equal pointsConverted / 100',
+  },
+  {
+    id: 8,
+    name: 'Score Cap Overflow',
+    collection: 'gameSessions/{id}',
+    expected: 'PERMISSION_DENIED',
+    reason: 'scoreEarned > 500 or durationMs < 3000 rejected',
+  },
+  {
+    id: 9,
+    name: 'Shadow Field Injection',
+    collection: 'users/{uid}',
+    expected: 'PERMISSION_DENIED',
+    reason: 'hasOnly() rejects undeclared fields like isAdmin',
+  },
+  {
+    id: 10,
+    name: 'Cross-User PII Read',
+    collection: 'users/{otherUid}/private/info',
+    expected: 'PERMISSION_DENIED',
+    reason: 'Restricted strictly to isOwner(userId) || isAdmin()',
+  },
+  {
+    id: 11,
+    name: 'Blanket List Scraping',
+    collection: 'gameSessions',
+    expected: 'PERMISSION_DENIED',
+    reason: 'allow list requires resource.data.userId == request.auth.uid or isAdmin()',
+  },
+  {
+    id: 12,
+    name: 'ID Poisoning / Payload Exhaustion',
+    collection: 'users/{1500_char_id}',
+    expected: 'PERMISSION_DENIED',
+    reason: 'isValidId enforces <= 128 chars and alphanumeric/underscore/hyphen regex',
+  },
+];

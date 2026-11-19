@@ -1,0 +1,267 @@
+{
+  "entities": {
+    "UserAccount": {
+      "title": "UserAccount",
+      "description": "Public wallet and gameplay statistics for an authenticated Earn Easy player.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "photoURL": { "type": "string", "maxLength": 500 },
+        "pointsBalance": { "type": "number" },
+        "lifetimePoints": { "type": "number" },
+        "brlBalanceCents": { "type": "number" },
+        "totalWithdrawnCents": { "type": "number" },
+        "lastConversionDate": { "type": "string", "maxLength": 10, "pattern": "^$|^\\d{4}-\\d{2}-\\d{2}$" },
+        "status": { "type": "string", "enum": ["active", "suspended", "flagged"] },
+        "riskScore": { "type": "number" },
+        "gamesPlayed": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "uid",
+        "displayName",
+        "photoURL",
+        "pointsBalance",
+        "lifetimePoints",
+        "brlBalanceCents",
+        "totalWithdrawnCents",
+        "lastConversionDate",
+        "status",
+        "riskScore",
+        "gamesPlayed",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "UserPrivateInfo": {
+      "title": "UserPrivateInfo",
+      "description": "Isolated PII and default Pix payout configuration for a user.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "minLength": 3, "maxLength": 160 },
+        "defaultPixKeyType": { "type": "string", "enum": ["none", "cpf", "email", "phone", "random"] },
+        "defaultPixKey": { "type": "string", "maxLength": 140 },
+        "deviceFingerprint": { "type": "string", "maxLength": 128 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "defaultPixKeyType", "defaultPixKey", "deviceFingerprint", "updatedAt"]
+    },
+    "AdminRole": {
+      "title": "AdminRole",
+      "description": "Explicit administrator privilege document.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "minLength": 3, "maxLength": 160 },
+        "grantedBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "grantedBy", "createdAt"]
+    },
+    "GameSession": {
+      "title": "GameSession",
+      "description": "Verified gameplay session awarding points with anti-fraud metadata.",
+      "type": "object",
+      "properties": {
+        "sessionId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "gameCategory": { "type": "string", "enum": ["tic_tac_toe", "dot_link", "word_search", "math_sprint", "memory_match"] },
+        "scoreEarned": { "type": "number" },
+        "durationMs": { "type": "number" },
+        "movesCount": { "type": "number" },
+        "integrityHash": { "type": "string", "minLength": 16, "maxLength": 128 },
+        "verificationStatus": { "type": "string", "enum": ["verified", "flagged", "rejected"] },
+        "fraudReason": { "type": "string", "maxLength": 200 },
+        "playedDate": { "type": "string", "maxLength": 10, "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "sessionId",
+        "userId",
+        "gameCategory",
+        "scoreEarned",
+        "durationMs",
+        "movesCount",
+        "integrityHash",
+        "verificationStatus",
+        "fraudReason",
+        "playedDate",
+        "createdAt"
+      ]
+    },
+    "PointConversion": {
+      "title": "PointConversion",
+      "description": "Once-per-day conversion of points (1,000 pts = R$ 0.10 / 10 cents) into BRL balance.",
+      "type": "object",
+      "properties": {
+        "conversionId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "pointsConverted": { "type": "number" },
+        "brlCentsCredited": { "type": "number" },
+        "conversionDate": { "type": "string", "maxLength": 10, "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+        "captchaVerified": { "type": "boolean" },
+        "integrityToken": { "type": "string", "minLength": 12, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "conversionId",
+        "userId",
+        "pointsConverted",
+        "brlCentsCredited",
+        "conversionDate",
+        "captchaVerified",
+        "integrityToken",
+        "createdAt"
+      ]
+    },
+    "PixWithdrawal": {
+      "title": "PixWithdrawal",
+      "description": "Pix payout request (minimum R$ 5.00 / 500 cents) managed via admin console.",
+      "type": "object",
+      "properties": {
+        "withdrawalId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userDisplayName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "amountCents": { "type": "number" },
+        "pixKeyType": { "type": "string", "enum": ["cpf", "email", "phone", "random"] },
+        "pixKey": { "type": "string", "minLength": 5, "maxLength": 140 },
+        "status": { "type": "string", "enum": ["pending", "approved", "paid", "rejected"] },
+        "fraudCheckPassed": { "type": "boolean" },
+        "adminNote": { "type": "string", "maxLength": 300 },
+        "pixTransactionId": { "type": "string", "maxLength": 120 },
+        "requestedDate": { "type": "string", "maxLength": 10, "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "withdrawalId",
+        "userId",
+        "userDisplayName",
+        "amountCents",
+        "pixKeyType",
+        "pixKey",
+        "status",
+        "fraudCheckPassed",
+        "adminNote",
+        "pixTransactionId",
+        "requestedDate",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "FraudEvent": {
+      "title": "FraudEvent",
+      "description": "Anti-fraud anomaly and security audit log entry.",
+      "type": "object",
+      "properties": {
+        "logId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "eventType": { "type": "string", "enum": ["speed_anomaly", "score_cap_exceeded", "double_conversion_attempt", "bot_challenge_failed", "suspicious_withdrawal", "manual_flag"] },
+        "severity": { "type": "string", "enum": ["low", "medium", "high", "critical"] },
+        "details": { "type": "string", "minLength": 3, "maxLength": 400 },
+        "resolved": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["logId", "userId", "eventType", "severity", "details", "resolved", "createdAt"]
+    },
+    "EmailNotification": {
+      "title": "EmailNotification",
+      "description": "Transactional email notification log confirming conversions and Pix payouts.",
+      "type": "object",
+      "properties": {
+        "notificationId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "recipientEmail": { "type": "string", "minLength": 3, "maxLength": 160 },
+        "eventType": { "type": "string", "enum": ["conversion_confirmed", "withdrawal_requested", "withdrawal_paid", "withdrawal_rejected"] },
+        "subject": { "type": "string", "minLength": 3, "maxLength": 160 },
+        "summary": { "type": "string", "minLength": 3, "maxLength": 500 },
+        "deliveryStatus": { "type": "string", "enum": ["sent_smtp", "logged_in_app", "failed"] },
+        "referenceId": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "notificationId",
+        "userId",
+        "recipientEmail",
+        "eventType",
+        "subject",
+        "summary",
+        "deliveryStatus",
+        "referenceId",
+        "createdAt"
+      ]
+    },
+    "EnterpriseIntegration": {
+      "title": "EnterpriseIntegration",
+      "description": "External financial ERP/API webhook and key configuration managed by admins.",
+      "type": "object",
+      "properties": {
+        "integrationId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "providerType": { "type": "string", "enum": ["erp_webhook", "accounting_api", "pix_gateway", "bi_export"] },
+        "endpointUrl": { "type": "string", "maxLength": 300 },
+        "apiKeyPrefix": { "type": "string", "maxLength": 24 },
+        "apiKeyHash": { "type": "string", "maxLength": 128 },
+        "active": { "type": "boolean" },
+        "lastTriggeredAt": { "type": "string", "maxLength": 40 },
+        "createdBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "integrationId",
+        "name",
+        "providerType",
+        "endpointUrl",
+        "apiKeyPrefix",
+        "apiKeyHash",
+        "active",
+        "lastTriggeredAt",
+        "createdBy",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserAccount" },
+      "description": "User wallet balances, points, conversion date lock, and anti-fraud status."
+    },
+    "/users/{userId}/private/{docId}": {
+      "schema": { "$ref": "#/entities/UserPrivateInfo" },
+      "description": "User PII (email, default Pix key, device fingerprint) isolated from public queries."
+    },
+    "/admins/{userId}": {
+      "schema": { "$ref": "#/entities/AdminRole" },
+      "description": "Authorized admin role registry."
+    },
+    "/gameSessions/{sessionId}": {
+      "schema": { "$ref": "#/entities/GameSession" },
+      "description": "Verified game session records per user and game category."
+    },
+    "/conversions/{conversionId}": {
+      "schema": { "$ref": "#/entities/PointConversion" },
+      "description": "Daily point-to-BRL conversion transactions."
+    },
+    "/withdrawals/{withdrawalId}": {
+      "schema": { "$ref": "#/entities/PixWithdrawal" },
+      "description": "Pix withdrawal requests and payout states."
+    },
+    "/fraudLogs/{logId}": {
+      "schema": { "$ref": "#/entities/FraudEvent" },
+      "description": "Anti-fraud anomaly events for administrative review."
+    },
+    "/emailNotifications/{notificationId}": {
+      "schema": { "$ref": "#/entities/EmailNotification" },
+      "description": "Transactional email notifications dispatched for conversions and withdrawals."
+    },
+    "/integrations/{integrationId}": {
+      "schema": { "$ref": "#/entities/EnterpriseIntegration" },
+      "description": "Enterprise financial API keys and webhook endpoints."
+    }
+  }
+}

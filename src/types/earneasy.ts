@@ -1,0 +1,135 @@
+export type GameCategory =
+  | 'tic_tac_toe'
+  | 'dot_link'
+  | 'word_search'
+  | 'math_sprint'
+  | 'memory_match';
+
+export type AccountStatus = 'active' | 'suspended' | 'flagged';
+export type PixKeyType = 'cpf' | 'email' | 'phone' | 'random';
+export type WithdrawalStatus = 'pending' | 'approved' | 'paid' | 'rejected';
+
+export interface UserAccount {
+  uid: string;
+  displayName: string;
+  photoURL: string;
+  pointsBalance: number;
+  lifetimePoints: number;
+  brlBalanceCents: number;
+  totalWithdrawnCents: number;
+  lastConversionDate: string;
+  status: AccountStatus;
+  riskScore: number;
+  gamesPlayed: number;
+  createdAt: unknown;
+  updatedAt: unknown;
+}
+
+export interface UserPrivateInfo {
+  uid: string;
+  email: string;
+  defaultPixKeyType: 'none' | PixKeyType;
+  defaultPixKey: string;
+  deviceFingerprint: string;
+  updatedAt: unknown;
+}
+
+export interface GameSession {
+  sessionId: string;
+  userId: string;
+  gameCategory: GameCategory;
+  scoreEarned: number;
+  durationMs: number;
+  movesCount: number;
+  integrityHash: string;
+  verificationStatus: 'verified' | 'flagged' | 'rejected';
+  fraudReason: string;
+  playedDate: string;
+  createdAt: unknown;
+}
+
+export interface PointConversion {
+  conversionId: string;
+  userId: string;
+  pointsConverted: number;
+  brlCentsCredited: number;
+  conversionDate: string;
+  captchaVerified: boolean;
+  integrityToken: string;
+  createdAt: unknown;
+}
+
+export interface PixWithdrawal {
+  withdrawalId: string;
+  userId: string;
+  userDisplayName: string;
+  amountCents: number;
+  pixKeyType: PixKeyType;
+  pixKey: string;
+  status: WithdrawalStatus;
+  fraudCheckPassed: boolean;
+  adminNote: string;
+  pixTransactionId: string;
+  requestedDate: string;
+  createdAt: unknown;
+  updatedAt: unknown;
+}
+
+export interface FraudEvent {
+  logId: string;
+  userId: string;
+  eventType:
+    | 'speed_anomaly'
+    | 'score_cap_exceeded'
+    | 'double_conversion_attempt'
+    | 'bot_challenge_failed'
+    | 'suspicious_withdrawal'
+    | 'manual_flag';
+  severity: 'low' | 'medium' | 'high' | 'critical';
+  details: string;
+  resolved: boolean;
+  createdAt: unknown;
+}
+
+export interface EmailNotification {
+  notificationId: string;
+  userId: string;
+  recipientEmail: string;
+  eventType:
+    | 'conversion_confirmed'
+    | 'withdrawal_requested'
+    | 'withdrawal_paid'
+    | 'withdrawal_rejected';
+  subject: string;
+  summary: string;
+  deliveryStatus: 'sent_smtp' | 'logged_in_app' | 'failed';
+  referenceId: string;
+  createdAt: unknown;
+}
+
+export interface EnterpriseIntegration {
+  integrationId: string;
+  name: string;
+  providerType: 'erp_webhook' | 'accounting_api' | 'pix_gateway' | 'bi_export';
+  endpointUrl: string;
+  apiKeyPrefix: string;
+  apiKeyHash: string;
+  active: boolean;
+  lastTriggeredAt: string;
+  createdBy: string;
+  createdAt: unknown;
+  updatedAt: unknown;
+}
+
+export const GAME_LABELS: Record<GameCategory, string> = {
+  tic_tac_toe: 'Jogo da Velha',
+  dot_link: 'Dot Link',
+  word_search: 'Caça-Palavras',
+  math_sprint: 'Desafio Matemático',
+  memory_match: 'Memória Premiada',
+};
+
+export const ADMIN_BOOTSTRAP_EMAIL = 'anthonysamuel61500@gmail.com';
+export const POINTS_PER_TEN_CENTS = 1000;
+export const CENTS_PER_BLOCK = 10;
+export const MIN_PIX_WITHDRAWAL_CENTS = 500;
