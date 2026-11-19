@@ -186,25 +186,25 @@ export const TicTacToeGame: React.FC<GameProps> = ({ onComplete, onExit }) => {
   };
 
   return (
-    <div className="bg-white border border-slate-200 rounded-xl p-6 max-w-2xl mx-auto">
-      <div className="flex items-center justify-between border-b border-slate-100 pb-4 mb-6">
+    <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-6 max-w-2xl mx-auto">
+      <div className="flex items-center justify-between border-b border-slate-100 dark:border-zinc-800 pb-4 mb-6">
         <div>
-          <h3 className="text-xl font-bold text-slate-900">Jogo da Velha</h3>
-          <p className="text-xs text-slate-500 mt-0.5">Vitória: até 240 pts · Empate: 85 pts · Participação: 30 pts</p>
+          <h3 className="text-xl font-bold text-slate-900 dark:text-zinc-50">Jogo da Velha</h3>
+          <p className="text-xs text-slate-500 dark:text-zinc-400 mt-0.5">Vitória: até 240 pts · Empate: 85 pts · Participação: 30 pts</p>
         </div>
         <div className="flex items-center gap-2">
           <button
             type="button"
             onClick={() => setSoundOn((s) => !s)}
             aria-label={soundOn ? 'Desativar som' : 'Ativar som'}
-            className="p-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 transition-colors cursor-pointer"
+            className="p-2 rounded-lg border border-slate-200 dark:border-zinc-700 text-slate-600 dark:text-zinc-300 hover:bg-slate-50 dark:hover:bg-zinc-800 transition-colors cursor-pointer"
           >
             {soundOn ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
           </button>
           <button
             type="button"
             onClick={onExit}
-            className="px-3 py-2 text-xs font-medium text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            className="px-3 py-2 text-xs font-medium text-slate-600 dark:text-zinc-300 border border-slate-200 dark:border-zinc-700 rounded-lg hover:bg-slate-50 dark:hover:bg-zinc-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
             Voltar ao Lobby
           </button>
@@ -214,7 +214,7 @@ export const TicTacToeGame: React.FC<GameProps> = ({ onComplete, onExit }) => {
       {gameState === 'TITLE_MENU' && (
         <div className="text-center py-6 space-y-6">
           <div className="max-w-md mx-auto space-y-2">
-            <p className="text-sm text-slate-600 leading-relaxed">
+            <p className="text-sm text-slate-600 dark:text-zinc-400 leading-relaxed">
               Enfrente a IA estratégica do Earn Easy. Complete linhas horizontais, verticais ou diagonais com <strong>X</strong> antes do oponente <strong>O</strong>.
             </p>
           </div>
@@ -225,8 +225,8 @@ export const TicTacToeGame: React.FC<GameProps> = ({ onComplete, onExit }) => {
               onClick={() => setDifficulty('balanced')}
               className={`px-4 py-2 text-xs font-semibold rounded-lg border transition-colors cursor-pointer ${
                 difficulty === 'balanced'
-                  ? 'bg-slate-900 text-white border-slate-900'
-                  : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                  ? 'bg-slate-900 dark:bg-emerald-600 text-white border-slate-900 dark:border-emerald-600'
+                  : 'bg-white dark:bg-zinc-950 text-slate-700 dark:text-zinc-300 border-slate-200 dark:border-zinc-800 hover:bg-slate-50 dark:hover:bg-zinc-800'
               }`}
             >
               Modo Padrão (180 pts)
@@ -236,8 +236,8 @@ export const TicTacToeGame: React.FC<GameProps> = ({ onComplete, onExit }) => {
               onClick={() => setDifficulty('master')}
               className={`px-4 py-2 text-xs font-semibold rounded-lg border transition-colors cursor-pointer ${
                 difficulty === 'master'
-                  ? 'bg-slate-900 text-white border-slate-900'
-                  : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                  ? 'bg-slate-900 dark:bg-emerald-600 text-white border-slate-900 dark:border-emerald-600'
+                  : 'bg-white dark:bg-zinc-950 text-slate-700 dark:text-zinc-300 border-slate-200 dark:border-zinc-800 hover:bg-slate-50 dark:hover:bg-zinc-800'
               }`}
             >
               Modo Mestre Minimax (240 pts)
@@ -256,7 +256,7 @@ export const TicTacToeGame: React.FC<GameProps> = ({ onComplete, onExit }) => {
 
       {(gameState === 'PLAYING' || gameState === 'ROUND_SUMMARY') && (
         <div className="space-y-6">
-          <div className="flex items-center justify-between text-xs font-medium text-slate-600 bg-slate-50 px-4 py-2.5 rounded-lg">
+          <div className="flex items-center justify-between text-xs font-medium text-slate-600 dark:text-zinc-300 bg-slate-50 dark:bg-zinc-950 border border-transparent dark:border-zinc-800 px-4 py-2.5 rounded-lg">
             <span>
               {gameState === 'PLAYING'
                 ? isPlayerTurn
@@ -282,25 +282,25 @@ export const TicTacToeGame: React.FC<GameProps> = ({ onComplete, onExit }) => {
                   onClick={() => handleCellClick(idx)}
                   className={`h-24 rounded-xl border text-3xl font-extrabold flex items-center justify-center transition-transform duration-150 active:scale-95 cursor-pointer disabled:cursor-default ${
                     isWinCell
-                      ? 'bg-emerald-50 border-emerald-500 text-emerald-700'
-                      : 'bg-slate-50 border-slate-200 hover:bg-slate-100'
+                      ? 'bg-emerald-50 dark:bg-emerald-950/50 border-emerald-500 text-emerald-700 dark:text-emerald-400'
+                      : 'bg-slate-50 dark:bg-zinc-950 border-slate-200 dark:border-zinc-800 hover:bg-slate-100 dark:hover:bg-zinc-800'
                   }`}
                 >
-                  {cell === 'X' && <span className="text-slate-900">X</span>}
-                  {cell === 'O' && <span className="text-sky-600">O</span>}
+                  {cell === 'X' && <span className="text-slate-900 dark:text-zinc-100">X</span>}
+                  {cell === 'O' && <span className="text-sky-600 dark:text-sky-400">O</span>}
                 </button>
               );
             })}
           </div>
 
           {gameState === 'ROUND_SUMMARY' && (
-            <div className="border-t border-slate-100 pt-5 flex flex-col sm:flex-row items-center justify-between gap-4">
+            <div className="border-t border-slate-100 dark:border-zinc-800 pt-5 flex flex-col sm:flex-row items-center justify-between gap-4">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-lg bg-emerald-50 text-emerald-700 flex items-center justify-center shrink-0">
+                <div className="w-10 h-10 rounded-lg bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-400 flex items-center justify-center shrink-0">
                   <Trophy className="w-5 h-5" />
                 </div>
                 <div>
-                  <p className="text-sm font-bold text-slate-900 tabular-nums">
+                  <p className="text-sm font-bold text-slate-900 dark:text-zinc-50 tabular-nums">
                     {submitting
                       ? 'Validando partida no sistema antifraude...'
                       : rewardInfo
@@ -308,8 +308,8 @@ export const TicTacToeGame: React.FC<GameProps> = ({ onComplete, onExit }) => {
                         : 'Partida concluída'}
                   </p>
                   {rewardInfo && (
-                    <p className="text-xs text-slate-500 flex items-center gap-1 mt-0.5">
-                      <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+                    <p className="text-xs text-slate-500 dark:text-zinc-400 flex items-center gap-1 mt-0.5">
+                      <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
                       {rewardInfo.verificationStatus === 'verified'
                         ? 'Sessão verificada com assinatura de integridade'
                         : rewardInfo.fraudReason}
@@ -322,7 +322,7 @@ export const TicTacToeGame: React.FC<GameProps> = ({ onComplete, onExit }) => {
                 type="button"
                 onClick={startGame}
                 disabled={submitting}
-                className="inline-flex items-center gap-2 px-5 py-2.5 bg-slate-900 text-white text-xs font-semibold rounded-lg hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50"
+                className="inline-flex items-center gap-2 px-5 py-2.5 bg-slate-900 dark:bg-emerald-600 text-white text-xs font-semibold rounded-lg hover:bg-slate-800 dark:hover:bg-emerald-500 transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50"
               >
                 <RotateCcw className="w-3.5 h-3.5" />
                 Jogar Novamente

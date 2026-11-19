@@ -28,6 +28,7 @@ import {
 import {
   ADMIN_BOOTSTRAP_EMAIL,
   CENTS_PER_BLOCK,
+  DailyCheckin,
   EmailNotification,
   FraudEvent,
   GameCategory,
@@ -37,6 +38,8 @@ import {
   PixWithdrawal,
   POINTS_PER_TEN_CENTS,
   PointConversion,
+  STREAK_REWARD_CENTS,
+  STREAK_TARGET_DAYS,
   UserAccount,
   UserPrivateInfo,
 } from '../types/earneasy';
@@ -46,7 +49,8 @@ import {
   sha256Hex,
   verifyGameSessionWithServer,
 } from '../utils/antifraud';
-import { formatBRL, getTodayUtcDate } from '../utils/pix';
+import { checkUsernameProfanity, validateUsernameInput } from '../utils/moderation';
+import { formatBRL, getTodayUtcDate, getUtcDateDaysAgo } from '../utils/pix';
 
 interface AuthContextValue {
   firebaseUser: User | null;
@@ -59,9 +63,15 @@ interface AuthContextValue {
   myWithdrawals: PixWithdrawal[];
   myNotifications: EmailNotification[];
   myFraudLogs: FraudEvent[];
+  myCheckins: DailyCheckin[];
+  needsOnboarding: boolean;
   authError: string | null;
   signInWithGoogle: () => Promise<void>;
   logout: () => Promise<void>;
+  createUserAccount: (params: {
+    displayName: string;
+    photoURL: string;
+  }) => Promise<{ status: 'active' | 'suspended'; message?: string }>;
   recordGameReward: (params: {
     gameCategory: GameCategory;
     scoreEarned: number;
@@ -90,6 +100,17 @@ interface AuthContextValue {
     severity: FraudEvent['severity'],
     details: string
   ) => Promise<void>;
+  updateUserProfile: (params: {
+    displayName: string;
+    photoURL: string;
+  }) => Promise<void>;
+  claimDailyCheckin: () => Promise<{
+    pointsAwarded: number;
+    weekTotal: number;
+    streakDay: number;
+    brlBonusCents: number;
+    streakBroken: boolean;
+  }>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -117,7 +138,8 @@ async function dispatchEmailNotification(params: {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(params),
     });
-    if (res.ok) {
+    const contentType = res.headers.get('content-type') || '';
+    if (res.ok && contentType.includes('application/json')) {
       const data = await res.json();
       if (data.deliveryStatus === 'sent_smtp' || data.deliveryStatus === 'logged_in_app') {
         deliveryStatus = data.deliveryStatus;
@@ -159,6 +181,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [myWithdrawals, setMyWithdrawals] = useState<PixWithdrawal[]>([]);
   const [myNotifications, setMyNotifications] = useState<EmailNotification[]>([]);
   const [myFraudLogs, setMyFraudLogs] = useState<FraudEvent[]>([]);
+  const [myCheckins, setMyCheckins] = useState<DailyCheckin[]>([]);
   const [authError, setAuthError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -175,45 +198,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setMyWithdrawals([]);
         setMyNotifications([]);
         setMyFraudLogs([]);
+        setMyCheckins([]);
         setAuthReady(true);
         return;
       }
 
       try {
-        // Bootstrap or load user account and isolated PII document
+        // Load existing user account; new Google users must complete username onboarding first
         const userRef = doc(db, 'users', user.uid);
         const privateRef = doc(db, 'users', user.uid, 'private', 'info');
         const userSnap = await getDoc(userRef);
-        const fingerprint = await getDeviceFingerprint();
 
         if (!userSnap.exists()) {
-          const batch = writeBatch(db);
-          const safeName = (user.displayName || user.email?.split('@')[0] || 'Jogador').slice(0, 80);
-          batch.set(userRef, {
-            uid: user.uid,
-            displayName: safeName,
-            photoURL: (user.photoURL || '').slice(0, 500),
-            pointsBalance: 0,
-            lifetimePoints: 0,
-            brlBalanceCents: 0,
-            totalWithdrawnCents: 0,
-            lastConversionDate: '',
-            status: 'active',
-            riskScore: 0,
-            gamesPlayed: 0,
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-          });
-          batch.set(privateRef, {
-            uid: user.uid,
-            email: (user.email || 'sem-email@earneasy.app').slice(0, 160),
-            defaultPixKeyType: 'none',
-            defaultPixKey: '',
-            deviceFingerprint: fingerprint,
-            updatedAt: serverTimestamp(),
-          });
-          await batch.commit();
+          setUserAccount(null);
+          setPrivateInfo(null);
         } else {
+          const fingerprint = await getDeviceFingerprint();
           const privSnap = await getDoc(privateRef);
           if (!privSnap.exists()) {
             await setDoc(privateRef, {
@@ -224,6 +224,37 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               deviceFingerprint: fingerprint,
               updatedAt: serverTimestamp(),
             });
+          } else {
+            setPrivateInfo(privSnap.data() as UserPrivateInfo);
+          }
+
+          const userData = userSnap.data() as UserAccount;
+          setUserAccount(userData);
+
+          if (userData.status === 'active') {
+            const lbRef = doc(db, 'leaderboard', user.uid);
+            const lbSnap = await getDoc(lbRef);
+            const lbData = lbSnap.exists() ? lbSnap.data() : null;
+            if (
+              !lbData ||
+              lbData.brlBalanceCents !== userData.brlBalanceCents ||
+              lbData.pointsBalance !== userData.pointsBalance ||
+              lbData.gamesPlayed !== userData.gamesPlayed ||
+              lbData.displayName !== userData.displayName ||
+              lbData.photoURL !== userData.photoURL ||
+              lbData.status !== userData.status
+            ) {
+              await setDoc(lbRef, {
+                uid: userData.uid,
+                displayName: userData.displayName,
+                photoURL: userData.photoURL,
+                brlBalanceCents: userData.brlBalanceCents,
+                pointsBalance: userData.pointsBalance,
+                gamesPlayed: userData.gamesPlayed,
+                status: userData.status,
+                updatedAt: serverTimestamp(),
+              });
+            }
           }
         }
 
@@ -303,6 +334,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       (error) => handleFirestoreError(error, OperationType.LIST, 'fraudLogs')
     );
 
+    const unsubCheckins = onSnapshot(
+      query(collection(db, 'dailyCheckins'), where('userId', '==', uid)),
+      (snap) => {
+        const list = snap.docs
+          .map((d) => d.data() as DailyCheckin)
+          .sort((a, b) => b.checkinDate.localeCompare(a.checkinDate));
+        setMyCheckins(list);
+      },
+      (error) => handleFirestoreError(error, OperationType.LIST, 'dailyCheckins')
+    );
+
     return () => {
       unsubUser();
       unsubPrivate();
@@ -311,6 +353,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       unsubWithdrawals();
       unsubNotifications();
       unsubFraud();
+      unsubCheckins();
     };
   }, [authReady, firebaseUser]);
 
@@ -405,6 +448,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           gamesPlayed: current.gamesPlayed + 1,
           updatedAt: serverTimestamp(),
         });
+
+        tx.set(doc(db, 'leaderboard', firebaseUser.uid), {
+          uid: firebaseUser.uid,
+          displayName: current.displayName,
+          photoURL: current.photoURL,
+          brlBalanceCents: current.brlBalanceCents,
+          pointsBalance: current.pointsBalance + credited,
+          gamesPlayed: current.gamesPlayed + 1,
+          status: current.status,
+          updatedAt: serverTimestamp(),
+        });
       });
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, `users/${firebaseUser.uid}`);
@@ -484,6 +538,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           captchaVerified: true,
           integrityToken: integrityToken.slice(0, 64),
           createdAt: serverTimestamp(),
+        });
+
+        tx.set(doc(db, 'leaderboard', firebaseUser.uid), {
+          uid: firebaseUser.uid,
+          displayName: current.displayName,
+          photoURL: current.photoURL,
+          brlBalanceCents: current.brlBalanceCents + brlCentsCredited,
+          pointsBalance: current.pointsBalance - validPoints,
+          gamesPlayed: current.gamesPlayed,
+          status: current.status,
+          updatedAt: serverTimestamp(),
         });
       });
     } catch (error) {
@@ -567,6 +632,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             updatedAt: serverTimestamp(),
           });
         }
+
+        tx.set(doc(db, 'leaderboard', firebaseUser.uid), {
+          uid: firebaseUser.uid,
+          displayName: current.displayName,
+          photoURL: current.photoURL,
+          brlBalanceCents: current.brlBalanceCents - params.amountCents,
+          pointsBalance: current.pointsBalance,
+          gamesPlayed: current.gamesPlayed,
+          status: current.status,
+          updatedAt: serverTimestamp(),
+        });
       });
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, `withdrawals/${withdrawalId}`);
@@ -587,6 +663,315 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return { withdrawalId, emailStatus };
   };
 
+  const createUserAccount = async (params: {
+    displayName: string;
+    photoURL: string;
+  }): Promise<{ status: 'active' | 'suspended'; message?: string }> => {
+    if (!firebaseUser) {
+      throw new Error('Autentique-se com sua conta Google primeiro.');
+    }
+
+    const formatCheck = validateUsernameInput(params.displayName);
+    if (!formatCheck.valid) {
+      throw new Error(formatCheck.error || 'Nome de usuário inválido.');
+    }
+
+    const cleanName = formatCheck.clean;
+    const cleanPhoto = params.photoURL.trim().slice(0, 500);
+    const profanity = checkUsernameProfanity(cleanName);
+    const fingerprint = await getDeviceFingerprint();
+    const userRef = doc(db, 'users', firebaseUser.uid);
+    const privateRef = doc(db, 'users', firebaseUser.uid, 'private', 'info');
+
+    try {
+      const batch = writeBatch(db);
+      if (profanity.blocked) {
+        const logId = generateId('fraud');
+        batch.set(userRef, {
+          uid: firebaseUser.uid,
+          displayName: 'Conta Banida',
+          photoURL: '',
+          pointsBalance: 0,
+          lifetimePoints: 0,
+          brlBalanceCents: 0,
+          totalWithdrawnCents: 0,
+          lastConversionDate: '',
+          status: 'suspended',
+          riskScore: 100,
+          gamesPlayed: 0,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+        batch.set(privateRef, {
+          uid: firebaseUser.uid,
+          email: (firebaseUser.email || 'sem-email@earneasy.app').slice(0, 160),
+          defaultPixKeyType: 'none',
+          defaultPixKey: '',
+          deviceFingerprint: fingerprint,
+          updatedAt: serverTimestamp(),
+        });
+        batch.set(doc(db, 'fraudLogs', logId), {
+          logId,
+          userId: firebaseUser.uid,
+          eventType: 'profanity_username_ban',
+          severity: 'critical',
+          details: 'Banimento imediato no cadastro por tentativa de uso de palavrão ou termo ofensivo no nome de usuário.',
+          resolved: false,
+          createdAt: serverTimestamp(),
+        });
+        await batch.commit();
+        return {
+          status: 'suspended',
+          message:
+            'Nome de usuário bloqueado por conter palavrão ou termo ofensivo. Sua conta foi banida imediatamente.',
+        };
+      }
+
+      batch.set(userRef, {
+        uid: firebaseUser.uid,
+        displayName: cleanName,
+        photoURL: cleanPhoto,
+        pointsBalance: 0,
+        lifetimePoints: 0,
+        brlBalanceCents: 0,
+        totalWithdrawnCents: 0,
+        lastConversionDate: '',
+        status: 'active',
+        riskScore: 0,
+        gamesPlayed: 0,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      batch.set(privateRef, {
+        uid: firebaseUser.uid,
+        email: (firebaseUser.email || 'sem-email@earneasy.app').slice(0, 160),
+        defaultPixKeyType: 'none',
+        defaultPixKey: '',
+        deviceFingerprint: fingerprint,
+        updatedAt: serverTimestamp(),
+      });
+      batch.set(doc(db, 'leaderboard', firebaseUser.uid), {
+        uid: firebaseUser.uid,
+        displayName: cleanName,
+        photoURL: cleanPhoto,
+        brlBalanceCents: 0,
+        pointsBalance: 0,
+        gamesPlayed: 0,
+        status: 'active',
+        updatedAt: serverTimestamp(),
+      });
+      await batch.commit();
+      return { status: 'active' };
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, `users/${firebaseUser.uid}`);
+      throw error;
+    }
+  };
+
+  const updateUserProfile = async (params: {
+    displayName: string;
+    photoURL: string;
+  }) => {
+    if (!firebaseUser || !userAccount) {
+      throw new Error('Faça login para editar seu perfil.');
+    }
+
+    const formatCheck = validateUsernameInput(params.displayName);
+    if (!formatCheck.valid) {
+      throw new Error(formatCheck.error || 'Informe um nome de usuário válido.');
+    }
+
+    const cleanName = formatCheck.clean;
+    const cleanPhoto = params.photoURL.trim().slice(0, 500);
+    const profanity = checkUsernameProfanity(cleanName);
+
+    if (profanity.blocked) {
+      try {
+        const batch = writeBatch(db);
+        const logId = generateId('fraud');
+        batch.update(doc(db, 'users', firebaseUser.uid), {
+          status: 'suspended',
+          riskScore: 100,
+          updatedAt: serverTimestamp(),
+        });
+        batch.set(doc(db, 'leaderboard', firebaseUser.uid), {
+          uid: firebaseUser.uid,
+          displayName: userAccount.displayName,
+          photoURL: userAccount.photoURL,
+          brlBalanceCents: userAccount.brlBalanceCents,
+          pointsBalance: userAccount.pointsBalance,
+          gamesPlayed: userAccount.gamesPlayed,
+          status: 'suspended',
+          updatedAt: serverTimestamp(),
+        });
+        batch.set(doc(db, 'fraudLogs', logId), {
+          logId,
+          userId: firebaseUser.uid,
+          eventType: 'profanity_username_ban',
+          severity: 'critical',
+          details: 'Banimento imediato ao tentar alterar o nome de usuário para termo ofensivo/palavrão.',
+          resolved: false,
+          createdAt: serverTimestamp(),
+        });
+        await batch.commit();
+      } catch (error) {
+        handleFirestoreError(error, OperationType.UPDATE, `users/${firebaseUser.uid}`);
+      }
+      throw new Error('Uso de palavrão ou termo ofensivo detectado. Sua conta foi banida imediatamente.');
+    }
+
+    try {
+      const batch = writeBatch(db);
+      batch.update(doc(db, 'users', firebaseUser.uid), {
+        displayName: cleanName,
+        photoURL: cleanPhoto,
+        updatedAt: serverTimestamp(),
+      });
+      if (userAccount.status === 'active') {
+        batch.set(doc(db, 'leaderboard', firebaseUser.uid), {
+          uid: firebaseUser.uid,
+          displayName: cleanName,
+          photoURL: cleanPhoto,
+          brlBalanceCents: userAccount.brlBalanceCents,
+          pointsBalance: userAccount.pointsBalance,
+          gamesPlayed: userAccount.gamesPlayed,
+          status: userAccount.status,
+          updatedAt: serverTimestamp(),
+        });
+      }
+      await batch.commit();
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `users/${firebaseUser.uid}`);
+    }
+  };
+
+  const claimDailyCheckin = async () => {
+    if (!firebaseUser || !userAccount) {
+      throw new Error('Faça login para coletar seu check-in diário.');
+    }
+    if (userAccount.status !== 'active') {
+      throw new Error('Sua conta está em revisão antifraude.');
+    }
+
+    const today = getTodayUtcDate();
+    const yesterday = getUtcDateDaysAgo(1);
+    const checkinId = `chk_${firebaseUser.uid}_${today}`;
+    const yesterdayCheckinId = `chk_${firebaseUser.uid}_${yesterday}`;
+    if (myCheckins.some((c) => c.checkinDate === today || c.checkinId === checkinId)) {
+      throw new Error('Você já coletou seu check-in diário hoje. Volte amanhã!');
+    }
+
+    const windowStartStr = getUtcDateDaysAgo(6);
+    const prevWindow = myCheckins.filter(
+      (c) => c.checkinDate >= windowStartStr && c.checkinDate < today
+    );
+    const prevSum = prevWindow.reduce((sum, c) => sum + c.pointsAwarded, 0);
+
+    let minPts = 143;
+    let maxPts = 172;
+    if (prevWindow.length >= 6) {
+      minPts = Math.max(120, Math.min(200, 1000 - prevSum));
+      maxPts = Math.max(minPts, Math.min(200, 1200 - prevSum));
+    }
+
+    const pointsAwarded = minPts + Math.floor(Math.random() * (maxPts - minPts + 1));
+    const weekTotalAfter = Math.min(1400, prevSum + pointsAwarded);
+    const hadPreviousCheckinsBeforeYesterday = myCheckins.some((c) => c.checkinDate < yesterday);
+
+    let streakDay = 1;
+    let brlBonusCents = 0;
+    let streakBroken = false;
+
+    try {
+      await runTransaction(db, async (tx) => {
+        const userRef = doc(db, 'users', firebaseUser.uid);
+        const checkinRef = doc(db, 'dailyCheckins', checkinId);
+        const yesterdayRef = doc(db, 'dailyCheckins', yesterdayCheckinId);
+        const [userSnap, checkinSnap, yesterdaySnap] = await Promise.all([
+          tx.get(userRef),
+          tx.get(checkinRef),
+          tx.get(yesterdayRef),
+        ]);
+
+        if (!userSnap.exists()) throw new Error('Conta de usuário não encontrada.');
+        if (checkinSnap.exists()) {
+          throw new Error('Check-in diário de hoje já foi coletado.');
+        }
+
+        const current = userSnap.data() as UserAccount;
+        if (current.status !== 'active') {
+          throw new Error('Sua conta está em revisão antifraude.');
+        }
+
+        if (yesterdaySnap.exists()) {
+          const yData = yesterdaySnap.data() as Partial<DailyCheckin>;
+          const prevStreak = typeof yData.streakDay === 'number' ? yData.streakDay : 1;
+          streakDay = prevStreak >= STREAK_TARGET_DAYS ? 1 : prevStreak + 1;
+          streakBroken = false;
+        } else {
+          streakDay = 1;
+          streakBroken = hadPreviousCheckinsBeforeYesterday;
+        }
+
+        brlBonusCents = streakDay === STREAK_TARGET_DAYS ? STREAK_REWARD_CENTS : 0;
+
+        tx.set(checkinRef, {
+          checkinId,
+          userId: firebaseUser.uid,
+          checkinDate: today,
+          pointsAwarded,
+          weekTotalAfter,
+          streakDay,
+          brlBonusCents,
+          createdAt: serverTimestamp(),
+        });
+
+        tx.update(userRef, {
+          pointsBalance: current.pointsBalance + pointsAwarded,
+          lifetimePoints: current.lifetimePoints + pointsAwarded,
+          brlBalanceCents: current.brlBalanceCents + brlBonusCents,
+          updatedAt: serverTimestamp(),
+        });
+
+        tx.set(doc(db, 'leaderboard', firebaseUser.uid), {
+          uid: firebaseUser.uid,
+          displayName: current.displayName,
+          photoURL: current.photoURL,
+          brlBalanceCents: current.brlBalanceCents + brlBonusCents,
+          pointsBalance: current.pointsBalance + pointsAwarded,
+          gamesPlayed: current.gamesPlayed,
+          status: current.status,
+          updatedAt: serverTimestamp(),
+        });
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, `dailyCheckins/${checkinId}`);
+    }
+
+    if (brlBonusCents > 0) {
+      const recipientEmail = privateInfo?.email || firebaseUser.email || 'usuario@earneasy.app';
+      await dispatchEmailNotification({
+        userId: firebaseUser.uid,
+        recipientEmail,
+        eventType: 'streak_bonus_credited',
+        subject: 'Parabéns! Prêmio de R$ 10,00 por 30 dias seguidos creditado',
+        summary: `Você completou ${STREAK_TARGET_DAYS} dias consecutivos de check-in diário sem falhar nenhum dia e ganhou ${formatBRL(brlBonusCents)} diretamente no seu saldo para saque Pix.`,
+        referenceId: checkinId,
+        amountBrl: formatBRL(brlBonusCents),
+      });
+    }
+
+    return {
+      pointsAwarded,
+      weekTotal: weekTotalAfter,
+      streakDay,
+      brlBonusCents,
+      streakBroken,
+    };
+  };
+
+  const needsOnboarding = authReady && Boolean(firebaseUser) && !userAccount;
+
   return (
     <AuthContext.Provider
       value={{
@@ -600,13 +985,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         myWithdrawals,
         myNotifications,
         myFraudLogs,
+        myCheckins,
+        needsOnboarding,
         authError,
         signInWithGoogle,
         logout,
+        createUserAccount,
         recordGameReward,
         convertDailyPoints,
         requestPixWithdrawal,
         logFraudAttempt,
+        updateUserProfile,
+        claimDailyCheckin,
       }}
     >
       {children}

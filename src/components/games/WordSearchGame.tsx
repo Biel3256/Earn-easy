@@ -212,25 +212,25 @@ export const WordSearchGame: React.FC<GameProps> = ({ onComplete, onExit }) => {
   };
 
   return (
-    <div className="bg-white border border-slate-200 rounded-xl p-6 max-w-3xl mx-auto select-none">
-      <div className="flex items-center justify-between border-b border-slate-100 pb-4 mb-6">
+    <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-6 max-w-3xl mx-auto select-none">
+      <div className="flex items-center justify-between border-b border-slate-100 dark:border-zinc-800 pb-4 mb-6">
         <div>
-          <h3 className="text-xl font-bold text-slate-900">Caça-Palavras</h3>
-          <p className="text-xs text-slate-500 mt-0.5">+50 pts por palavra encontrada + 100 pts de conclusão · Até 450 pts</p>
+          <h3 className="text-xl font-bold text-slate-900 dark:text-zinc-50">Caça-Palavras</h3>
+          <p className="text-xs text-slate-500 dark:text-zinc-400 mt-0.5">+50 pts por palavra encontrada + 100 pts de conclusão · Até 450 pts</p>
         </div>
         <div className="flex items-center gap-2">
           <button
             type="button"
             onClick={() => setSoundOn((s) => !s)}
             aria-label={soundOn ? 'Desativar som' : 'Ativar som'}
-            className="p-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 transition-colors cursor-pointer"
+            className="p-2 rounded-lg border border-slate-200 dark:border-zinc-700 text-slate-600 dark:text-zinc-300 hover:bg-slate-50 dark:hover:bg-zinc-800 transition-colors cursor-pointer"
           >
             {soundOn ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
           </button>
           <button
             type="button"
             onClick={onExit}
-            className="px-3 py-2 text-xs font-medium text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            className="px-3 py-2 text-xs font-medium text-slate-600 dark:text-zinc-300 border border-slate-200 dark:border-zinc-700 rounded-lg hover:bg-slate-50 dark:hover:bg-zinc-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
             Voltar ao Lobby
           </button>
@@ -239,7 +239,7 @@ export const WordSearchGame: React.FC<GameProps> = ({ onComplete, onExit }) => {
 
       {gameState === 'TITLE_MENU' && (
         <div className="text-center py-6 space-y-6">
-          <p className="text-sm text-slate-600 max-w-md mx-auto leading-relaxed">
+          <p className="text-sm text-slate-600 dark:text-zinc-400 max-w-md mx-auto leading-relaxed">
             Clique na <strong>primeira letra</strong> e depois na <strong>última letra</strong> de cada palavra (horizontal, vertical ou diagonal) para marcá-la no quadro.
           </p>
 
@@ -251,8 +251,8 @@ export const WordSearchGame: React.FC<GameProps> = ({ onComplete, onExit }) => {
                 onClick={() => setThemeIdx(idx)}
                 className={`px-4 py-2 text-xs font-semibold rounded-lg border transition-colors cursor-pointer ${
                   themeIdx === idx
-                    ? 'bg-slate-900 text-white border-slate-900'
-                    : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                    ? 'bg-slate-900 dark:bg-emerald-600 text-white border-slate-900 dark:border-emerald-600'
+                    : 'bg-white dark:bg-zinc-950 text-slate-700 dark:text-zinc-300 border-slate-200 dark:border-zinc-800 hover:bg-slate-50 dark:hover:bg-zinc-800'
                 }`}
               >
                 {t.title} ({t.words.length} palavras)
@@ -273,7 +273,7 @@ export const WordSearchGame: React.FC<GameProps> = ({ onComplete, onExit }) => {
       {(gameState === 'PLAYING' || gameState === 'ROUND_SUMMARY') && (
         <div className="grid grid-cols-1 lg:grid-cols-[1fr_220px] gap-6 items-start">
           <div className="overflow-x-auto">
-            <div className="grid grid-cols-10 gap-1 w-fit mx-auto bg-slate-100 p-2 rounded-xl border border-slate-200">
+            <div className="grid grid-cols-10 gap-1 w-fit mx-auto bg-slate-100 dark:bg-black p-2 rounded-xl border border-slate-200 dark:border-zinc-800">
               {puzzle.grid.map((row, r) =>
                 row.map((letter, c) => {
                   const key = `${r},${c}`;
@@ -294,8 +294,8 @@ export const WordSearchGame: React.FC<GameProps> = ({ onComplete, onExit }) => {
                           : isStart || isPreview
                             ? 'bg-sky-600 text-white'
                             : isHint
-                              ? 'bg-amber-200 text-amber-950 ring-2 ring-amber-500'
-                              : 'bg-white text-slate-900 hover:bg-slate-50'
+                              ? 'bg-amber-200 dark:bg-amber-700 text-amber-950 dark:text-amber-50 ring-2 ring-amber-500'
+                              : 'bg-white dark:bg-zinc-900 text-slate-900 dark:text-zinc-100 hover:bg-slate-50 dark:hover:bg-zinc-800'
                       }`}
                     >
                       {letter}
@@ -306,10 +306,10 @@ export const WordSearchGame: React.FC<GameProps> = ({ onComplete, onExit }) => {
             </div>
           </div>
 
-          <div className="space-y-4 bg-slate-50 border border-slate-200 rounded-xl p-4">
+          <div className="space-y-4 bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 rounded-xl p-4">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-bold text-slate-900">{theme.title}</span>
-              <span className="text-xs font-mono tabular-nums text-slate-600">
+              <span className="text-xs font-bold text-slate-900 dark:text-zinc-100">{theme.title}</span>
+              <span className="text-xs font-mono tabular-nums text-slate-600 dark:text-zinc-400">
                 {foundWords.length}/{puzzle.placed.length}
               </span>
             </div>
@@ -322,8 +322,8 @@ export const WordSearchGame: React.FC<GameProps> = ({ onComplete, onExit }) => {
                     key={p.word}
                     className={`text-sm font-mono px-2.5 py-1.5 rounded-md border ${
                       found
-                        ? 'bg-emerald-50 border-emerald-200 text-emerald-700 line-through'
-                        : 'bg-white border-slate-200 text-slate-800'
+                        ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-400 line-through'
+                        : 'bg-white dark:bg-zinc-900 border-slate-200 dark:border-zinc-800 text-slate-800 dark:text-zinc-200'
                     }`}
                   >
                     {p.word}
@@ -336,7 +336,7 @@ export const WordSearchGame: React.FC<GameProps> = ({ onComplete, onExit }) => {
               <button
                 type="button"
                 onClick={revealHint}
-                className="w-full inline-flex items-center justify-center gap-2 px-3 py-2 text-xs font-semibold bg-white border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer"
+                className="w-full inline-flex items-center justify-center gap-2 px-3 py-2 text-xs font-semibold bg-white dark:bg-zinc-900 border border-slate-300 dark:border-zinc-700 text-slate-700 dark:text-zinc-200 rounded-lg hover:bg-slate-100 dark:hover:bg-zinc-800 transition-colors cursor-pointer"
               >
                 <Lightbulb className="w-3.5 h-3.5 text-amber-500" />
                 Dica (1ª letra)
@@ -347,13 +347,13 @@ export const WordSearchGame: React.FC<GameProps> = ({ onComplete, onExit }) => {
       )}
 
       {gameState === 'ROUND_SUMMARY' && (
-        <div className="border-t border-slate-100 pt-5 mt-6 flex flex-col sm:flex-row items-center justify-between gap-4">
+        <div className="border-t border-slate-100 dark:border-zinc-800 pt-5 mt-6 flex flex-col sm:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg bg-emerald-50 text-emerald-700 flex items-center justify-center shrink-0">
+            <div className="w-10 h-10 rounded-lg bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-400 flex items-center justify-center shrink-0">
               <Trophy className="w-5 h-5" />
             </div>
             <div>
-              <p className="text-sm font-bold text-slate-900 tabular-nums">
+              <p className="text-sm font-bold text-slate-900 dark:text-zinc-50 tabular-nums">
                 {submitting
                   ? 'Validando partida no sistema antifraude...'
                   : rewardInfo
@@ -361,8 +361,8 @@ export const WordSearchGame: React.FC<GameProps> = ({ onComplete, onExit }) => {
                     : 'Caça-Palavras concluído!'}
               </p>
               {rewardInfo && (
-                <p className="text-xs text-slate-500 flex items-center gap-1 mt-0.5">
-                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+                <p className="text-xs text-slate-500 dark:text-zinc-400 flex items-center gap-1 mt-0.5">
+                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
                   {rewardInfo.verificationStatus === 'verified'
                     ? 'Sessão verificada com assinatura de integridade'
                     : rewardInfo.fraudReason}
@@ -375,7 +375,7 @@ export const WordSearchGame: React.FC<GameProps> = ({ onComplete, onExit }) => {
             type="button"
             onClick={() => startGame((themeIdx + 1) % THEMES.length)}
             disabled={submitting}
-            className="inline-flex items-center gap-2 px-5 py-2.5 bg-slate-900 text-white text-xs font-semibold rounded-lg hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50"
+            className="inline-flex items-center gap-2 px-5 py-2.5 bg-slate-900 dark:bg-emerald-600 text-white text-xs font-semibold rounded-lg hover:bg-slate-800 dark:hover:bg-emerald-500 transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50"
           >
             <RotateCcw className="w-3.5 h-3.5" />
             Novo Tema

@@ -167,16 +167,16 @@ export const DashboardSection: React.FC = () => {
 
   if (!firebaseUser) {
     return (
-      <div className="bg-white border border-slate-200 rounded-xl p-10 text-center max-w-xl mx-auto space-y-4">
-        <Lock className="w-8 h-8 text-slate-400 mx-auto" />
-        <h2 className="text-xl font-bold text-slate-900">Dashboard Analítico & Exportação</h2>
-        <p className="text-sm text-slate-600">
+      <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-10 text-center max-w-xl mx-auto space-y-4">
+        <Lock className="w-8 h-8 text-slate-400 dark:text-zinc-500 mx-auto" />
+        <h2 className="text-xl font-bold text-slate-900 dark:text-zinc-50">Dashboard Analítico & Exportação</h2>
+        <p className="text-sm text-slate-600 dark:text-zinc-400">
           Entre com sua conta Google para visualizar gráficos detalhados por período, categorias de jogos e exportar relatórios em Excel.
         </p>
         <button
           type="button"
           onClick={signInWithGoogle}
-          className="px-5 py-2.5 bg-slate-900 text-white text-sm font-semibold rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+          className="px-5 py-2.5 bg-slate-900 dark:bg-emerald-600 text-white text-sm font-semibold rounded-lg hover:bg-slate-800 dark:hover:bg-emerald-500 transition-colors cursor-pointer"
         >
           Entrar com Google
         </button>
@@ -191,19 +191,21 @@ export const DashboardSection: React.FC = () => {
       {/* Header + Export Actions */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h2 className="text-xl font-bold text-slate-900">Dashboard Estratégico</h2>
-          <p className="text-sm text-slate-500">
+          <h2 className="text-xl font-bold text-slate-900 dark:text-zinc-50">Dashboard Estratégico</h2>
+          <p className="text-sm text-slate-500 dark:text-zinc-400">
             Análise granular por período, categoria de jogo e fluxo financeiro Pix
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {isAdmin && (
-            <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg">
+            <div className="flex items-center gap-1 p-1 bg-slate-100 dark:bg-zinc-900 border border-transparent dark:border-zinc-800 rounded-lg">
               <button
                 type="button"
                 onClick={() => setScope('personal')}
                 className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors cursor-pointer ${
-                  scope === 'personal' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'
+                  scope === 'personal'
+                    ? 'bg-white dark:bg-zinc-800 text-slate-900 dark:text-zinc-50 shadow-sm'
+                    : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-zinc-100'
                 }`}
               >
                 Minha Conta
@@ -212,7 +214,9 @@ export const DashboardSection: React.FC = () => {
                 type="button"
                 onClick={() => setScope('global')}
                 className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors cursor-pointer ${
-                  scope === 'global' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'
+                  scope === 'global'
+                    ? 'bg-white dark:bg-zinc-800 text-slate-900 dark:text-zinc-50 shadow-sm'
+                    : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-zinc-100'
                 }`}
               >
                 Visão Global (Admin)
@@ -241,7 +245,7 @@ export const DashboardSection: React.FC = () => {
           <button
             type="button"
             onClick={() => exportSessionsToCsv(filteredSessions, filteredWithdrawals)}
-            className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-slate-300 text-slate-700 text-xs font-semibold rounded-lg hover:bg-slate-50 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            className="inline-flex items-center gap-2 px-4 py-2 bg-white dark:bg-zinc-900 border border-slate-300 dark:border-zinc-700 text-slate-700 dark:text-zinc-200 text-xs font-semibold rounded-lg hover:bg-slate-50 dark:hover:bg-zinc-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
             <Download className="w-4 h-4" />
             Exportar CSV
@@ -250,13 +254,13 @@ export const DashboardSection: React.FC = () => {
       </div>
 
       {/* Filters Toolbar */}
-      <div className="bg-white border border-slate-200 rounded-xl p-4 flex flex-wrap items-center gap-4">
-        <div className="flex items-center gap-2 text-xs font-semibold text-slate-700">
-          <Filter className="w-4 h-4 text-slate-400" />
+      <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-4 flex flex-wrap items-center gap-4">
+        <div className="flex items-center gap-2 text-xs font-semibold text-slate-700 dark:text-zinc-300">
+          <Filter className="w-4 h-4 text-slate-400 dark:text-zinc-500" />
           Filtros:
         </div>
 
-        <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg">
+        <div className="flex items-center gap-1 p-1 bg-slate-100 dark:bg-zinc-950 border border-transparent dark:border-zinc-800 rounded-lg">
           {(
             [
               { id: 'today', label: 'Hoje' },
@@ -270,7 +274,9 @@ export const DashboardSection: React.FC = () => {
               type="button"
               onClick={() => setPeriod(item.id)}
               className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap cursor-pointer ${
-                period === item.id ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'
+                period === item.id
+                  ? 'bg-white dark:bg-zinc-800 text-slate-900 dark:text-zinc-50 shadow-sm'
+                  : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-zinc-100'
               }`}
             >
               {item.label}
@@ -284,14 +290,14 @@ export const DashboardSection: React.FC = () => {
               type="date"
               value={customStart}
               onChange={(e) => setCustomStart(e.target.value)}
-              className="px-2.5 py-1.5 border border-slate-300 rounded-md font-mono"
+              className="px-2.5 py-1.5 bg-white dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-md font-mono"
             />
-            <span className="text-slate-400">até</span>
+            <span className="text-slate-400 dark:text-zinc-500">até</span>
             <input
               type="date"
               value={customEnd}
               onChange={(e) => setCustomEnd(e.target.value)}
-              className="px-2.5 py-1.5 border border-slate-300 rounded-md font-mono"
+              className="px-2.5 py-1.5 bg-white dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-md font-mono"
             />
           </div>
         )}
@@ -299,7 +305,7 @@ export const DashboardSection: React.FC = () => {
         <select
           value={categoryFilter}
           onChange={(e) => setCategoryFilter(e.target.value as 'all' | GameCategory)}
-          className="px-3 py-1.5 text-xs bg-white border border-slate-300 rounded-lg font-medium text-slate-700"
+          className="px-3 py-1.5 text-xs bg-white dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 rounded-lg font-medium text-slate-700 dark:text-zinc-200"
         >
           <option value="all">Todas as Categorias</option>
           {(Object.keys(GAME_LABELS) as GameCategory[]).map((cat) => (
@@ -312,7 +318,7 @@ export const DashboardSection: React.FC = () => {
         <select
           value={operationFilter}
           onChange={(e) => setOperationFilter(e.target.value as OperationFilter)}
-          className="px-3 py-1.5 text-xs bg-white border border-slate-300 rounded-lg font-medium text-slate-700"
+          className="px-3 py-1.5 text-xs bg-white dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 rounded-lg font-medium text-slate-700 dark:text-zinc-200"
         >
           <option value="all">Todas as Operações</option>
           <option value="sessions">Somente Partidas</option>
@@ -323,34 +329,34 @@ export const DashboardSection: React.FC = () => {
 
       {/* KPI Strip */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-white border border-slate-200 rounded-xl p-5">
-          <div className="text-xs text-slate-500">Pontos no Período</div>
-          <div className="text-2xl font-mono font-bold text-slate-900 tabular-nums mt-1">
+        <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-5">
+          <div className="text-xs text-slate-500 dark:text-zinc-400">Pontos no Período</div>
+          <div className="text-2xl font-mono font-bold text-slate-900 dark:text-zinc-50 tabular-nums mt-1">
             {formatPoints(kpis.points)}
           </div>
-          <div className="text-xs text-slate-500 mt-1 tabular-nums">{filteredSessions.length} partidas</div>
+          <div className="text-xs text-slate-500 dark:text-zinc-400 mt-1 tabular-nums">{filteredSessions.length} partidas</div>
         </div>
-        <div className="bg-white border border-slate-200 rounded-xl p-5">
-          <div className="text-xs text-slate-500">Valor Convertido</div>
-          <div className="text-2xl font-mono font-bold text-emerald-600 tabular-nums mt-1">
+        <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-5">
+          <div className="text-xs text-slate-500 dark:text-zinc-400">Valor Convertido</div>
+          <div className="text-2xl font-mono font-bold text-emerald-600 dark:text-emerald-400 tabular-nums mt-1">
             {formatBRL(kpis.convertedCents)}
           </div>
-          <div className="text-xs text-slate-500 mt-1 tabular-nums">{filteredConversions.length} conversões</div>
+          <div className="text-xs text-slate-500 dark:text-zinc-400 mt-1 tabular-nums">{filteredConversions.length} conversões</div>
         </div>
-        <div className="bg-white border border-slate-200 rounded-xl p-5">
-          <div className="text-xs text-slate-500">Volume de Saques Pix</div>
-          <div className="text-2xl font-mono font-bold text-slate-900 tabular-nums mt-1">
+        <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-5">
+          <div className="text-xs text-slate-500 dark:text-zinc-400">Volume de Saques Pix</div>
+          <div className="text-2xl font-mono font-bold text-slate-900 dark:text-zinc-50 tabular-nums mt-1">
             {formatBRL(kpis.withdrawnCents)}
           </div>
-          <div className="text-xs text-slate-500 mt-1 tabular-nums">{filteredWithdrawals.length} solicitações</div>
+          <div className="text-xs text-slate-500 dark:text-zinc-400 mt-1 tabular-nums">{filteredWithdrawals.length} solicitações</div>
         </div>
-        <div className="bg-white border border-slate-200 rounded-xl p-5">
-          <div className="text-xs text-slate-500">Integridade Antifraude</div>
-          <div className="text-2xl font-mono font-bold text-emerald-600 tabular-nums mt-1">
+        <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-5">
+          <div className="text-xs text-slate-500 dark:text-zinc-400">Integridade Antifraude</div>
+          <div className="text-2xl font-mono font-bold text-emerald-600 dark:text-emerald-400 tabular-nums mt-1">
             {kpis.integrityRate}%
           </div>
-          <div className="text-xs text-slate-500 mt-1 flex items-center gap-1">
-            <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+          <div className="text-xs text-slate-500 dark:text-zinc-400 mt-1 flex items-center gap-1">
+            <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
             Partidas aprovadas
           </div>
         </div>
@@ -358,16 +364,16 @@ export const DashboardSection: React.FC = () => {
 
       {/* Charts Row */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        <div className="lg:col-span-7 bg-white border border-slate-200 rounded-xl p-6">
+        <div className="lg:col-span-7 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-6">
           <div className="flex items-center justify-between mb-4">
             <div>
-              <h3 className="text-sm font-bold text-slate-900">Evolução Diária de Pontuação</h3>
-              <p className="text-xs text-slate-500">Últimos dias ativos dentro do filtro ({dateRange.label})</p>
+              <h3 className="text-sm font-bold text-slate-900 dark:text-zinc-50">Evolução Diária de Pontuação</h3>
+              <p className="text-xs text-slate-500 dark:text-zinc-400">Últimos dias ativos dentro do filtro ({dateRange.label})</p>
             </div>
           </div>
 
           {dailySeries.length === 0 ? (
-            <div className="h-48 flex items-center justify-center text-xs text-slate-500 border border-dashed border-slate-200 rounded-lg">
+            <div className="h-48 flex items-center justify-center text-xs text-slate-500 dark:text-zinc-400 border border-dashed border-slate-200 dark:border-zinc-800 rounded-lg">
               Sem dados de partidas no período selecionado.
             </div>
           ) : (
@@ -376,17 +382,17 @@ export const DashboardSection: React.FC = () => {
                 const heightPct = Math.max(8, Math.round((day.points / maxDailyPts) * 100));
                 return (
                   <div key={day.date} className="flex-1 flex flex-col items-center gap-1.5 min-w-0 group">
-                    <span className="text-[10px] font-mono tabular-nums text-slate-500 opacity-80 group-hover:opacity-100">
+                    <span className="text-[10px] font-mono tabular-nums text-slate-500 dark:text-zinc-400 opacity-80 group-hover:opacity-100">
                       {day.points}
                     </span>
-                    <div className="w-full max-w-[36px] bg-slate-100 rounded-t-md h-36 flex items-end overflow-hidden">
+                    <div className="w-full max-w-[36px] bg-slate-100 dark:bg-zinc-800 rounded-t-md h-36 flex items-end overflow-hidden">
                       <div
-                        className="w-full bg-slate-900 group-hover:bg-emerald-600 transition-colors rounded-t-md"
+                        className="w-full bg-slate-900 dark:bg-emerald-500 group-hover:bg-emerald-600 dark:group-hover:bg-emerald-400 transition-colors rounded-t-md"
                         style={{ height: `${heightPct}%` }}
                         title={`${day.date}: ${day.points} pts · ${formatBRL(day.convertedCents)} convertidos`}
                       />
                     </div>
-                    <span className="text-[10px] font-mono text-slate-500 truncate w-full text-center">
+                    <span className="text-[10px] font-mono text-slate-500 dark:text-zinc-400 truncate w-full text-center">
                       {day.date.slice(5)}
                     </span>
                   </div>
@@ -396,22 +402,22 @@ export const DashboardSection: React.FC = () => {
           )}
         </div>
 
-        <div className="lg:col-span-5 bg-white border border-slate-200 rounded-xl p-6">
-          <h3 className="text-sm font-bold text-slate-900 mb-1">Desempenho por Categoria</h3>
-          <p className="text-xs text-slate-500 mb-5">Pontuação distribuída entre os jogos</p>
+        <div className="lg:col-span-5 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-6">
+          <h3 className="text-sm font-bold text-slate-900 dark:text-zinc-50 mb-1">Desempenho por Categoria</h3>
+          <p className="text-xs text-slate-500 dark:text-zinc-400 mb-5">Pontuação distribuída entre os jogos</p>
 
           <div className="space-y-4">
             {categoryBreakdown.map((item) => (
               <div key={item.key} className="space-y-1.5">
                 <div className="flex items-center justify-between text-xs">
-                  <span className="font-medium text-slate-800">{item.label}</span>
-                  <span className="font-mono tabular-nums text-slate-600">
+                  <span className="font-medium text-slate-800 dark:text-zinc-200">{item.label}</span>
+                  <span className="font-mono tabular-nums text-slate-600 dark:text-zinc-400">
                     {formatPoints(item.points)} pts · {item.matches}x
                   </span>
                 </div>
-                <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+                <div className="w-full h-2 bg-slate-100 dark:bg-zinc-800 rounded-full overflow-hidden">
                   <div
-                    className="h-full bg-emerald-600 rounded-full transition-all"
+                    className="h-full bg-emerald-600 dark:bg-emerald-500 rounded-full transition-all"
                     style={{ width: `${item.points > 0 ? Math.max(4, item.pct) : 0}%` }}
                   />
                 </div>
@@ -422,14 +428,14 @@ export const DashboardSection: React.FC = () => {
       </div>
 
       {/* Granular Filtered Table */}
-      <div className="bg-white border border-slate-200 rounded-xl p-6">
-        <h3 className="text-sm font-bold text-slate-900 mb-4">Registros Filtrados</h3>
+      <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-6">
+        <h3 className="text-sm font-bold text-slate-900 dark:text-zinc-50 mb-4">Registros Filtrados</h3>
 
         {(operationFilter === 'all' || operationFilter === 'sessions') && (
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs">
               <thead>
-                <tr className="border-b border-slate-200 text-slate-500">
+                <tr className="border-b border-slate-200 dark:border-zinc-800 text-slate-500 dark:text-zinc-400">
                   <th className="py-2 font-medium">Data</th>
                   <th className="py-2 font-medium">Categoria</th>
                   <th className="py-2 font-medium text-right">Pontos</th>
@@ -437,21 +443,23 @@ export const DashboardSection: React.FC = () => {
                   <th className="py-2 font-medium text-right">Verificação</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100">
+              <tbody className="divide-y divide-slate-100 dark:divide-zinc-800">
                 {filteredSessions.slice(0, 15).map((s) => (
-                  <tr key={s.sessionId} className="h-10 hover:bg-slate-50">
-                    <td className="py-2 font-mono tabular-nums text-slate-700">{s.playedDate}</td>
-                    <td className="py-2 font-medium text-slate-900">{GAME_LABELS[s.gameCategory]}</td>
-                    <td className="py-2 font-mono tabular-nums text-right font-semibold text-emerald-700">
+                  <tr key={s.sessionId} className="h-10 hover:bg-slate-50 dark:hover:bg-zinc-800/50">
+                    <td className="py-2 font-mono tabular-nums text-slate-700 dark:text-zinc-300">{s.playedDate}</td>
+                    <td className="py-2 font-medium text-slate-900 dark:text-zinc-100">{GAME_LABELS[s.gameCategory]}</td>
+                    <td className="py-2 font-mono tabular-nums text-right font-semibold text-emerald-700 dark:text-emerald-400">
                       +{s.scoreEarned}
                     </td>
-                    <td className="py-2 font-mono tabular-nums text-right text-slate-600">
+                    <td className="py-2 font-mono tabular-nums text-right text-slate-600 dark:text-zinc-400">
                       {(s.durationMs / 1000).toFixed(1)}s
                     </td>
                     <td className="py-2 text-right">
                       <span
                         className={`font-medium ${
-                          s.verificationStatus === 'verified' ? 'text-emerald-700' : 'text-amber-700'
+                          s.verificationStatus === 'verified'
+                            ? 'text-emerald-700 dark:text-emerald-400'
+                            : 'text-amber-700 dark:text-amber-400'
                         }`}
                       >
                         {s.verificationStatus === 'verified' ? 'Verificado' : 'Sinalizado'}
@@ -461,7 +469,7 @@ export const DashboardSection: React.FC = () => {
                 ))}
                 {filteredSessions.length === 0 && (
                   <tr>
-                    <td colSpan={5} className="py-6 text-center text-slate-500">
+                    <td colSpan={5} className="py-6 text-center text-slate-500 dark:text-zinc-400">
                       Nenhuma partida encontrada para os filtros selecionados.
                     </td>
                   </tr>
@@ -475,20 +483,20 @@ export const DashboardSection: React.FC = () => {
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs">
               <thead>
-                <tr className="border-b border-slate-200 text-slate-500">
+                <tr className="border-b border-slate-200 dark:border-zinc-800 text-slate-500 dark:text-zinc-400">
                   <th className="py-2 font-medium">Data</th>
                   <th className="py-2 font-medium">ID Conversão</th>
                   <th className="py-2 font-medium text-right">Pontos</th>
                   <th className="py-2 font-medium text-right">Valor Creditado</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100">
+              <tbody className="divide-y divide-slate-100 dark:divide-zinc-800">
                 {filteredConversions.slice(0, 15).map((c) => (
                   <tr key={c.conversionId} className="h-10">
-                    <td className="py-2 font-mono tabular-nums">{c.conversionDate}</td>
-                    <td className="py-2 font-mono text-slate-600">{c.conversionId}</td>
-                    <td className="py-2 font-mono tabular-nums text-right">{formatPoints(c.pointsConverted)}</td>
-                    <td className="py-2 font-mono tabular-nums text-right font-semibold text-emerald-700">
+                    <td className="py-2 font-mono tabular-nums text-slate-700 dark:text-zinc-300">{c.conversionDate}</td>
+                    <td className="py-2 font-mono text-slate-600 dark:text-zinc-400">{c.conversionId}</td>
+                    <td className="py-2 font-mono tabular-nums text-right text-slate-900 dark:text-zinc-100">{formatPoints(c.pointsConverted)}</td>
+                    <td className="py-2 font-mono tabular-nums text-right font-semibold text-emerald-700 dark:text-emerald-400">
                       {formatBRL(c.brlCentsCredited)}
                     </td>
                   </tr>
@@ -502,7 +510,7 @@ export const DashboardSection: React.FC = () => {
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs">
               <thead>
-                <tr className="border-b border-slate-200 text-slate-500">
+                <tr className="border-b border-slate-200 dark:border-zinc-800 text-slate-500 dark:text-zinc-400">
                   <th className="py-2 font-medium">Data</th>
                   <th className="py-2 font-medium">Usuário</th>
                   <th className="py-2 font-medium">Chave Pix</th>
@@ -510,14 +518,14 @@ export const DashboardSection: React.FC = () => {
                   <th className="py-2 font-medium text-right">Status</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100">
+              <tbody className="divide-y divide-slate-100 dark:divide-zinc-800">
                 {filteredWithdrawals.slice(0, 15).map((w) => (
                   <tr key={w.withdrawalId} className="h-10">
-                    <td className="py-2 font-mono tabular-nums">{w.requestedDate}</td>
-                    <td className="py-2 font-medium text-slate-900">{w.userDisplayName}</td>
-                    <td className="py-2 font-mono text-slate-600">{w.pixKey}</td>
-                    <td className="py-2 font-mono tabular-nums text-right font-semibold">{formatBRL(w.amountCents)}</td>
-                    <td className="py-2 text-right font-medium">{w.status}</td>
+                    <td className="py-2 font-mono tabular-nums text-slate-700 dark:text-zinc-300">{w.requestedDate}</td>
+                    <td className="py-2 font-medium text-slate-900 dark:text-zinc-100">{w.userDisplayName}</td>
+                    <td className="py-2 font-mono text-slate-600 dark:text-zinc-400">{w.pixKey}</td>
+                    <td className="py-2 font-mono tabular-nums text-right font-semibold text-slate-900 dark:text-zinc-100">{formatBRL(w.amountCents)}</td>
+                    <td className="py-2 text-right font-medium text-slate-700 dark:text-zinc-300">{w.status}</td>
                   </tr>
                 ))}
               </tbody>

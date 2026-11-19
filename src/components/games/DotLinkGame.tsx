@@ -354,25 +354,25 @@ export const DotLinkGame: React.FC<GameProps> = ({ onComplete, onExit }) => {
   const connectedCount = puzzle.pairs.filter((p) => isPairConnected(p)).length;
 
   return (
-    <div className="bg-white border border-slate-200 rounded-xl p-6 max-w-2xl mx-auto select-none">
-      <div className="flex items-center justify-between border-b border-slate-100 pb-4 mb-6">
+    <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-6 max-w-2xl mx-auto select-none">
+      <div className="flex items-center justify-between border-b border-slate-100 dark:border-zinc-800 pb-4 mb-6">
         <div>
-          <h3 className="text-xl font-bold text-slate-900">Dot Link</h3>
-          <p className="text-xs text-slate-500 mt-0.5">Conecte todos os pares da mesma cor sem cruzar caminhos · Até 400 pts</p>
+          <h3 className="text-xl font-bold text-slate-900 dark:text-zinc-50">Dot Link</h3>
+          <p className="text-xs text-slate-500 dark:text-zinc-400 mt-0.5">Conecte todos os pares da mesma cor sem cruzar caminhos · Até 400 pts</p>
         </div>
         <div className="flex items-center gap-2">
           <button
             type="button"
             onClick={() => setSoundOn((s) => !s)}
             aria-label={soundOn ? 'Desativar som' : 'Ativar som'}
-            className="p-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 transition-colors cursor-pointer"
+            className="p-2 rounded-lg border border-slate-200 dark:border-zinc-700 text-slate-600 dark:text-zinc-300 hover:bg-slate-50 dark:hover:bg-zinc-800 transition-colors cursor-pointer"
           >
             {soundOn ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
           </button>
           <button
             type="button"
             onClick={onExit}
-            className="px-3 py-2 text-xs font-medium text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            className="px-3 py-2 text-xs font-medium text-slate-600 dark:text-zinc-300 border border-slate-200 dark:border-zinc-700 rounded-lg hover:bg-slate-50 dark:hover:bg-zinc-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
             Voltar ao Lobby
           </button>
@@ -381,7 +381,7 @@ export const DotLinkGame: React.FC<GameProps> = ({ onComplete, onExit }) => {
 
       {gameState === 'TITLE_MENU' && (
         <div className="text-center py-6 space-y-6">
-          <p className="text-sm text-slate-600 max-w-md mx-auto leading-relaxed">
+          <p className="text-sm text-slate-600 dark:text-zinc-400 max-w-md mx-auto leading-relaxed">
             Arraste o dedo/mouse ou clique célula por célula para ligar cada ponto colorido ao seu par correspondente. Preencher 100% do tabuleiro concede <strong>+40 pontos bônus</strong>.
           </p>
 
@@ -393,8 +393,8 @@ export const DotLinkGame: React.FC<GameProps> = ({ onComplete, onExit }) => {
                 onClick={() => setPuzzleIdx(idx)}
                 className={`px-4 py-2 text-xs font-semibold rounded-lg border transition-colors cursor-pointer ${
                   puzzleIdx === idx
-                    ? 'bg-slate-900 text-white border-slate-900'
-                    : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                    ? 'bg-slate-900 dark:bg-emerald-600 text-white border-slate-900 dark:border-emerald-600'
+                    : 'bg-white dark:bg-zinc-950 text-slate-700 dark:text-zinc-300 border-slate-200 dark:border-zinc-800 hover:bg-slate-50 dark:hover:bg-zinc-800'
                 }`}
               >
                 {p.title} ({p.reward} pts)
@@ -414,15 +414,15 @@ export const DotLinkGame: React.FC<GameProps> = ({ onComplete, onExit }) => {
 
       {(gameState === 'PLAYING' || gameState === 'ROUND_SUMMARY') && (
         <div className="space-y-5">
-          <div className="flex items-center justify-between text-xs font-medium text-slate-600 bg-slate-50 px-4 py-2.5 rounded-lg">
+          <div className="flex items-center justify-between text-xs font-medium text-slate-600 dark:text-zinc-300 bg-slate-50 dark:bg-zinc-950 border border-transparent dark:border-zinc-800 px-4 py-2.5 rounded-lg">
             <span>
               Fluxos conectados:{' '}
-              <strong className="text-slate-900 tabular-nums">
+              <strong className="text-slate-900 dark:text-zinc-50 tabular-nums">
                 {connectedCount}/{puzzle.pairs.length}
               </strong>
               {activeColor && (
-                <span className="ml-2 text-slate-500">
-                  · Ligando <strong className="text-slate-800">{COLOR_META[activeColor].label}</strong>
+                <span className="ml-2 text-slate-500 dark:text-zinc-400">
+                  · Ligando <strong className="text-slate-800 dark:text-zinc-200">{COLOR_META[activeColor].label}</strong>
                 </span>
               )}
             </span>
@@ -437,7 +437,7 @@ export const DotLinkGame: React.FC<GameProps> = ({ onComplete, onExit }) => {
                     setActiveColor(null);
                     activeColorRef.current = null;
                   }}
-                  className="text-slate-600 hover:text-slate-900 underline cursor-pointer"
+                  className="text-slate-600 dark:text-zinc-300 hover:text-slate-900 dark:hover:text-white underline cursor-pointer"
                 >
                   Limpar grade
                 </button>
@@ -446,7 +446,7 @@ export const DotLinkGame: React.FC<GameProps> = ({ onComplete, onExit }) => {
           </div>
 
           {/* Interactive Board with Continuous SVG Pipe Layer */}
-          <div className="relative mx-auto w-fit bg-slate-900 p-3 rounded-xl touch-none">
+          <div className="relative mx-auto w-fit bg-slate-900 dark:bg-black border border-transparent dark:border-zinc-800 p-3 rounded-xl touch-none">
             <div
               className="relative"
               onPointerMove={handleGridPointerMove}
@@ -469,7 +469,7 @@ export const DotLinkGame: React.FC<GameProps> = ({ onComplete, onExit }) => {
                       data-row={r}
                       data-col={c}
                       onPointerDown={(e) => handleCellPointerDown(e, r, c)}
-                      className="w-12 h-12 sm:w-14 sm:h-14 rounded-lg bg-slate-800/75 border border-slate-700/80 flex items-center justify-center relative touch-none cursor-pointer"
+                      className="w-12 h-12 sm:w-14 sm:h-14 rounded-lg bg-slate-800/75 dark:bg-zinc-900 border border-slate-700/80 dark:border-zinc-800 flex items-center justify-center relative touch-none cursor-pointer"
                       aria-label={`Célula ${r + 1},${c + 1}`}
                     >
                       {endpoint && (
@@ -513,13 +513,13 @@ export const DotLinkGame: React.FC<GameProps> = ({ onComplete, onExit }) => {
           </div>
 
           {gameState === 'ROUND_SUMMARY' && (
-            <div className="border-t border-slate-100 pt-5 flex flex-col sm:flex-row items-center justify-between gap-4">
+            <div className="border-t border-slate-100 dark:border-zinc-800 pt-5 flex flex-col sm:flex-row items-center justify-between gap-4">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-lg bg-emerald-50 text-emerald-700 flex items-center justify-center shrink-0">
+                <div className="w-10 h-10 rounded-lg bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-400 flex items-center justify-center shrink-0">
                   <Trophy className="w-5 h-5" />
                 </div>
                 <div>
-                  <p className="text-sm font-bold text-slate-900 tabular-nums">
+                  <p className="text-sm font-bold text-slate-900 dark:text-zinc-50 tabular-nums">
                     {submitting
                       ? 'Validando solução no sistema antifraude...'
                       : rewardInfo
@@ -527,8 +527,8 @@ export const DotLinkGame: React.FC<GameProps> = ({ onComplete, onExit }) => {
                         : 'Tabuleiro concluído!'}
                   </p>
                   {rewardInfo && (
-                    <p className="text-xs text-slate-500 flex items-center gap-1 mt-0.5">
-                      <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+                    <p className="text-xs text-slate-500 dark:text-zinc-400 flex items-center gap-1 mt-0.5">
+                      <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
                       {rewardInfo.verificationStatus === 'verified'
                         ? 'Sessão verificada com assinatura de integridade'
                         : rewardInfo.fraudReason}
@@ -541,7 +541,7 @@ export const DotLinkGame: React.FC<GameProps> = ({ onComplete, onExit }) => {
                 type="button"
                 onClick={() => startPuzzle((puzzleIdx + 1) % PUZZLES.length)}
                 disabled={submitting}
-                className="inline-flex items-center gap-2 px-5 py-2.5 bg-slate-900 text-white text-xs font-semibold rounded-lg hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50"
+                className="inline-flex items-center gap-2 px-5 py-2.5 bg-slate-900 dark:bg-emerald-600 text-white text-xs font-semibold rounded-lg hover:bg-slate-800 dark:hover:bg-emerald-500 transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50"
               >
                 <RotateCcw className="w-3.5 h-3.5" />
                 Próximo Tabuleiro

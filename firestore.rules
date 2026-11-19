@@ -51,10 +51,26 @@ service cloud.firestore {
       return d is string && (d == '' || (d.size() == 10 && d.matches('^\\d{4}-\\d{2}-\\d{2}$')));
     }
 
+    function dateStrFromTime(t) {
+      return string(t.year()) + '-' +
+        (t.month() < 10 ? '0' + string(t.month()) : string(t.month())) + '-' +
+        (t.day() < 10 ? '0' + string(t.day()) : string(t.day()));
+    }
+
     function serverDateStr() {
-      return string(request.time.year()) + '-' +
-        (request.time.month() < 10 ? '0' + string(request.time.month()) : string(request.time.month())) + '-' +
-        (request.time.day() < 10 ? '0' + string(request.time.day()) : string(request.time.day()));
+      return dateStrFromTime(request.time);
+    }
+
+    function yesterdayDateStr() {
+      return dateStrFromTime(request.time - duration.value(24, 'h'));
+    }
+
+    function checkinDocId(userId) {
+      return 'chk_' + userId + '_' + serverDateStr();
+    }
+
+    function yesterdayCheckinDocId(userId) {
+      return 'chk_' + userId + '_' + yesterdayDateStr();
     }
 
     function isActiveUser(userId) {
@@ -72,7 +88,8 @@ service cloud.firestore {
       data.keys().hasOnly([
         'uid', 'displayName', 'photoURL', 'pointsBalance', 'lifetimePoints',
         'brlBalanceCents', 'totalWithdrawnCents', 'lastConversionDate',
-        'status', 'riskScore', 'gamesPlayed', 'createdAt', 'updatedAt'
+        'status', 'riskScore', 'gamesPlayed', 'banReason', 'banExplanation',
+        'bannedBy', 'createdAt', 'updatedAt'
       ]) &&
       isValidId(data.uid) &&
       data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80 &&
@@ -85,6 +102,9 @@ service cloud.firestore {
       data.status in ['active', 'suspended', 'flagged'] &&
       data.riskScore is number && data.riskScore >= 0 && data.riskScore <= 100 &&
       data.gamesPlayed is number && data.gamesPlayed >= 0 &&
+      (!('banReason' in data) || (data.banReason is string && data.banReason.size() <= 120)) &&
+      (!('banExplanation' in data) || (data.banExplanation is string && data.banExplanation.size() <= 400)) &&
+      (!('bannedBy' in data) || (data.bannedBy is string && data.bannedBy.size() <= 160)) &&
       data.createdAt is timestamp &&
       data.updatedAt is timestamp;
     }
@@ -193,7 +213,8 @@ service cloud.firestore {
       isValidId(data.userId) &&
       data.eventType in [
         'speed_anomaly', 'score_cap_exceeded', 'double_conversion_attempt',
-        'bot_challenge_failed', 'suspicious_withdrawal', 'manual_flag'
+        'bot_challenge_failed', 'suspicious_withdrawal', 'manual_flag',
+        'profanity_username_ban', 'admin_ban'
       ] &&
       data.severity in ['low', 'medium', 'high', 'critical'] &&
       data.details is string && data.details.size() >= 3 && data.details.size() <= 400 &&
@@ -213,7 +234,7 @@ service cloud.firestore {
       isValidId(data.notificationId) &&
       isValidId(data.userId) &&
       data.recipientEmail is string && data.recipientEmail.size() >= 3 && data.recipientEmail.size() <= 160 &&
-      data.eventType in ['conversion_confirmed', 'withdrawal_requested', 'withdrawal_paid', 'withdrawal_rejected'] &&
+      data.eventType in ['conversion_confirmed', 'withdrawal_requested', 'withdrawal_paid', 'withdrawal_rejected', 'streak_bonus_credited'] &&
       data.subject is string && data.subject.size() >= 3 && data.subject.size() <= 160 &&
       data.summary is string && data.summary.size() >= 3 && data.summary.size() <= 500 &&
       data.deliveryStatus in ['sent_smtp', 'logged_in_app', 'failed'] &&
@@ -243,6 +264,47 @@ service cloud.firestore {
       data.updatedAt is timestamp;
     }
 
+    function isValidLeaderboardEntry(data) {
+      return data.keys().hasAll([
+        'uid', 'displayName', 'photoURL', 'brlBalanceCents',
+        'pointsBalance', 'gamesPlayed', 'status', 'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'uid', 'displayName', 'photoURL', 'brlBalanceCents',
+        'pointsBalance', 'gamesPlayed', 'status', 'updatedAt'
+      ]) &&
+      isValidId(data.uid) &&
+      data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80 &&
+      data.photoURL is string && data.photoURL.size() <= 500 &&
+      data.brlBalanceCents is number && data.brlBalanceCents >= 0 &&
+      data.pointsBalance is number && data.pointsBalance >= 0 &&
+      data.gamesPlayed is number && data.gamesPlayed >= 0 &&
+      data.status in ['active', 'suspended', 'flagged'] &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidDailyCheckin(data) {
+      return data.keys().hasAll([
+        'checkinId', 'userId', 'checkinDate', 'pointsAwarded',
+        'weekTotalAfter', 'streakDay', 'brlBonusCents', 'createdAt'
+      ]) &&
+      data.keys().hasOnly([
+        'checkinId', 'userId', 'checkinDate', 'pointsAwarded',
+        'weekTotalAfter', 'streakDay', 'brlBonusCents', 'createdAt'
+      ]) &&
+      isValidId(data.checkinId) &&
+      isValidId(data.userId) &&
+      isValidDateStr(data.checkinDate) &&
+      data.pointsAwarded is number && data.pointsAwarded >= 120 && data.pointsAwarded <= 200 &&
+      data.weekTotalAfter is number && data.weekTotalAfter >= data.pointsAwarded && data.weekTotalAfter <= 1400 &&
+      data.streakDay is number && data.streakDay >= 1 && data.streakDay <= 30 &&
+      data.brlBonusCents is number && (
+        (data.streakDay < 30 && data.brlBonusCents == 0) ||
+        (data.streakDay == 30 && data.brlBonusCents == 1000)
+      ) &&
+      data.createdAt is timestamp;
+    }
+
     // --- Collection Rules ---
 
     // 1. Users Collection
@@ -259,11 +321,15 @@ service cloud.firestore {
         incoming().brlBalanceCents == 0 &&
         incoming().totalWithdrawnCents == 0 &&
         incoming().lastConversionDate == '' &&
-        incoming().status == 'active' &&
-        incoming().riskScore == 0 &&
         incoming().gamesPlayed == 0 &&
+        !('banReason' in incoming()) &&
+        !('banExplanation' in incoming()) &&
+        !('bannedBy' in incoming()) &&
         incoming().createdAt == request.time &&
-        incoming().updatedAt == request.time;
+        incoming().updatedAt == request.time && (
+          (incoming().status == 'active' && incoming().riskScore == 0) ||
+          (incoming().status == 'suspended' && incoming().riskScore == 100)
+        );
 
       allow update: if isValidId(userId) &&
         isSignedIn() &&
@@ -274,13 +340,17 @@ service cloud.firestore {
           isAdmin() || (
             isOwner(userId) &&
             existing().status == 'active' &&
-            incoming().status == existing().status &&
-            incoming().riskScore == existing().riskScore &&
             incoming().totalWithdrawnCents == existing().totalWithdrawnCents && (
-              // Action A: Profile Update
-              incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL', 'updatedAt']) ||
+              // Action A: Profile Update (active status preserved)
+              (
+                incoming().status == existing().status &&
+                incoming().riskScore == existing().riskScore &&
+                incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL', 'updatedAt'])
+              ) ||
               // Action B: Game Score Credit (bounded <= 500 pts per match)
               (
+                incoming().status == existing().status &&
+                incoming().riskScore == existing().riskScore &&
                 incoming().diff(existing()).affectedKeys().hasOnly(['pointsBalance', 'lifetimePoints', 'gamesPlayed', 'updatedAt']) &&
                 incoming().pointsBalance >= existing().pointsBalance &&
                 incoming().pointsBalance <= existing().pointsBalance + 500 &&
@@ -289,6 +359,8 @@ service cloud.firestore {
               ) ||
               // Action C: Once-Per-Day Conversion locked to server UTC date (1000 pts = 10 BRL cents)
               (
+                incoming().status == existing().status &&
+                incoming().riskScore == existing().riskScore &&
                 incoming().diff(existing()).affectedKeys().hasOnly(['pointsBalance', 'brlBalanceCents', 'lastConversionDate', 'updatedAt']) &&
                 incoming().lastConversionDate == serverDateStr() &&
                 incoming().lastConversionDate != existing().lastConversionDate &&
@@ -299,8 +371,36 @@ service cloud.firestore {
               ) ||
               // Action D: Pix Withdrawal Deduction (minimum 500 BRL cents = R$ 5.00)
               (
+                incoming().status == existing().status &&
+                incoming().riskScore == existing().riskScore &&
                 incoming().diff(existing()).affectedKeys().hasOnly(['brlBalanceCents', 'updatedAt']) &&
                 (existing().brlBalanceCents - incoming().brlBalanceCents) >= 500
+              ) ||
+              // Action E: Daily Random Check-in (120–200 pts once per UTC day + R$10 / 1000 cents at 30-day streak)
+              (
+                incoming().status == existing().status &&
+                incoming().riskScore == existing().riskScore &&
+                incoming().diff(existing()).affectedKeys().hasOnly(['pointsBalance', 'lifetimePoints', 'brlBalanceCents', 'updatedAt']) &&
+                !exists(/databases/$(database)/documents/dailyCheckins/$(checkinDocId(userId))) &&
+                existsAfter(/databases/$(database)/documents/dailyCheckins/$(checkinDocId(userId))) &&
+                getAfter(/databases/$(database)/documents/dailyCheckins/$(checkinDocId(userId))).data.pointsAwarded == (incoming().pointsBalance - existing().pointsBalance) &&
+                getAfter(/databases/$(database)/documents/dailyCheckins/$(checkinDocId(userId))).data.brlBonusCents == (incoming().brlBalanceCents - existing().brlBalanceCents) &&
+                (incoming().pointsBalance - existing().pointsBalance) >= 120 &&
+                (incoming().pointsBalance - existing().pointsBalance) <= 200 &&
+                (
+                  incoming().brlBalanceCents == existing().brlBalanceCents ||
+                  (
+                    incoming().brlBalanceCents == existing().brlBalanceCents + 1000 &&
+                    getAfter(/databases/$(database)/documents/dailyCheckins/$(checkinDocId(userId))).data.streakDay == 30
+                  )
+                ) &&
+                incoming().lifetimePoints == existing().lifetimePoints + (incoming().pointsBalance - existing().pointsBalance)
+              ) ||
+              // Action F: Immediate Self-Suspension on Anti-Profanity Violation
+              (
+                incoming().diff(existing()).affectedKeys().hasOnly(['status', 'riskScore', 'updatedAt']) &&
+                incoming().status == 'suspended' &&
+                incoming().riskScore == 100
               )
             )
           )
@@ -455,6 +555,69 @@ service cloud.firestore {
         incoming().createdAt == existing().createdAt &&
         incoming().updatedAt == request.time;
       allow delete: if isValidId(integrationId) && isAdmin();
+    }
+
+    // 9. Global Leaderboard Projection (Zero PII, synced atomically with /users/{userId})
+    match /leaderboard/{userId} {
+      allow get: if isValidId(userId) && isSignedIn() && (existing().status == 'active' || isOwner(userId) || isAdmin());
+      allow list: if isSignedIn() && resource.data.brlBalanceCents >= 0;
+
+      allow create, update: if isValidId(userId) &&
+        isSignedIn() &&
+        isValidLeaderboardEntry(incoming()) &&
+        incoming().uid == userId &&
+        incoming().updatedAt == request.time && (
+          isAdmin() || (
+            isOwner(userId) &&
+            incoming().status in ['active', 'suspended'] &&
+            getAfter(/databases/$(database)/documents/users/$(userId)).data.uid == userId &&
+            getAfter(/databases/$(database)/documents/users/$(userId)).data.status == incoming().status &&
+            getAfter(/databases/$(database)/documents/users/$(userId)).data.displayName == incoming().displayName &&
+            getAfter(/databases/$(database)/documents/users/$(userId)).data.photoURL == incoming().photoURL &&
+            getAfter(/databases/$(database)/documents/users/$(userId)).data.brlBalanceCents == incoming().brlBalanceCents &&
+            getAfter(/databases/$(database)/documents/users/$(userId)).data.pointsBalance == incoming().pointsBalance &&
+            getAfter(/databases/$(database)/documents/users/$(userId)).data.gamesPlayed == incoming().gamesPlayed
+          )
+        );
+
+      allow delete: if isValidId(userId) && isAdmin();
+    }
+
+    // 10. Daily Random Check-ins (1 claim per server UTC date, ~1,000-1,200 pts/week, R$10 at 30-day consecutive streak)
+    match /dailyCheckins/{checkinId} {
+      allow get: if isValidId(checkinId) && (isAdmin() || (isSignedIn() && existing().userId == request.auth.uid));
+      allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow create: if isValidId(checkinId) &&
+        isSignedIn() &&
+        isValidDailyCheckin(incoming()) &&
+        incoming().checkinId == checkinId &&
+        incoming().userId == request.auth.uid &&
+        incoming().checkinDate == serverDateStr() &&
+        checkinId == checkinDocId(request.auth.uid) &&
+        incoming().createdAt == request.time &&
+        isActiveUser(request.auth.uid) && (
+          (
+            !exists(/databases/$(database)/documents/dailyCheckins/$(yesterdayCheckinDocId(request.auth.uid))) &&
+            incoming().streakDay == 1
+          ) || (
+            exists(/databases/$(database)/documents/dailyCheckins/$(yesterdayCheckinDocId(request.auth.uid))) && (
+              (
+                !get(/databases/$(database)/documents/dailyCheckins/$(yesterdayCheckinDocId(request.auth.uid))).data.keys().hasAll(['streakDay']) &&
+                incoming().streakDay == 2
+              ) || (
+                get(/databases/$(database)/documents/dailyCheckins/$(yesterdayCheckinDocId(request.auth.uid))).data.keys().hasAll(['streakDay']) &&
+                get(/databases/$(database)/documents/dailyCheckins/$(yesterdayCheckinDocId(request.auth.uid))).data.streakDay >= 30 &&
+                incoming().streakDay == 1
+              ) || (
+                get(/databases/$(database)/documents/dailyCheckins/$(yesterdayCheckinDocId(request.auth.uid))).data.keys().hasAll(['streakDay']) &&
+                get(/databases/$(database)/documents/dailyCheckins/$(yesterdayCheckinDocId(request.auth.uid))).data.streakDay >= 1 &&
+                get(/databases/$(database)/documents/dailyCheckins/$(yesterdayCheckinDocId(request.auth.uid))).data.streakDay < 30 &&
+                incoming().streakDay == get(/databases/$(database)/documents/dailyCheckins/$(yesterdayCheckinDocId(request.auth.uid))).data.streakDay + 1
+              )
+            )
+          )
+        );
+      allow update, delete: if isValidId(checkinId) && isAdmin();
     }
   }
 }

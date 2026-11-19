@@ -21,6 +21,9 @@ export interface UserAccount {
   status: AccountStatus;
   riskScore: number;
   gamesPlayed: number;
+  banReason?: string;
+  banExplanation?: string;
+  bannedBy?: string;
   createdAt: unknown;
   updatedAt: unknown;
 }
@@ -84,7 +87,9 @@ export interface FraudEvent {
     | 'double_conversion_attempt'
     | 'bot_challenge_failed'
     | 'suspicious_withdrawal'
-    | 'manual_flag';
+    | 'manual_flag'
+    | 'profanity_username_ban'
+    | 'admin_ban';
   severity: 'low' | 'medium' | 'high' | 'critical';
   details: string;
   resolved: boolean;
@@ -99,7 +104,8 @@ export interface EmailNotification {
     | 'conversion_confirmed'
     | 'withdrawal_requested'
     | 'withdrawal_paid'
-    | 'withdrawal_rejected';
+    | 'withdrawal_rejected'
+    | 'streak_bonus_credited';
   subject: string;
   summary: string;
   deliveryStatus: 'sent_smtp' | 'logged_in_app' | 'failed';
@@ -121,6 +127,28 @@ export interface EnterpriseIntegration {
   updatedAt: unknown;
 }
 
+export interface LeaderboardEntry {
+  uid: string;
+  displayName: string;
+  photoURL: string;
+  brlBalanceCents: number;
+  pointsBalance: number;
+  gamesPlayed: number;
+  status: AccountStatus;
+  updatedAt: unknown;
+}
+
+export interface DailyCheckin {
+  checkinId: string;
+  userId: string;
+  checkinDate: string;
+  pointsAwarded: number;
+  weekTotalAfter: number;
+  streakDay?: number;
+  brlBonusCents?: number;
+  createdAt: unknown;
+}
+
 export const GAME_LABELS: Record<GameCategory, string> = {
   tic_tac_toe: 'Jogo da Velha',
   dot_link: 'Dot Link',
@@ -133,3 +161,5 @@ export const ADMIN_BOOTSTRAP_EMAIL = 'anthonysamuel61500@gmail.com';
 export const POINTS_PER_TEN_CENTS = 1000;
 export const CENTS_PER_BLOCK = 10;
 export const MIN_PIX_WITHDRAWAL_CENTS = 500;
+export const STREAK_TARGET_DAYS = 30;
+export const STREAK_REWARD_CENTS = 1000;

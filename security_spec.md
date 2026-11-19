@@ -9,6 +9,10 @@
 6. **PII Isolation**: User email, Pix key, and device fingerprint live in `/users/{userId}/private/info` and are readable only by `isOwner(userId)` or `isAdmin()`.
 7. **Admin Bootstrapping & Protection**: Only verified bootstrapped admin (`anthonysamuel61500@gmail.com` with `email_verified == true`) or existing `/admins/{uid}` documents hold admin rights. Users cannot write to `/admins` or `/integrations`.
 8. **Score Cap Anti-Fraud**: A single `GameSession` cannot award more than 500 points (`scoreEarned >= 0 && scoreEarned <= 500`) and must have `durationMs >= 3000`.
+9. **Leaderboard Integrity (`getAfter`)**: `/leaderboard/{userId}` contains zero PII and requires `getAfter()` atomic balance parity with `/users/{userId}` so players cannot forge higher balances on the global ranking.
+10. **Daily Check-in Lock, Streak Reset & 30-Day R$ 10,00 Bonus**: Users may claim at most one `/dailyCheckins/chk_{uid}_{yyyy_mm_dd}` per server UTC date (`!exists` + `existsAfter` + `getAfter` points and BRL bonus parity on `/users/{uid}`), bounded strictly to `120 <= pointsAwarded <= 200` (1,000–1,200 pts/week). `streakDay` advances only when yesterday's check-in (`chk_{uid}_{yesterday_utc}`) exists, otherwise resetting to `1`; only `streakDay == 30` may credit `brlBonusCents == 1000` (R$ 10,00).
+11. **Immediate Anti-Profanity Suspension**: Users may only transition their own account to `status: 'suspended'` with `riskScore: 100` (never from `'suspended'` back to `'active'`), locking out all rewards and payouts while preserving admin reactivation control.
+12. **Admin-Only Ban Reason & Explanation**: Only `isAdmin()` may set or clear `banReason`, `banExplanation`, and `bannedBy` on `/users/{userId}` and emit `'admin_ban'` audit entries in `/fraudLogs`. Regular users cannot include or mutate ban metadata.
 
 ## 2. The "Dirty Dozen" Adversarial Payloads (Must All Return PERMISSION_DENIED)
 1. **Unverified Email Spoof**: Attacker signs in with `email_verified: false` claiming admin email and tries to read `/withdrawals`.

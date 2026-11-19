@@ -47,19 +47,25 @@ export async function verifyGameSessionWithServer(params: {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...params, nonce }),
     });
-    if (!res.ok) {
-      throw new Error('Falha na verificação antifraude');
+    const contentType = res.headers.get('content-type') || '';
+    if (!res.ok || !contentType.includes('application/json')) {
+      throw new Error('Static host mode');
     }
     return await res.json();
   } catch {
     const fallbackHash = await sha256Hex(`${params.userId}|${params.gameCategory}|${params.scoreEarned}|${params.durationMs}|${nonce}`);
     const clampedScore = Math.max(0, Math.min(500, Math.round(params.scoreEarned)));
     const isTooFast = params.durationMs < 3500;
+    const isNoMoves = params.movesCount < 1;
     return {
-      verificationStatus: isTooFast ? 'flagged' : 'verified',
-      fraudReason: isTooFast ? 'Duração mínima não atingida.' : '',
-      riskDelta: isTooFast ? 20 : 0,
-      verifiedScore: clampedScore,
+      verificationStatus: isNoMoves ? 'rejected' : isTooFast ? 'flagged' : 'verified',
+      fraudReason: isNoMoves
+        ? 'Nenhuma jogada válida registrada.'
+        : isTooFast
+          ? 'Duração mínima não atingida.'
+          : '',
+      riskDelta: isNoMoves ? 40 : isTooFast ? 20 : 0,
+      verifiedScore: isNoMoves ? 0 : clampedScore,
       integrityHash: fallbackHash,
     };
   }

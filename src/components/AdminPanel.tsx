@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import {
   collection,
+  deleteDoc,
   doc,
   getDoc,
   onSnapshot,
@@ -12,6 +13,7 @@ import {
   updateDoc,
 } from 'firebase/firestore';
 import {
+  Ban,
   CheckCircle2,
   Copy,
   KeyRound,
@@ -21,6 +23,7 @@ import {
   ShieldCheck,
   Users,
   Webhook,
+  X,
   XCircle,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
@@ -53,6 +56,13 @@ export const AdminPanel: React.FC = () => {
   const [userSearch, setUserSearch] = useState('');
   const [actionMsg, setActionMsg] = useState<string | null>(null);
   const [txIds, setTxIds] = useState<Record<string, string>>({});
+
+  // Ban modal state
+  const [banTarget, setBanTarget] = useState<UserAccount | null>(null);
+  const [banReason, setBanReason] = useState('');
+  const [banExplanation, setBanExplanation] = useState('');
+  const [banError, setBanError] = useState<string | null>(null);
+  const [banSubmitting, setBanSubmitting] = useState(false);
 
   // Enterprise API form state
   const [apiName, setApiName] = useState('');
@@ -172,10 +182,10 @@ export const AdminPanel: React.FC = () => {
 
   if (!isAdmin) {
     return (
-      <div className="bg-white border border-slate-200 rounded-xl p-10 text-center max-w-lg mx-auto">
-        <ShieldAlert className="w-8 h-8 text-red-600 mx-auto mb-3" />
-        <h2 className="text-lg font-bold text-slate-900">Acesso Restrito ao Administrador</h2>
-        <p className="text-sm text-slate-600 mt-1">
+      <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-10 text-center max-w-lg mx-auto">
+        <ShieldAlert className="w-8 h-8 text-red-600 dark:text-red-400 mx-auto mb-3" />
+        <h2 className="text-lg font-bold text-slate-900 dark:text-zinc-50">Acesso Restrito ao Administrador</h2>
+        <p className="text-sm text-slate-600 dark:text-zinc-400 mt-1">
           Apenas contas administrativas autorizadas podem gerenciar usuários, pagamentos Pix e integrações empresariais.
         </p>
       </div>
@@ -204,7 +214,8 @@ export const AdminPanel: React.FC = () => {
           pixKey: w.pixKey,
         }),
       });
-      if (res.ok) {
+      const contentType = res.headers.get('content-type') || '';
+      if (res.ok && contentType.includes('application/json')) {
         const d = await res.json();
         if (d.deliveryStatus === 'sent_smtp') deliveryStatus = 'sent_smtp';
       }
@@ -263,6 +274,18 @@ export const AdminPanel: React.FC = () => {
             brlBalanceCents: uData.brlBalanceCents + w.amountCents,
             updatedAt: serverTimestamp(),
           });
+          if (uData.status === 'active') {
+            tx.set(doc(db, 'leaderboard', w.userId), {
+              uid: uData.uid,
+              displayName: uData.displayName,
+              photoURL: uData.photoURL,
+              brlBalanceCents: uData.brlBalanceCents + w.amountCents,
+              pointsBalance: uData.pointsBalance,
+              gamesPlayed: uData.gamesPlayed,
+              status: uData.status,
+              updatedAt: serverTimestamp(),
+            });
+          }
         }
       });
 
@@ -288,14 +311,106 @@ export const AdminPanel: React.FC = () => {
     }
   };
 
-  const toggleUserStatus = async (u: UserAccount, nextStatus: 'active' | 'suspended') => {
+  const BAN_REASON_SUGGESTIONS = [
+    'Uso de bot / automação',
+    'Fraude em saque Pix',
+    'Múltiplas contas',
+    'Manipulação de pontuação',
+    'Linguagem ofensiva / Assédio',
+  ];
+
+  const openBanModal = (u: UserAccount) => {
+    setBanTarget(u);
+    setBanReason('');
+    setBanExplanation('');
+    setBanError(null);
+  };
+
+  const closeBanModal = () => {
+    if (banSubmitting) return;
+    setBanTarget(null);
+    setBanReason('');
+    setBanExplanation('');
+    setBanError(null);
+  };
+
+  const confirmBanUser = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!banTarget) return;
+
+    const trimmedReason = banReason.trim().slice(0, 120);
+    const trimmedExplanation = banExplanation.trim().slice(0, 400);
+
+    if (trimmedReason.length < 3) {
+      setBanError('Informe o motivo do banimento (mínimo 3 caracteres).');
+      return;
+    }
+    if (trimmedExplanation.length < 5) {
+      setBanError('Explique o porquê do banimento com pelo menos 5 caracteres.');
+      return;
+    }
+
+    setBanError(null);
+    setBanSubmitting(true);
     try {
-      await updateDoc(doc(db, 'users', u.uid), {
-        status: nextStatus,
-        riskScore: nextStatus === 'active' ? 0 : Math.max(u.riskScore, 80),
+      const adminActor = (firebaseUser?.email || firebaseUser?.uid || 'admin').slice(0, 160);
+      await updateDoc(doc(db, 'users', banTarget.uid), {
+        status: 'suspended',
+        riskScore: 100,
+        banReason: trimmedReason,
+        banExplanation: trimmedExplanation,
+        bannedBy: adminActor,
         updatedAt: serverTimestamp(),
       });
-      setActionMsg(`Usuário ${u.displayName} atualizado para "${nextStatus}".`);
+
+      await deleteDoc(doc(db, 'leaderboard', banTarget.uid)).catch(() => {});
+
+      const logId = generateId('ban');
+      await setDoc(doc(db, 'fraudLogs', logId), {
+        logId,
+        userId: banTarget.uid,
+        eventType: 'admin_ban',
+        severity: 'critical',
+        details: `Banimento (${trimmedReason}): ${trimmedExplanation}`.slice(0, 400),
+        resolved: false,
+        createdAt: serverTimestamp(),
+      });
+
+      setActionMsg(
+        `Usuário ${banTarget.displayName} banido. Motivo: "${trimmedReason}".`
+      );
+      setBanTarget(null);
+      setBanReason('');
+      setBanExplanation('');
+    } catch (err) {
+      setBanError(err instanceof Error ? err.message : 'Erro ao aplicar banimento.');
+      handleFirestoreError(err, OperationType.UPDATE, `users/${banTarget.uid}`);
+    } finally {
+      setBanSubmitting(false);
+    }
+  };
+
+  const reactivateUser = async (u: UserAccount) => {
+    try {
+      await updateDoc(doc(db, 'users', u.uid), {
+        status: 'active',
+        riskScore: 0,
+        banReason: '',
+        banExplanation: '',
+        bannedBy: '',
+        updatedAt: serverTimestamp(),
+      });
+      await setDoc(doc(db, 'leaderboard', u.uid), {
+        uid: u.uid,
+        displayName: u.displayName,
+        photoURL: u.photoURL,
+        brlBalanceCents: u.brlBalanceCents,
+        pointsBalance: u.pointsBalance,
+        gamesPlayed: u.gamesPlayed,
+        status: 'active',
+        updatedAt: serverTimestamp(),
+      });
+      setActionMsg(`Usuário ${u.displayName} reativado com sucesso.`);
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `users/${u.uid}`);
     }
@@ -417,13 +532,13 @@ export const AdminPanel: React.FC = () => {
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h2 className="text-xl font-bold text-slate-900">Painel Administrativo</h2>
-          <p className="text-sm text-slate-500">
+          <h2 className="text-xl font-bold text-slate-900 dark:text-zinc-50">Painel Administrativo</h2>
+          <p className="text-sm text-slate-500 dark:text-zinc-400">
             Gestão de usuários, liquidação de saques Pix, auditoria antifraude e API empresarial
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-1 p-1 bg-slate-100 rounded-lg">
+        <div className="flex flex-wrap items-center gap-1 p-1 bg-slate-100 dark:bg-zinc-900 border border-transparent dark:border-zinc-800 rounded-lg">
           {(
             [
               { id: 'payouts', label: 'Pagamentos Pix', Icon: Landmark },
@@ -437,7 +552,9 @@ export const AdminPanel: React.FC = () => {
               type="button"
               onClick={() => setTab(id)}
               className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-md transition-colors whitespace-nowrap cursor-pointer ${
-                tab === id ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'
+                tab === id
+                  ? 'bg-white dark:bg-zinc-800 text-slate-900 dark:text-zinc-50 shadow-sm'
+                  : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-zinc-100'
               }`}
             >
               <Icon className="w-3.5 h-3.5" />
@@ -448,7 +565,7 @@ export const AdminPanel: React.FC = () => {
       </div>
 
       {actionMsg && (
-        <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-medium px-4 py-3 rounded-lg flex items-center justify-between">
+        <div className="bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300 text-xs font-medium px-4 py-3 rounded-lg flex items-center justify-between">
           <span>{actionMsg}</span>
           <button type="button" onClick={() => setActionMsg(null)} className="underline cursor-pointer">
             Fechar
@@ -458,25 +575,25 @@ export const AdminPanel: React.FC = () => {
 
       {/* Summary Strip */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-white border border-slate-200 rounded-xl p-4">
-          <div className="text-xs text-slate-500">Total de Usuários</div>
-          <div className="text-2xl font-mono font-bold text-slate-900 tabular-nums mt-1">{users.length}</div>
+        <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-4">
+          <div className="text-xs text-slate-500 dark:text-zinc-400">Total de Usuários</div>
+          <div className="text-2xl font-mono font-bold text-slate-900 dark:text-zinc-50 tabular-nums mt-1">{users.length}</div>
         </div>
-        <div className="bg-white border border-slate-200 rounded-xl p-4">
-          <div className="text-xs text-slate-500">Fila Pix Pendente</div>
-          <div className="text-2xl font-mono font-bold text-amber-600 tabular-nums mt-1">
+        <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-4">
+          <div className="text-xs text-slate-500 dark:text-zinc-400">Fila Pix Pendente</div>
+          <div className="text-2xl font-mono font-bold text-amber-600 dark:text-amber-400 tabular-nums mt-1">
             {formatBRL(pendingTotalCents)}
           </div>
         </div>
-        <div className="bg-white border border-slate-200 rounded-xl p-4">
-          <div className="text-xs text-slate-500">Alertas Antifraude Abertos</div>
-          <div className="text-2xl font-mono font-bold text-red-600 tabular-nums mt-1">
+        <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-4">
+          <div className="text-xs text-slate-500 dark:text-zinc-400">Alertas Antifraude Abertos</div>
+          <div className="text-2xl font-mono font-bold text-red-600 dark:text-red-400 tabular-nums mt-1">
             {fraudLogs.filter((f) => !f.resolved).length}
           </div>
         </div>
-        <div className="bg-white border border-slate-200 rounded-xl p-4">
-          <div className="text-xs text-slate-500">Integrações Ativas</div>
-          <div className="text-2xl font-mono font-bold text-slate-900 tabular-nums mt-1">
+        <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-4">
+          <div className="text-xs text-slate-500 dark:text-zinc-400">Integrações Ativas</div>
+          <div className="text-2xl font-mono font-bold text-slate-900 dark:text-zinc-50 tabular-nums mt-1">
             {integrations.filter((i) => i.active).length}
           </div>
         </div>
@@ -484,17 +601,19 @@ export const AdminPanel: React.FC = () => {
 
       {/* TAB 1: PAYOUTS */}
       {tab === 'payouts' && (
-        <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-4">
+        <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-6 space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <h3 className="text-base font-bold text-slate-900">Solicitações de Saque Pix</h3>
-            <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg">
+            <h3 className="text-base font-bold text-slate-900 dark:text-zinc-50">Solicitações de Saque Pix</h3>
+            <div className="flex items-center gap-1 p-1 bg-slate-100 dark:bg-zinc-950 border border-transparent dark:border-zinc-800 rounded-lg">
               {(['all', 'pending', 'approved', 'paid', 'rejected'] as const).map((st) => (
                 <button
                   key={st}
                   type="button"
                   onClick={() => setPayoutFilter(st)}
                   className={`px-3 py-1 text-xs font-medium rounded-md cursor-pointer ${
-                    payoutFilter === st ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600'
+                    payoutFilter === st
+                      ? 'bg-white dark:bg-zinc-800 text-slate-900 dark:text-zinc-50 shadow-sm'
+                      : 'text-slate-600 dark:text-zinc-400'
                   }`}
                 >
                   {st === 'all'
@@ -514,7 +633,7 @@ export const AdminPanel: React.FC = () => {
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs">
               <thead>
-                <tr className="border-b border-slate-200 text-slate-500">
+                <tr className="border-b border-slate-200 dark:border-zinc-800 text-slate-500 dark:text-zinc-400">
                   <th className="py-2 font-medium">Usuário</th>
                   <th className="py-2 font-medium">Chave Pix</th>
                   <th className="py-2 font-medium text-right">Valor</th>
@@ -523,18 +642,18 @@ export const AdminPanel: React.FC = () => {
                   <th className="py-2 font-medium text-right">Ações</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100">
+              <tbody className="divide-y divide-slate-100 dark:divide-zinc-800">
                 {filteredWithdrawals.map((w) => (
                   <tr key={w.withdrawalId} className="min-h-[44px]">
                     <td className="py-2.5">
-                      <div className="font-semibold text-slate-900">{w.userDisplayName}</div>
-                      <div className="text-[11px] font-mono text-slate-500">{w.requestedDate}</div>
+                      <div className="font-semibold text-slate-900 dark:text-zinc-100">{w.userDisplayName}</div>
+                      <div className="text-[11px] font-mono text-slate-500 dark:text-zinc-400">{w.requestedDate}</div>
                     </td>
-                    <td className="py-2.5 font-mono text-slate-700">
-                      <span className="text-slate-400 mr-1">{w.pixKeyType.toUpperCase()}:</span>
+                    <td className="py-2.5 font-mono text-slate-700 dark:text-zinc-300">
+                      <span className="text-slate-400 dark:text-zinc-500 mr-1">{w.pixKeyType.toUpperCase()}:</span>
                       {w.pixKey}
                     </td>
-                    <td className="py-2.5 font-mono tabular-nums text-right font-bold text-slate-900">
+                    <td className="py-2.5 font-mono tabular-nums text-right font-bold text-slate-900 dark:text-zinc-100">
                       {formatBRL(w.amountCents)}
                     </td>
                     <td className="py-2.5">
@@ -546,17 +665,17 @@ export const AdminPanel: React.FC = () => {
                             setTxIds((prev) => ({ ...prev, [w.withdrawalId]: e.target.value }))
                           }
                           placeholder="E2E Pix ID (opcional)"
-                          className="px-2 py-1 text-xs font-mono border border-slate-300 rounded w-36"
+                          className="px-2 py-1 text-xs font-mono bg-white dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded w-36"
                         />
                       ) : (
-                        <span className="font-mono text-slate-600">{w.pixTransactionId || '-'}</span>
+                        <span className="font-mono text-slate-600 dark:text-zinc-400">{w.pixTransactionId || '-'}</span>
                       )}
                     </td>
                     <td className="py-2.5 font-medium">
-                      {w.status === 'paid' && <span className="text-emerald-700">Pago</span>}
-                      {w.status === 'pending' && <span className="text-amber-700">Pendente</span>}
-                      {w.status === 'approved' && <span className="text-sky-700">Aprovado</span>}
-                      {w.status === 'rejected' && <span className="text-red-700">Recusado</span>}
+                      {w.status === 'paid' && <span className="text-emerald-700 dark:text-emerald-400">Pago</span>}
+                      {w.status === 'pending' && <span className="text-amber-700 dark:text-amber-400">Pendente</span>}
+                      {w.status === 'approved' && <span className="text-sky-700 dark:text-sky-400">Aprovado</span>}
+                      {w.status === 'rejected' && <span className="text-red-700 dark:text-red-400">Recusado</span>}
                     </td>
                     <td className="py-2.5 text-right space-x-1.5 whitespace-nowrap">
                       {(w.status === 'pending' || w.status === 'approved') && (
@@ -565,7 +684,7 @@ export const AdminPanel: React.FC = () => {
                             <button
                               type="button"
                               onClick={() => handleWithdrawalDecision(w, 'approved')}
-                              className="px-2.5 py-1 bg-sky-50 text-sky-700 border border-sky-200 rounded font-medium hover:bg-sky-100 cursor-pointer"
+                              className="px-2.5 py-1 bg-sky-50 dark:bg-sky-950/50 text-sky-700 dark:text-sky-300 border border-sky-200 dark:border-sky-800 rounded font-medium hover:bg-sky-100 dark:hover:bg-sky-900/60 cursor-pointer"
                             >
                               Aprovar
                             </button>
@@ -581,7 +700,7 @@ export const AdminPanel: React.FC = () => {
                           <button
                             type="button"
                             onClick={() => handleWithdrawalDecision(w, 'rejected')}
-                            className="inline-flex items-center gap-1 px-2.5 py-1 bg-red-50 text-red-700 border border-red-200 rounded font-medium hover:bg-red-100 cursor-pointer"
+                            className="inline-flex items-center gap-1 px-2.5 py-1 bg-red-50 dark:bg-red-950/50 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800 rounded font-medium hover:bg-red-100 dark:hover:bg-red-900/60 cursor-pointer"
                           >
                             <XCircle className="w-3 h-3" />
                             Estornar
@@ -593,7 +712,7 @@ export const AdminPanel: React.FC = () => {
                 ))}
                 {filteredWithdrawals.length === 0 && (
                   <tr>
-                    <td colSpan={6} className="py-6 text-center text-slate-500">
+                    <td colSpan={6} className="py-6 text-center text-slate-500 dark:text-zinc-400">
                       Nenhum saque Pix nesta fila.
                     </td>
                   </tr>
@@ -606,22 +725,22 @@ export const AdminPanel: React.FC = () => {
 
       {/* TAB 2: USERS */}
       {tab === 'users' && (
-        <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-4">
+        <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-6 space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <h3 className="text-base font-bold text-slate-900">Controle de Usuários</h3>
+            <h3 className="text-base font-bold text-slate-900 dark:text-zinc-50">Controle de Usuários</h3>
             <input
               type="text"
               value={userSearch}
               onChange={(e) => setUserSearch(e.target.value)}
               placeholder="Buscar por nome, e-mail ou UID..."
-              className="px-3 py-1.5 text-xs border border-slate-300 rounded-lg w-64"
+              className="px-3 py-1.5 text-xs bg-white dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-lg w-64"
             />
           </div>
 
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs">
               <thead>
-                <tr className="border-b border-slate-200 text-slate-500">
+                <tr className="border-b border-slate-200 dark:border-zinc-800 text-slate-500 dark:text-zinc-400">
                   <th className="py-2 font-medium">Usuário</th>
                   <th className="py-2 font-medium text-right">Pontos</th>
                   <th className="py-2 font-medium text-right">Saldo R$</th>
@@ -631,40 +750,55 @@ export const AdminPanel: React.FC = () => {
                   <th className="py-2 font-medium text-right">Controles</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100">
+              <tbody className="divide-y divide-slate-100 dark:divide-zinc-800">
                 {filteredUsers.map((u) => (
-                  <tr key={u.uid} className="h-12">
-                    <td className="py-2">
-                      <div className="font-semibold text-slate-900">{u.displayName}</div>
-                      <div className="text-[11px] font-mono text-slate-500">
+                  <tr key={u.uid} className="min-h-[48px]">
+                    <td className="py-2.5 pr-3">
+                      <div className="font-semibold text-slate-900 dark:text-zinc-100">{u.displayName}</div>
+                      <div className="text-[11px] font-mono text-slate-500 dark:text-zinc-400">
                         {privateMap[u.uid]?.email || u.uid}
                       </div>
+                      {u.status === 'suspended' && (u.banReason || u.banExplanation) && (
+                        <div className="mt-1 text-[11px] text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/70 rounded px-2 py-1 max-w-md">
+                          {u.banReason && (
+                            <div>
+                              <span className="font-semibold">Motivo:</span> {u.banReason}
+                            </div>
+                          )}
+                          {u.banExplanation && (
+                            <div className="text-red-700/90 dark:text-red-300/90">
+                              <span className="font-semibold">Por quê:</span> {u.banExplanation}
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </td>
-                    <td className="py-2 font-mono tabular-nums text-right">{formatPoints(u.pointsBalance)}</td>
-                    <td className="py-2 font-mono tabular-nums text-right text-emerald-700 font-semibold">
+                    <td className="py-2.5 font-mono tabular-nums text-right text-slate-700 dark:text-zinc-300">{formatPoints(u.pointsBalance)}</td>
+                    <td className="py-2.5 font-mono tabular-nums text-right text-emerald-700 dark:text-emerald-400 font-semibold">
                       {formatBRL(u.brlBalanceCents)}
                     </td>
-                    <td className="py-2 font-mono tabular-nums text-right">{formatBRL(u.totalWithdrawnCents)}</td>
-                    <td className="py-2 font-mono tabular-nums text-right">{u.riskScore}/100</td>
-                    <td className="py-2 font-medium">
-                      <span className={u.status === 'active' ? 'text-emerald-700' : 'text-red-700'}>
-                        {u.status === 'active' ? 'Ativo' : 'Suspenso'}
+                    <td className="py-2.5 font-mono tabular-nums text-right text-slate-700 dark:text-zinc-300">{formatBRL(u.totalWithdrawnCents)}</td>
+                    <td className="py-2.5 font-mono tabular-nums text-right text-slate-700 dark:text-zinc-300">{u.riskScore}/100</td>
+                    <td className="py-2.5 font-medium">
+                      <span className={u.status === 'active' ? 'text-emerald-700 dark:text-emerald-400' : 'text-red-700 dark:text-red-400'}>
+                        {u.status === 'active' ? 'Ativo' : 'Banido'}
                       </span>
                     </td>
-                    <td className="py-2 text-right space-x-1.5 whitespace-nowrap">
+                    <td className="py-2.5 text-right space-x-1.5 whitespace-nowrap">
                       {u.status === 'active' ? (
                         <button
                           type="button"
-                          onClick={() => toggleUserStatus(u, 'suspended')}
-                          className="px-2.5 py-1 bg-red-50 text-red-700 border border-red-200 rounded font-medium hover:bg-red-100 cursor-pointer"
+                          onClick={() => openBanModal(u)}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 bg-red-50 dark:bg-red-950/50 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800 rounded font-medium hover:bg-red-100 dark:hover:bg-red-900/60 cursor-pointer"
                         >
-                          Suspender
+                          <Ban className="w-3 h-3" />
+                          Banir
                         </button>
                       ) : (
                         <button
                           type="button"
-                          onClick={() => toggleUserStatus(u, 'active')}
-                          className="px-2.5 py-1 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded font-medium hover:bg-emerald-100 cursor-pointer"
+                          onClick={() => reactivateUser(u)}
+                          className="px-2.5 py-1 bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 rounded font-medium hover:bg-emerald-100 dark:hover:bg-emerald-900/60 cursor-pointer"
                         >
                           Reativar
                         </button>
@@ -672,7 +806,7 @@ export const AdminPanel: React.FC = () => {
                       <button
                         type="button"
                         onClick={() => promoteAdmin(u)}
-                        className="px-2.5 py-1 bg-slate-100 text-slate-800 border border-slate-200 rounded font-medium hover:bg-slate-200 cursor-pointer"
+                        className="px-2.5 py-1 bg-slate-100 dark:bg-zinc-800 text-slate-800 dark:text-zinc-200 border border-slate-200 dark:border-zinc-700 rounded font-medium hover:bg-slate-200 dark:hover:bg-zinc-700 cursor-pointer"
                       >
                         Tornar Admin
                       </button>
@@ -688,30 +822,30 @@ export const AdminPanel: React.FC = () => {
       {/* TAB 3: ANTIFRAUD */}
       {tab === 'antifraud' && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-4">
-            <h3 className="text-base font-bold text-slate-900">Eventos Antifraude</h3>
+          <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-6 space-y-4">
+            <h3 className="text-base font-bold text-slate-900 dark:text-zinc-50">Eventos Antifraude</h3>
             {fraudLogs.length === 0 ? (
-              <p className="text-sm text-slate-500 py-6 text-center">Nenhum incidente antifraude registrado.</p>
+              <p className="text-sm text-slate-500 dark:text-zinc-400 py-6 text-center">Nenhum incidente antifraude registrado.</p>
             ) : (
-              <div className="divide-y divide-slate-100">
+              <div className="divide-y divide-slate-100 dark:divide-zinc-800">
                 {fraudLogs.slice(0, 20).map((f) => (
                   <div key={f.logId} className="py-3 flex items-start justify-between gap-3">
                     <div className="space-y-1">
-                      <div className="text-xs font-mono text-slate-500">
+                      <div className="text-xs font-mono text-slate-500 dark:text-zinc-400">
                         {f.eventType} · severidade {f.severity} · {f.userId.slice(0, 10)}
                       </div>
-                      <div className="text-xs font-medium text-slate-900">{f.details}</div>
+                      <div className="text-xs font-medium text-slate-900 dark:text-zinc-100">{f.details}</div>
                     </div>
                     {!f.resolved ? (
                       <button
                         type="button"
                         onClick={() => resolveFraudLog(f.logId)}
-                        className="px-2.5 py-1 text-xs bg-slate-900 text-white rounded hover:bg-slate-800 shrink-0 cursor-pointer"
+                        className="px-2.5 py-1 text-xs bg-slate-900 dark:bg-zinc-800 text-white rounded hover:bg-slate-800 dark:hover:bg-zinc-700 shrink-0 cursor-pointer"
                       >
                         Resolver
                       </button>
                     ) : (
-                      <span className="text-xs text-emerald-700 font-medium shrink-0">Resolvido</span>
+                      <span className="text-xs text-emerald-700 dark:text-emerald-400 font-medium shrink-0">Resolvido</span>
                     )}
                   </div>
                 ))}
@@ -719,20 +853,20 @@ export const AdminPanel: React.FC = () => {
             )}
           </div>
 
-          <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-4">
-            <h3 className="text-base font-bold text-slate-900">Partidas Sinalizadas</h3>
+          <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-6 space-y-4">
+            <h3 className="text-base font-bold text-slate-900 dark:text-zinc-50">Partidas Sinalizadas</h3>
             {flaggedSessions.length === 0 ? (
-              <p className="text-sm text-slate-500 py-6 text-center">Todas as partidas passaram na verificação de integridade.</p>
+              <p className="text-sm text-slate-500 dark:text-zinc-400 py-6 text-center">Todas as partidas passaram na verificação de integridade.</p>
             ) : (
-              <div className="divide-y divide-slate-100">
+              <div className="divide-y divide-slate-100 dark:divide-zinc-800">
                 {flaggedSessions.slice(0, 15).map((s) => (
                   <div key={s.sessionId} className="py-3 space-y-1">
                     <div className="flex items-center justify-between text-xs">
-                      <span className="font-semibold text-slate-900">{GAME_LABELS[s.gameCategory]}</span>
-                      <span className="font-mono text-amber-700">{s.verificationStatus}</span>
+                      <span className="font-semibold text-slate-900 dark:text-zinc-100">{GAME_LABELS[s.gameCategory]}</span>
+                      <span className="font-mono text-amber-700 dark:text-amber-400">{s.verificationStatus}</span>
                     </div>
-                    <div className="text-xs text-slate-600">{s.fraudReason}</div>
-                    <div className="text-[11px] font-mono text-slate-400">
+                    <div className="text-xs text-slate-600 dark:text-zinc-400">{s.fraudReason}</div>
+                    <div className="text-[11px] font-mono text-slate-400 dark:text-zinc-500">
                       Usuário: {s.userId} · {(s.durationMs / 1000).toFixed(1)}s
                     </div>
                   </div>
@@ -746,31 +880,31 @@ export const AdminPanel: React.FC = () => {
       {/* TAB 4: ENTERPRISE API & WEBHOOKS */}
       {tab === 'api' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          <div className="lg:col-span-5 bg-white border border-slate-200 rounded-xl p-6 space-y-4">
+          <div className="lg:col-span-5 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-6 space-y-4">
             <div className="flex items-center gap-2">
-              <KeyRound className="w-5 h-5 text-slate-700" />
-              <h3 className="text-base font-bold text-slate-900">Nova Integração ERP / Financeira</h3>
+              <KeyRound className="w-5 h-5 text-slate-700 dark:text-zinc-300" />
+              <h3 className="text-base font-bold text-slate-900 dark:text-zinc-50">Nova Integração ERP / Financeira</h3>
             </div>
 
             <form onSubmit={handleCreateIntegration} className="space-y-3">
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">Nome da Ferramenta / ERP</label>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300 mb-1">Nome da Ferramenta / ERP</label>
                 <input
                   type="text"
                   required
                   value={apiName}
                   onChange={(e) => setApiName(e.target.value)}
                   placeholder="Ex: Conta Azul / Omie / Power BI"
-                  className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg"
+                  className="w-full px-3 py-2 text-sm bg-white dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-lg"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">Tipo de Integração</label>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300 mb-1">Tipo de Integração</label>
                 <select
                   value={providerType}
                   onChange={(e) => setProviderType(e.target.value as EnterpriseIntegration['providerType'])}
-                  className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white"
+                  className="w-full px-3 py-2 text-sm border border-slate-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-950 text-slate-900 dark:text-zinc-100"
                 >
                   <option value="erp_webhook">Webhook ERP Financeiro</option>
                   <option value="accounting_api">API Contábil (REST)</option>
@@ -780,35 +914,35 @@ export const AdminPanel: React.FC = () => {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">URL do Webhook (opcional)</label>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300 mb-1">URL do Webhook (opcional)</label>
                 <input
                   type="url"
                   value={endpointUrl}
                   onChange={(e) => setEndpointUrl(e.target.value)}
                   placeholder="https://sua-empresa.com/webhooks/earneasy"
-                  className="w-full px-3 py-2 text-sm font-mono border border-slate-300 rounded-lg"
+                  className="w-full px-3 py-2 text-sm font-mono bg-white dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-lg"
                 />
               </div>
 
               <button
                 type="submit"
-                className="w-full py-2.5 bg-slate-900 text-white text-xs font-semibold rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+                className="w-full py-2.5 bg-slate-900 dark:bg-emerald-600 text-white text-xs font-semibold rounded-lg hover:bg-slate-800 dark:hover:bg-emerald-500 transition-colors cursor-pointer"
               >
                 Gerar Chave de API e Salvar
               </button>
             </form>
 
             {generatedRawKey && (
-              <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 space-y-1.5">
-                <div className="text-xs font-semibold text-emerald-900">
+              <div className="bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-lg p-3 space-y-1.5">
+                <div className="text-xs font-semibold text-emerald-900 dark:text-emerald-300">
                   Chave gerada (copie agora — armazenada apenas em hash SHA-256):
                 </div>
-                <div className="flex items-center justify-between gap-2 bg-white border border-emerald-200 rounded px-2.5 py-1.5">
-                  <code className="text-xs font-mono text-slate-900 break-all">{generatedRawKey}</code>
+                <div className="flex items-center justify-between gap-2 bg-white dark:bg-zinc-950 border border-emerald-200 dark:border-emerald-800 rounded px-2.5 py-1.5">
+                  <code className="text-xs font-mono text-slate-900 dark:text-zinc-100 break-all">{generatedRawKey}</code>
                   <button
                     type="button"
                     onClick={() => navigator.clipboard.writeText(generatedRawKey)}
-                    className="p-1 text-slate-600 hover:text-slate-900 cursor-pointer"
+                    className="p-1 text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-zinc-100 cursor-pointer"
                     title="Copiar chave"
                   >
                     <Copy className="w-4 h-4" />
@@ -819,27 +953,27 @@ export const AdminPanel: React.FC = () => {
           </div>
 
           <div className="lg:col-span-7 space-y-6">
-            <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-4">
-              <h3 className="text-base font-bold text-slate-900">Integrações Registradas</h3>
+            <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-6 space-y-4">
+              <h3 className="text-base font-bold text-slate-900 dark:text-zinc-50">Integrações Registradas</h3>
               {webhookTestResult && (
-                <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-800 font-mono">
+                <div className="p-3 bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 rounded-lg text-xs text-slate-800 dark:text-zinc-200 font-mono">
                   {webhookTestResult}
                 </div>
               )}
 
               {integrations.length === 0 ? (
-                <p className="text-sm text-slate-500">Nenhuma integração cadastrada ainda.</p>
+                <p className="text-sm text-slate-500 dark:text-zinc-400">Nenhuma integração cadastrada ainda.</p>
               ) : (
-                <div className="divide-y divide-slate-100">
+                <div className="divide-y divide-slate-100 dark:divide-zinc-800">
                   {integrations.map((intg) => (
                     <div key={intg.integrationId} className="py-3 flex flex-wrap items-center justify-between gap-3">
                       <div>
-                        <div className="text-sm font-semibold text-slate-900">{intg.name}</div>
-                        <div className="text-xs font-mono text-slate-500">
+                        <div className="text-sm font-semibold text-slate-900 dark:text-zinc-100">{intg.name}</div>
+                        <div className="text-xs font-mono text-slate-500 dark:text-zinc-400">
                           Prefixo: {intg.apiKeyPrefix}... · {intg.providerType}
                         </div>
                         {intg.endpointUrl && (
-                          <div className="text-[11px] font-mono text-slate-400 truncate max-w-sm">
+                          <div className="text-[11px] font-mono text-slate-400 dark:text-zinc-500 truncate max-w-sm">
                             {intg.endpointUrl}
                           </div>
                         )}
@@ -848,7 +982,7 @@ export const AdminPanel: React.FC = () => {
                         <button
                           type="button"
                           onClick={() => handleTestWebhook(intg)}
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-slate-900 text-white rounded-lg hover:bg-slate-800 cursor-pointer"
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-slate-900 dark:bg-zinc-800 text-white rounded-lg hover:bg-slate-800 dark:hover:bg-zinc-700 cursor-pointer"
                         >
                           <Send className="w-3.5 h-3.5" />
                           Testar Webhook
@@ -860,7 +994,7 @@ export const AdminPanel: React.FC = () => {
               )}
             </div>
 
-            <div className="bg-slate-900 text-slate-100 rounded-xl p-6 space-y-3">
+            <div className="bg-slate-900 dark:bg-zinc-900 dark:border dark:border-zinc-800 text-slate-100 rounded-xl p-6 space-y-3">
               <h3 className="text-sm font-bold">Endpoints REST para Ferramentas Financeiras</h3>
               <p className="text-xs text-slate-300">
                 Autentique via cabeçalho <code className="text-emerald-400">x-api-key</code> para consumir o razão financeiro e lotes de saque Pix no seu ERP ou BI:
@@ -873,6 +1007,136 @@ GET /api/v1/payouts?status=pending
 Header: x-api-key: ee_live_sua_chave_aqui`}
               </pre>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: BANIR USUÁRIO COM MOTIVO E PORQUÊ */}
+      {banTarget && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="ban-modal-title"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-xs"
+        >
+          <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden">
+            <div className="px-6 py-4 border-b border-slate-100 dark:border-zinc-800 flex items-center justify-between gap-4">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-red-50 dark:bg-red-950/60 border border-red-200 dark:border-red-800 flex items-center justify-center text-red-600 dark:text-red-400 shrink-0">
+                  <Ban className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 id="ban-modal-title" className="text-base font-bold text-slate-900 dark:text-zinc-50">
+                    Banir Usuário
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-zinc-400">
+                    Informe o motivo e o porquê antes de confirmar o banimento.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={closeBanModal}
+                disabled={banSubmitting}
+                aria-label="Fechar modal de banimento"
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={confirmBanUser} className="p-6 space-y-4">
+              <div className="bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 rounded-xl p-3.5 text-xs space-y-1">
+                <div className="font-semibold text-slate-900 dark:text-zinc-100">
+                  {banTarget.displayName}
+                </div>
+                <div className="font-mono text-slate-500 dark:text-zinc-400">
+                  {privateMap[banTarget.uid]?.email || banTarget.uid}
+                </div>
+                <div className="text-slate-600 dark:text-zinc-400 pt-1">
+                  Saldo: <span className="font-mono font-semibold">{formatBRL(banTarget.brlBalanceCents)}</span> · Pontos:{' '}
+                  <span className="font-mono font-semibold">{formatPoints(banTarget.pointsBalance)}</span> · Risco:{' '}
+                  <span className="font-mono font-semibold">{banTarget.riskScore}/100</span>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300">
+                  Motivo do banimento
+                </label>
+                <div className="flex flex-wrap gap-1.5">
+                  {BAN_REASON_SUGGESTIONS.map((suggestion) => (
+                    <button
+                      key={suggestion}
+                      type="button"
+                      onClick={() => setBanReason(suggestion)}
+                      className={`px-2.5 py-1 text-[11px] font-medium rounded-lg border transition-colors cursor-pointer ${
+                        banReason === suggestion
+                          ? 'bg-red-600 text-white border-red-600'
+                          : 'bg-slate-50 dark:bg-zinc-950 text-slate-700 dark:text-zinc-300 border-slate-200 dark:border-zinc-800 hover:border-red-300 dark:hover:border-red-700'
+                      }`}
+                    >
+                      {suggestion}
+                    </button>
+                  ))}
+                </div>
+                <input
+                  type="text"
+                  required
+                  minLength={3}
+                  maxLength={120}
+                  value={banReason}
+                  onChange={(e) => setBanReason(e.target.value)}
+                  placeholder="Ex: Uso de bot / automação nos jogos"
+                  className="w-full px-3 py-2 text-sm bg-white dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300">
+                  Por quê? (Explicação detalhada)
+                </label>
+                <textarea
+                  required
+                  minLength={5}
+                  maxLength={400}
+                  rows={3}
+                  value={banExplanation}
+                  onChange={(e) => setBanExplanation(e.target.value)}
+                  placeholder="Descreva o porquê do banimento (ex: Detectamos múltiplas partidas abaixo de 3 segundos e tentativa de fraude no Pix)..."
+                  className="w-full px-3 py-2 text-sm bg-white dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 resize-none"
+                />
+                <div className="flex items-center justify-between text-[11px] text-slate-500 dark:text-zinc-400">
+                  <span>Este motivo e explicação ficarão registrados e visíveis para o usuário banido.</span>
+                  <span className="font-mono tabular-nums">{banExplanation.length}/400</span>
+                </div>
+              </div>
+
+              {banError && (
+                <div className="p-3 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 rounded-lg text-xs text-red-700 dark:text-red-300">
+                  {banError}
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-zinc-800">
+                <button
+                  type="button"
+                  onClick={closeBanModal}
+                  disabled={banSubmitting}
+                  className="px-4 py-2 text-xs font-semibold border border-slate-300 dark:border-zinc-700 text-slate-700 dark:text-zinc-200 rounded-lg hover:bg-slate-50 dark:hover:bg-zinc-800 cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={banSubmitting}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold bg-red-600 hover:bg-red-700 disabled:opacity-60 text-white rounded-lg transition-colors cursor-pointer"
+                >
+                  <Ban className="w-3.5 h-3.5" />
+                  {banSubmitting ? 'Banindo...' : 'Confirmar Banimento'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

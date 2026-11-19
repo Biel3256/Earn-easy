@@ -16,6 +16,12 @@ export function getTodayUtcDate(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+export function getUtcDateDaysAgo(daysAgo: number): string {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() - daysAgo);
+  return d.toISOString().slice(0, 10);
+}
+
 export function isValidCPF(raw: string): boolean {
   const digits = raw.replace(/\D/g, '');
   if (digits.length !== 11) return false;

@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
 
 @layer base {
   :root {
@@ -11,6 +12,11 @@
     font-family: var(--font-sans);
     background-color: #f8fafc;
     color: #0f172a;
+  }
+
+  html.dark body {
+    background-color: #000000;
+    color: #f4f4f5;
   }
 
   h1, h2, h3, h4, .font-display {

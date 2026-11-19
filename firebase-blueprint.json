@@ -16,6 +16,9 @@
         "status": { "type": "string", "enum": ["active", "suspended", "flagged"] },
         "riskScore": { "type": "number" },
         "gamesPlayed": { "type": "number" },
+        "banReason": { "type": "string", "maxLength": 120 },
+        "banExplanation": { "type": "string", "maxLength": 400 },
+        "bannedBy": { "type": "string", "maxLength": 160 },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -159,7 +162,7 @@
       "properties": {
         "logId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "eventType": { "type": "string", "enum": ["speed_anomaly", "score_cap_exceeded", "double_conversion_attempt", "bot_challenge_failed", "suspicious_withdrawal", "manual_flag"] },
+        "eventType": { "type": "string", "enum": ["speed_anomaly", "score_cap_exceeded", "double_conversion_attempt", "bot_challenge_failed", "suspicious_withdrawal", "manual_flag", "profanity_username_ban", "admin_ban"] },
         "severity": { "type": "string", "enum": ["low", "medium", "high", "critical"] },
         "details": { "type": "string", "minLength": 3, "maxLength": 400 },
         "resolved": { "type": "boolean" },
@@ -175,7 +178,7 @@
         "notificationId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "recipientEmail": { "type": "string", "minLength": 3, "maxLength": 160 },
-        "eventType": { "type": "string", "enum": ["conversion_confirmed", "withdrawal_requested", "withdrawal_paid", "withdrawal_rejected"] },
+        "eventType": { "type": "string", "enum": ["conversion_confirmed", "withdrawal_requested", "withdrawal_paid", "withdrawal_rejected", "streak_bonus_credited"] },
         "subject": { "type": "string", "minLength": 3, "maxLength": 160 },
         "summary": { "type": "string", "minLength": 3, "maxLength": 500 },
         "deliveryStatus": { "type": "string", "enum": ["sent_smtp", "logged_in_app", "failed"] },
@@ -224,6 +227,56 @@
         "createdAt",
         "updatedAt"
       ]
+    },
+    "LeaderboardEntry": {
+      "title": "LeaderboardEntry",
+      "description": "Zero-PII public leaderboard projection for top Earn Easy players sorted by BRL balance.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "photoURL": { "type": "string", "maxLength": 500 },
+        "brlBalanceCents": { "type": "number" },
+        "pointsBalance": { "type": "number" },
+        "gamesPlayed": { "type": "number" },
+        "status": { "type": "string", "enum": ["active", "suspended", "flagged"] },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "uid",
+        "displayName",
+        "photoURL",
+        "brlBalanceCents",
+        "pointsBalance",
+        "gamesPlayed",
+        "status",
+        "updatedAt"
+      ]
+    },
+    "DailyCheckin": {
+      "title": "DailyCheckin",
+      "description": "Once-per-day randomized check-in reward yielding ~1,000 to 1,200 points per 7-day cycle plus R$ 10,00 bonus on a strict 30-day consecutive streak.",
+      "type": "object",
+      "properties": {
+        "checkinId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "checkinDate": { "type": "string", "maxLength": 10, "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+        "pointsAwarded": { "type": "number" },
+        "weekTotalAfter": { "type": "number" },
+        "streakDay": { "type": "number" },
+        "brlBonusCents": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "checkinId",
+        "userId",
+        "checkinDate",
+        "pointsAwarded",
+        "weekTotalAfter",
+        "streakDay",
+        "brlBonusCents",
+        "createdAt"
+      ]
     }
   },
   "firestore": {
@@ -262,6 +315,14 @@
     "/integrations/{integrationId}": {
       "schema": { "$ref": "#/entities/EnterpriseIntegration" },
       "description": "Enterprise financial API keys and webhook endpoints."
+    },
+    "/leaderboard/{userId}": {
+      "schema": { "$ref": "#/entities/LeaderboardEntry" },
+      "description": "Real-time global ranking projection synced atomically with user account balances."
+    },
+    "/dailyCheckins/{checkinId}": {
+      "schema": { "$ref": "#/entities/DailyCheckin" },
+      "description": "Deterministic daily random check-in claims (1 per UTC day)."
     }
   }
 }

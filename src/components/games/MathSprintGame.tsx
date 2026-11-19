@@ -145,25 +145,25 @@ export const MathSprintGame: React.FC<GameProps> = ({ onComplete, onExit }) => {
   };
 
   return (
-    <div className="bg-white border border-slate-200 rounded-xl p-6 max-w-2xl mx-auto">
-      <div className="flex items-center justify-between border-b border-slate-100 pb-4 mb-6">
+    <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-6 max-w-2xl mx-auto">
+      <div className="flex items-center justify-between border-b border-slate-100 dark:border-zinc-800 pb-4 mb-6">
         <div>
-          <h3 className="text-xl font-bold text-slate-900">Desafio Matemático</h3>
-          <p className="text-xs text-slate-500 mt-0.5">40 segundos de cálculo rápido com multiplicador de sequência · Até 450 pts</p>
+          <h3 className="text-xl font-bold text-slate-900 dark:text-zinc-50">Desafio Matemático</h3>
+          <p className="text-xs text-slate-500 dark:text-zinc-400 mt-0.5">40 segundos de cálculo rápido com multiplicador de sequência · Até 450 pts</p>
         </div>
         <div className="flex items-center gap-2">
           <button
             type="button"
             onClick={() => setSoundOn((s) => !s)}
             aria-label={soundOn ? 'Desativar som' : 'Ativar som'}
-            className="p-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 transition-colors cursor-pointer"
+            className="p-2 rounded-lg border border-slate-200 dark:border-zinc-700 text-slate-600 dark:text-zinc-300 hover:bg-slate-50 dark:hover:bg-zinc-800 transition-colors cursor-pointer"
           >
             {soundOn ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
           </button>
           <button
             type="button"
             onClick={onExit}
-            className="px-3 py-2 text-xs font-medium text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            className="px-3 py-2 text-xs font-medium text-slate-600 dark:text-zinc-300 border border-slate-200 dark:border-zinc-700 rounded-lg hover:bg-slate-50 dark:hover:bg-zinc-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
             Voltar ao Lobby
           </button>
@@ -172,7 +172,7 @@ export const MathSprintGame: React.FC<GameProps> = ({ onComplete, onExit }) => {
 
       {gameState === 'TITLE_MENU' && (
         <div className="text-center py-6 space-y-6">
-          <p className="text-sm text-slate-600 max-w-md mx-auto leading-relaxed">
+          <p className="text-sm text-slate-600 dark:text-zinc-400 max-w-md mx-auto leading-relaxed">
             Resolva o máximo de operações matemáticas em 40 segundos. Acertos consecutivos ativam multiplicadores de <strong>2x</strong> e <strong>3x</strong>!
           </p>
           <button
@@ -187,36 +187,36 @@ export const MathSprintGame: React.FC<GameProps> = ({ onComplete, onExit }) => {
 
       {gameState === 'PLAYING' && (
         <div className="space-y-6">
-          <div className="grid grid-cols-3 gap-3 bg-slate-50 border border-slate-200 rounded-xl p-3 text-center">
+          <div className="grid grid-cols-3 gap-3 bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 rounded-xl p-3 text-center">
             <div>
-              <div className="text-xs text-slate-500">Tempo</div>
-              <div className={`text-lg font-mono font-bold tabular-nums ${timeLeft <= 8 ? 'text-red-600' : 'text-slate-900'}`}>
+              <div className="text-xs text-slate-500 dark:text-zinc-400">Tempo</div>
+              <div className={`text-lg font-mono font-bold tabular-nums ${timeLeft <= 8 ? 'text-red-600 dark:text-red-400' : 'text-slate-900 dark:text-zinc-50'}`}>
                 {timeLeft}s
               </div>
             </div>
             <div>
-              <div className="text-xs text-slate-500">Sequência</div>
-              <div className="text-lg font-mono font-bold tabular-nums text-sky-600">
+              <div className="text-xs text-slate-500 dark:text-zinc-400">Sequência</div>
+              <div className="text-lg font-mono font-bold tabular-nums text-sky-600 dark:text-sky-400">
                 {streak} ({streak >= 6 ? '3x' : streak >= 3 ? '2x' : '1x'})
               </div>
             </div>
             <div>
-              <div className="text-xs text-slate-500">Pontos</div>
-              <div className="text-lg font-mono font-bold tabular-nums text-emerald-600">{score}</div>
+              <div className="text-xs text-slate-500 dark:text-zinc-400">Pontos</div>
+              <div className="text-lg font-mono font-bold tabular-nums text-emerald-600 dark:text-emerald-400">{score}</div>
             </div>
           </div>
 
           <div
             className={`py-8 px-4 rounded-xl border text-center transition-colors ${
               feedback === 'correct'
-                ? 'bg-emerald-50/70 border-emerald-200'
+                ? 'bg-emerald-50/70 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800'
                 : feedback === 'wrong'
-                  ? 'bg-red-50/70 border-red-200'
-                  : 'bg-slate-50 border-slate-200'
+                  ? 'bg-red-50/70 dark:bg-red-950/40 border-red-200 dark:border-red-800'
+                  : 'bg-slate-50 dark:bg-zinc-950 border-slate-200 dark:border-zinc-800'
             }`}
           >
-            <div className="text-xs text-slate-500 mb-2">Resolva a expressão</div>
-            <div className="text-4xl font-display font-extrabold text-slate-900 font-mono tabular-nums">
+            <div className="text-xs text-slate-500 dark:text-zinc-400 mb-2">Resolva a expressão</div>
+            <div className="text-4xl font-display font-extrabold text-slate-900 dark:text-zinc-50 font-mono tabular-nums">
               {question.prompt} = ?
             </div>
           </div>
@@ -227,7 +227,7 @@ export const MathSprintGame: React.FC<GameProps> = ({ onComplete, onExit }) => {
                 key={opt}
                 type="button"
                 onClick={() => handleAnswer(opt)}
-                className="py-4 rounded-xl border border-slate-200 bg-white hover:bg-slate-900 hover:text-white hover:border-slate-900 text-xl font-mono font-bold tabular-nums transition-colors active:scale-95 cursor-pointer"
+                className="py-4 rounded-xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 text-slate-900 dark:text-zinc-100 hover:bg-slate-900 dark:hover:bg-emerald-600 hover:text-white hover:border-slate-900 dark:hover:border-emerald-600 text-xl font-mono font-bold tabular-nums transition-colors active:scale-95 cursor-pointer"
               >
                 {opt}
               </button>
@@ -238,32 +238,32 @@ export const MathSprintGame: React.FC<GameProps> = ({ onComplete, onExit }) => {
 
       {gameState === 'ROUND_SUMMARY' && (
         <div className="space-y-6 py-4">
-          <div className="bg-slate-50 border border-slate-200 rounded-xl p-5 grid grid-cols-3 gap-4 text-center">
+          <div className="bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 rounded-xl p-5 grid grid-cols-3 gap-4 text-center">
             <div>
-              <div className="text-xs text-slate-500">Acertos</div>
-              <div className="text-2xl font-mono font-bold text-slate-900 tabular-nums">
+              <div className="text-xs text-slate-500 dark:text-zinc-400">Acertos</div>
+              <div className="text-2xl font-mono font-bold text-slate-900 dark:text-zinc-50 tabular-nums">
                 {correctCount}/{answeredCount}
               </div>
             </div>
             <div>
-              <div className="text-xs text-slate-500">Precisão</div>
-              <div className="text-2xl font-mono font-bold text-slate-900 tabular-nums">
+              <div className="text-xs text-slate-500 dark:text-zinc-400">Precisão</div>
+              <div className="text-2xl font-mono font-bold text-slate-900 dark:text-zinc-50 tabular-nums">
                 {answeredCount > 0 ? Math.round((correctCount / answeredCount) * 100) : 0}%
               </div>
             </div>
             <div>
-              <div className="text-xs text-slate-500">Pontos</div>
-              <div className="text-2xl font-mono font-bold text-emerald-600 tabular-nums">{score}</div>
+              <div className="text-xs text-slate-500 dark:text-zinc-400">Pontos</div>
+              <div className="text-2xl font-mono font-bold text-emerald-600 dark:text-emerald-400 tabular-nums">{score}</div>
             </div>
           </div>
 
           <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-lg bg-emerald-50 text-emerald-700 flex items-center justify-center shrink-0">
+              <div className="w-10 h-10 rounded-lg bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-400 flex items-center justify-center shrink-0">
                 <Trophy className="w-5 h-5" />
               </div>
               <div>
-                <p className="text-sm font-bold text-slate-900 tabular-nums">
+                <p className="text-sm font-bold text-slate-900 dark:text-zinc-50 tabular-nums">
                   {submitting
                     ? 'Validando sprint no sistema antifraude...'
                     : rewardInfo
@@ -271,8 +271,8 @@ export const MathSprintGame: React.FC<GameProps> = ({ onComplete, onExit }) => {
                       : 'Sprint encerrado!'}
                 </p>
                 {rewardInfo && (
-                  <p className="text-xs text-slate-500 flex items-center gap-1 mt-0.5">
-                    <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+                  <p className="text-xs text-slate-500 dark:text-zinc-400 flex items-center gap-1 mt-0.5">
+                    <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
                     {rewardInfo.verificationStatus === 'verified'
                       ? 'Sessão verificada com assinatura de integridade'
                       : rewardInfo.fraudReason}
@@ -285,7 +285,7 @@ export const MathSprintGame: React.FC<GameProps> = ({ onComplete, onExit }) => {
               type="button"
               onClick={startGame}
               disabled={submitting}
-              className="inline-flex items-center gap-2 px-5 py-2.5 bg-slate-900 text-white text-xs font-semibold rounded-lg hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50"
+              className="inline-flex items-center gap-2 px-5 py-2.5 bg-slate-900 dark:bg-emerald-600 text-white text-xs font-semibold rounded-lg hover:bg-slate-800 dark:hover:bg-emerald-500 transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50"
             >
               <RotateCcw className="w-3.5 h-3.5" />
               Novo Sprint
