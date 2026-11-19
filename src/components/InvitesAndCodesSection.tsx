@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Check,
   CheckCircle2,
+  Clock,
   Copy,
   Gift,
   Link2,
@@ -11,7 +12,12 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { REFERRAL_SIGNUP_BONUS_POINTS } from '../types/earneasy';
-import { formatPoints } from '../utils/pix';
+import {
+  formatPoints,
+  formatScheduleRemaining,
+  formatScheduleTime,
+  timestampToMillis,
+} from '../utils/pix';
 
 export const InvitesAndCodesSection: React.FC = () => {
   const {
@@ -31,8 +37,21 @@ export const InvitesAndCodesSection: React.FC = () => {
   } | null>(null);
   const [copiedLink, setCopiedLink] = useState(false);
   const [copiedRefCode, setCopiedRefCode] = useState(false);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNowMs(Date.now()), 10_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   if (!userAccount) return null;
+
+  const publishedEvents = publicPromoEvents.filter(
+    (ev) => timestampToMillis(ev.publishAt) <= nowMs
+  );
+  const upcomingEvents = publicPromoEvents
+    .filter((ev) => timestampToMillis(ev.publishAt) > nowMs)
+    .sort((a, b) => timestampToMillis(a.publishAt) - timestampToMillis(b.publishAt));
 
   const inviteOrigin =
     typeof window !== 'undefined' ? window.location.origin : 'https://earn-easy-z6eg.onrender.com';
@@ -291,26 +310,26 @@ export const InvitesAndCodesSection: React.FC = () => {
             )}
           </div>
 
-          <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-6 space-y-4">
+          <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl p-6 space-y-4">
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2">
                 <Sparkles className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
                 <h3 className="text-base font-bold text-slate-900 dark:text-zinc-50">
-                  Eventos de Código Ativos
+                  Eventos de Código
                 </h3>
               </div>
               <span className="text-xs font-mono text-slate-400 tabular-nums">
-                {publicPromoEvents.length}
+                {publishedEvents.length} liberado(s)
               </span>
             </div>
 
-            {publicPromoEvents.length === 0 ? (
+            {publishedEvents.length === 0 && upcomingEvents.length === 0 ? (
               <p className="text-xs text-slate-500 dark:text-zinc-400 py-4 text-center border border-dashed border-slate-200 dark:border-zinc-800 rounded-xl">
-                Nenhum evento público ativo no momento. Se você recebeu um código privado do admin, digite-o acima.
+                Nenhum evento público ativo no momento. Se você recebeu um código na Caixa de Correio ou do admin, digite-o acima.
               </p>
             ) : (
               <div className="space-y-3">
-                {publicPromoEvents.map((ev) => {
+                {publishedEvents.map((ev) => {
                   const alreadyRedeemed = redeemedCodesSet.has(ev.code);
                   const soldOut = ev.redemptionCount >= ev.maxRedemptions;
                   const remaining = Math.max(0, ev.maxRedemptions - ev.redemptionCount);
@@ -329,7 +348,7 @@ export const InvitesAndCodesSection: React.FC = () => {
                           </div>
                         </div>
                         <span className="font-mono text-xs font-bold text-emerald-700 dark:text-emerald-400 shrink-0 tabular-nums">
-                          +{formatPoints(ev.pointsValue)} pts
+                          +{formatPoints(ev.pointsValue)} moedas
                         </span>
                       </div>
 
@@ -351,6 +370,32 @@ export const InvitesAndCodesSection: React.FC = () => {
                     </div>
                   );
                 })}
+
+                {upcomingEvents.map((ev) => {
+                  const publishMs = timestampToMillis(ev.publishAt);
+                  return (
+                    <div
+                      key={ev.code}
+                      className="p-3.5 rounded-xl border border-amber-200 dark:border-amber-900/60 bg-amber-50/70 dark:bg-amber-950/20 flex items-center justify-between gap-3"
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <Clock className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+                        <div className="min-w-0">
+                          <div className="text-xs font-bold text-slate-900 dark:text-zinc-100 truncate">
+                            Programado: {ev.title}
+                          </div>
+                          <div className="text-[11px] text-amber-800 dark:text-amber-300">
+                            Liberação às {formatScheduleTime(publishMs)} (falta{' '}
+                            {formatScheduleRemaining(publishMs, nowMs)})
+                          </div>
+                        </div>
+                      </div>
+                      <span className="font-mono text-xs font-bold text-amber-700 dark:text-amber-400 shrink-0 tabular-nums">
+                        +{formatPoints(ev.pointsValue)}
+                      </span>
+                    </div>
+                  );
+                })}
               </div>
             )}
 
@@ -369,7 +414,7 @@ export const InvitesAndCodesSection: React.FC = () => {
                         {r.code}
                       </span>
                       <span className="font-mono font-bold text-emerald-700 dark:text-emerald-400 tabular-nums">
-                        +{formatPoints(r.pointsAwarded)} pts
+                        +{formatPoints(r.pointsAwarded)} moedas
                       </span>
                     </div>
                   ))}

@@ -83,3 +83,40 @@ export function validatePixKey(type: PixKeyType, rawValue: string): { valid: boo
     }
   }
 }
+
+export function timestampToMillis(value: unknown): number {
+  if (!value) return 0;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === 'object') {
+    const maybe = value as { toMillis?: () => number; seconds?: number; nanoseconds?: number };
+    if (typeof maybe.toMillis === 'function') {
+      return maybe.toMillis();
+    }
+    if (typeof maybe.seconds === 'number') {
+      return maybe.seconds * 1000 + Math.floor((maybe.nanoseconds || 0) / 1_000_000);
+    }
+  }
+  return 0;
+}
+
+export function formatScheduleRemaining(targetMs: number, nowMs: number = Date.now()): string {
+  const diffMs = targetMs - nowMs;
+  if (diffMs <= 0) return 'Liberado agora';
+  const totalSec = Math.ceil(diffMs / 1000);
+  if (totalSec < 60) return `${totalSec}s`;
+  const totalMin = Math.ceil(diffMs / 60000);
+  if (totalMin < 60) return `${totalMin} min`;
+  const hours = Math.floor(totalMin / 60);
+  const mins = totalMin % 60;
+  return mins > 0 ? `${hours}h ${mins}min` : `${hours}h`;
+}
+
+export function formatScheduleTime(targetMs: number): string {
+  if (!targetMs) return '';
+  return new Date(targetMs).toLocaleTimeString('pt-BR', {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+

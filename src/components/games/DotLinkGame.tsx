@@ -1,6 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { RotateCcw, ShieldCheck, Trophy, Volume2, VolumeX } from 'lucide-react';
+import { AnimatePresence, motion } from 'motion/react';
+import { Check, RotateCcw, ShieldCheck, Sparkles, Trophy, Volume2, VolumeX } from 'lucide-react';
 import { playTone } from '../../utils/antifraud';
+import {
+  FloatingFeedbackEvent,
+  FloatingFeedbackLayer,
+  ParticleBurstEvent,
+  ParticleBurstLayer,
+} from './GameEffects';
 
 interface GameProps {
   onComplete: (score: number, durationMs: number, movesCount: number) => Promise<{
@@ -95,7 +102,14 @@ export const DotLinkGame: React.FC<GameProps> = ({ onComplete, onExit }) => {
   const [movesCount, setMovesCount] = useState(0);
   const [soundOn, setSoundOn] = useState(true);
   const [submitting, setSubmitting] = useState(false);
-  const [rewardInfo, setRewardInfo] = useState<{ credited: number; verificationStatus: string; fraudReason: string } | null>(null);
+  const [rewardInfo, setRewardInfo] = useState<{
+    credited: number;
+    verificationStatus: string;
+    fraudReason: string;
+  } | null>(null);
+  const [bursts, setBursts] = useState<ParticleBurstEvent[]>([]);
+  const [popups, setPopups] = useState<FloatingFeedbackEvent[]>([]);
+  const [justCompletedColor, setJustCompletedColor] = useState<ColorKey | null>(null);
 
   const startedAtRef = useRef<number>(Date.now());
   const isPointerDownRef = useRef(false);
@@ -103,6 +117,8 @@ export const DotLinkGame: React.FC<GameProps> = ({ onComplete, onExit }) => {
   const pathsRef = useRef(paths);
   const activeColorRef = useRef(activeColor);
   const movesRef = useRef(movesCount);
+  const effectIdRef = useRef(1);
+  const cleanupTimersRef = useRef<number[]>([]);
 
   useEffect(() => {
     pathsRef.current = paths;
@@ -116,14 +132,18 @@ export const DotLinkGame: React.FC<GameProps> = ({ onComplete, onExit }) => {
     movesRef.current = movesCount;
   }, [movesCount]);
 
+  useEffect(() => {
+    return () => {
+      cleanupTimersRef.current.forEach((t) => window.clearTimeout(t));
+    };
+  }, []);
+
   const puzzle = PUZZLES[puzzleIdx];
 
   useEffect(() => {
     const handleGlobalPointerUp = () => {
       if (!isPointerDownRef.current) return;
       isPointerDownRef.current = false;
-      // If user dragged across cells, end the stroke on release;
-      // If user only clicked/tapped a single cell, keep activeColor selected for click-by-click play!
       if (dragMovedRef.current) {
         setActiveColor(null);
       }
@@ -137,6 +157,30 @@ export const DotLinkGame: React.FC<GameProps> = ({ onComplete, onExit }) => {
       window.removeEventListener('pointercancel', handleGlobalPointerUp);
     };
   }, []);
+
+  const spawnBurst = (
+    xPct: number,
+    yPct: number,
+    colors: string[],
+    count = 16,
+    spreadPx = 74
+  ) => {
+    const id = effectIdRef.current++;
+    setBursts((prev) => [...prev, { id, xPct, yPct, colors, count, spreadPx }]);
+    const t = window.setTimeout(() => {
+      setBursts((prev) => prev.filter((item) => item.id !== id));
+    }, 900);
+    cleanupTimersRef.current.push(t);
+  };
+
+  const spawnPopup = (text: string, xPct = 50, yPct = 45, accentColor = '#34d399') => {
+    const id = effectIdRef.current++;
+    setPopups((prev) => [...prev, { id, text, xPct, yPct, accentColor }]);
+    const t = window.setTimeout(() => {
+      setPopups((prev) => prev.filter((item) => item.id !== id));
+    }, 1250);
+    cleanupTimersRef.current.push(t);
+  };
 
   const getEndpointColor = (r: number, c: number): ColorKey | null => {
     for (const pair of puzzle.pairs) {
@@ -178,12 +222,18 @@ export const DotLinkGame: React.FC<GameProps> = ({ onComplete, onExit }) => {
     setMovesCount(0);
     movesRef.current = 0;
     setRewardInfo(null);
+    setBursts([]);
+    setPopups([]);
+    setJustCompletedColor(null);
     startedAtRef.current = Date.now();
     setGameState('PLAYING');
     playTone(500, 0.08, 'sine', soundOn);
   };
 
-  const checkAllSolved = async (nextPaths: Partial<Record<ColorKey, [number, number][]>>, totalMoves: number) => {
+  const checkAllSolved = async (
+    nextPaths: Partial<Record<ColorKey, [number, number][]>>,
+    totalMoves: number
+  ) => {
     const allDone = puzzle.pairs.every((p) => isPairConnected(p, nextPaths));
     if (!allDone) return;
 
@@ -196,6 +246,29 @@ export const DotLinkGame: React.FC<GameProps> = ({ onComplete, onExit }) => {
     const duration = Date.now() - startedAtRef.current;
 
     playTone(760, 0.2, 'triangle', soundOn);
+
+    // Multi-point celebratory burst when finishing the full board
+    const palette = puzzle.pairs.map((p) => p.strokeHex);
+    [
+      { xPct: 28, yPct: 32, delay: 0 },
+      { xPct: 72, yPct: 35, delay: 110 },
+      { xPct: 50, yPct: 62, delay: 220 },
+    ].forEach(({ xPct, yPct, delay }) => {
+      const t = window.setTimeout(() => {
+        spawnBurst(xPct, yPct, [...palette, '#34d399', '#ffffff'], 18, 92);
+      }, delay);
+      cleanupTimersRef.current.push(t);
+    });
+
+    spawnPopup(
+      fullCoverageBonus > 0
+        ? `100% do tabuleiro! +${totalScore} moedas`
+        : `Tabuleiro completo! +${totalScore} moedas`,
+      50,
+      28,
+      '#34d399'
+    );
+
     isPointerDownRef.current = false;
     setActiveColor(null);
     activeColorRef.current = null;
@@ -221,7 +294,7 @@ export const DotLinkGame: React.FC<GameProps> = ({ onComplete, onExit }) => {
     if (last[0] === r && last[1] === c) return;
     if (!isAdjacent(last, [r, c])) return;
 
-    // Backtrack if stepping back onto the previous cell of the same color
+    // Backtrack if stepping back onto previous cell
     if (currentPath.length >= 2) {
       const prev = currentPath[currentPath.length - 2];
       if (prev[0] === r && prev[1] === c) {
@@ -234,18 +307,13 @@ export const DotLinkGame: React.FC<GameProps> = ({ onComplete, onExit }) => {
       }
     }
 
-    // Cannot cross other color endpoints
     const endpointColor = getEndpointColor(r, c);
     if (endpointColor && endpointColor !== color) return;
-
-    // Cannot cross own path
     if (currentPath.some(([pr, pc]) => pr === r && pc === c)) return;
 
-    // Cannot cross another color's existing pipe
     const occupiedBy = getCellPathColor(r, c, currentPaths);
     if (occupiedBy && occupiedBy !== color) return;
 
-    // Stop extending if this color pair is already connected
     const pair = puzzle.pairs.find((p) => p.color === color);
     if (pair && isPairConnected(pair, currentPaths)) return;
 
@@ -261,6 +329,17 @@ export const DotLinkGame: React.FC<GameProps> = ({ onComplete, onExit }) => {
 
     if (pair && isPairConnected(pair, nextPaths)) {
       playTone(720, 0.08, 'triangle', soundOn);
+      const xPct = ((c + 0.5) / puzzle.size) * 100;
+      const yPct = ((r + 0.5) / puzzle.size) * 100;
+      spawnBurst(xPct, yPct, [pair.strokeHex, '#ffffff', '#34d399'], 14, 62);
+      spawnPopup(`Fluxo ${pair.label} ligado!`, xPct, Math.max(18, yPct - 8), pair.strokeHex);
+
+      setJustCompletedColor(pair.color);
+      const pulseTimer = window.setTimeout(() => {
+        setJustCompletedColor((curr) => (curr === pair.color ? null : curr));
+      }, 650);
+      cleanupTimersRef.current.push(pulseTimer);
+
       setActiveColor(null);
       activeColorRef.current = null;
       isPointerDownRef.current = false;
@@ -279,7 +358,6 @@ export const DotLinkGame: React.FC<GameProps> = ({ onComplete, onExit }) => {
     const currentPaths = pathsRef.current;
     const endpoint = getEndpointColor(r, c);
 
-    // 1. If a color is already selected and user clicked the matching destination endpoint next to the tip, complete it!
     if (endpoint && currentColor === endpoint) {
       const currPath = currentPaths[currentColor] || [];
       if (currPath.length >= 1) {
@@ -291,7 +369,6 @@ export const DotLinkGame: React.FC<GameProps> = ({ onComplete, onExit }) => {
       }
     }
 
-    // 2. Clicking an endpoint starts (or restarts) that color's path
     if (endpoint) {
       const nextPaths = { ...currentPaths, [endpoint]: [[r, c] as [number, number]] };
       pathsRef.current = nextPaths;
@@ -304,7 +381,6 @@ export const DotLinkGame: React.FC<GameProps> = ({ onComplete, onExit }) => {
       return;
     }
 
-    // 3. Clicking an adjacent empty cell while a color is active advances the path (click-by-click mode)
     if (currentColor) {
       const currPath = currentPaths[currentColor] || [];
       const last = currPath[currPath.length - 1];
@@ -315,7 +391,6 @@ export const DotLinkGame: React.FC<GameProps> = ({ onComplete, onExit }) => {
       }
     }
 
-    // 4. Clicking on an existing pipe resumes drawing from that cell
     const existingColor = getCellPathColor(r, c, currentPaths);
     if (existingColor) {
       const curr = currentPaths[existingColor] || [];
@@ -352,13 +427,16 @@ export const DotLinkGame: React.FC<GameProps> = ({ onComplete, onExit }) => {
   };
 
   const connectedCount = puzzle.pairs.filter((p) => isPairConnected(p)).length;
+  const progressPct = Math.round((connectedCount / puzzle.pairs.length) * 100);
 
   return (
-    <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-6 max-w-2xl mx-auto select-none">
+    <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl p-6 max-w-2xl mx-auto select-none">
       <div className="flex items-center justify-between border-b border-slate-100 dark:border-zinc-800 pb-4 mb-6">
         <div>
           <h3 className="text-xl font-bold text-slate-900 dark:text-zinc-50">Dot Link</h3>
-          <p className="text-xs text-slate-500 dark:text-zinc-400 mt-0.5">Conecte todos os pares da mesma cor sem cruzar caminhos · Até 400 pts</p>
+          <p className="text-xs text-slate-500 dark:text-zinc-400 mt-0.5">
+            Conecte todos os pares da mesma cor sem cruzar caminhos · Até 400 moedas
+          </p>
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -380,9 +458,14 @@ export const DotLinkGame: React.FC<GameProps> = ({ onComplete, onExit }) => {
       </div>
 
       {gameState === 'TITLE_MENU' && (
-        <div className="text-center py-6 space-y-6">
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.28 }}
+          className="text-center py-6 space-y-6"
+        >
           <p className="text-sm text-slate-600 dark:text-zinc-400 max-w-md mx-auto leading-relaxed">
-            Arraste o dedo/mouse ou clique célula por célula para ligar cada ponto colorido ao seu par correspondente. Preencher 100% do tabuleiro concede <strong>+40 pontos bônus</strong>.
+            Arraste o dedo/mouse ou clique célula por célula para ligar cada ponto colorido ao seu par correspondente. Preencher 100% do tabuleiro concede <strong>+40 moedas bônus</strong>.
           </p>
 
           <div className="flex flex-wrap justify-center gap-2">
@@ -391,66 +474,82 @@ export const DotLinkGame: React.FC<GameProps> = ({ onComplete, onExit }) => {
                 key={p.id}
                 type="button"
                 onClick={() => setPuzzleIdx(idx)}
-                className={`px-4 py-2 text-xs font-semibold rounded-lg border transition-colors cursor-pointer ${
+                className={`px-4 py-2 text-xs font-semibold rounded-xl border transition-colors cursor-pointer ${
                   puzzleIdx === idx
                     ? 'bg-slate-900 dark:bg-emerald-600 text-white border-slate-900 dark:border-emerald-600'
                     : 'bg-white dark:bg-zinc-950 text-slate-700 dark:text-zinc-300 border-slate-200 dark:border-zinc-800 hover:bg-slate-50 dark:hover:bg-zinc-800'
                 }`}
               >
-                {p.title} ({p.reward} pts)
+                {p.title} ({p.reward} moedas)
               </button>
             ))}
           </div>
 
-          <button
+          <motion.button
             type="button"
+            whileHover={{ scale: 1.03 }}
+            whileTap={{ scale: 0.97 }}
             onClick={() => startPuzzle(puzzleIdx)}
-            className="px-6 py-3 bg-emerald-600 text-white text-sm font-semibold rounded-lg hover:bg-emerald-700 transition-colors cursor-pointer"
+            className="px-6 py-3 bg-emerald-600 text-white text-sm font-semibold rounded-xl hover:bg-emerald-700 transition-colors cursor-pointer"
           >
             Iniciar Desafio
-          </button>
-        </div>
+          </motion.button>
+        </motion.div>
       )}
 
       {(gameState === 'PLAYING' || gameState === 'ROUND_SUMMARY') && (
         <div className="space-y-5">
-          <div className="flex items-center justify-between text-xs font-medium text-slate-600 dark:text-zinc-300 bg-slate-50 dark:bg-zinc-950 border border-transparent dark:border-zinc-800 px-4 py-2.5 rounded-lg">
-            <span>
-              Fluxos conectados:{' '}
-              <strong className="text-slate-900 dark:text-zinc-50 tabular-nums">
-                {connectedCount}/{puzzle.pairs.length}
-              </strong>
-              {activeColor && (
-                <span className="ml-2 text-slate-500 dark:text-zinc-400">
-                  · Ligando <strong className="text-slate-800 dark:text-zinc-200">{COLOR_META[activeColor].label}</strong>
-                </span>
-              )}
-            </span>
-            <div className="flex items-center gap-3">
-              <span className="font-mono tabular-nums">Movimentos: {movesCount}</span>
-              {gameState === 'PLAYING' && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setPaths({});
-                    pathsRef.current = {};
-                    setActiveColor(null);
-                    activeColorRef.current = null;
-                  }}
-                  className="text-slate-600 dark:text-zinc-300 hover:text-slate-900 dark:hover:text-white underline cursor-pointer"
-                >
-                  Limpar grade
-                </button>
-              )}
+          <div className="space-y-2 bg-slate-50 dark:bg-zinc-950 border border-slate-200/70 dark:border-zinc-800 px-4 py-3 rounded-xl">
+            <div className="flex items-center justify-between text-xs font-medium text-slate-600 dark:text-zinc-300">
+              <span className="inline-flex items-center gap-1.5">
+                {connectedCount === puzzle.pairs.length && (
+                  <Sparkles className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                )}
+                Fluxos conectados:{' '}
+                <strong className="text-slate-900 dark:text-zinc-50 tabular-nums">
+                  {connectedCount}/{puzzle.pairs.length}
+                </strong>
+                {activeColor && (
+                  <span className="ml-1 text-slate-500 dark:text-zinc-400">
+                    · Ligando <strong className="text-slate-800 dark:text-zinc-200">{COLOR_META[activeColor].label}</strong>
+                  </span>
+                )}
+              </span>
+              <div className="flex items-center gap-3">
+                <span className="font-mono tabular-nums">Movimentos: {movesCount}</span>
+                {gameState === 'PLAYING' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPaths({});
+                      pathsRef.current = {};
+                      setActiveColor(null);
+                      activeColorRef.current = null;
+                    }}
+                    className="text-slate-600 dark:text-zinc-300 hover:text-slate-900 dark:hover:text-white underline cursor-pointer"
+                  >
+                    Limpar grade
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="w-full h-1.5 bg-slate-200 dark:bg-zinc-800 rounded-full overflow-hidden">
+              <motion.div
+                className="h-full bg-emerald-600 dark:bg-emerald-500 rounded-full"
+                initial={{ width: 0 }}
+                animate={{ width: `${progressPct}%` }}
+                transition={{ type: 'spring', stiffness: 260, damping: 24 }}
+              />
             </div>
           </div>
 
-          {/* Interactive Board with Continuous SVG Pipe Layer */}
-          <div className="relative mx-auto w-fit bg-slate-900 dark:bg-black border border-transparent dark:border-zinc-800 p-3 rounded-xl touch-none">
-            <div
-              className="relative"
-              onPointerMove={handleGridPointerMove}
-            >
+          {/* Interactive Board with Continuous SVG Pipe Layer & Particle Bursts */}
+          <div className="relative mx-auto w-fit bg-slate-900 dark:bg-black border border-slate-800 p-3 rounded-2xl touch-none">
+            <div className="relative" onPointerMove={handleGridPointerMove}>
+              <ParticleBurstLayer events={bursts} />
+              <FloatingFeedbackLayer items={popups} />
+
               <div
                 className="grid gap-1.5 relative z-10"
                 style={{ gridTemplateColumns: `repeat(${puzzle.size}, minmax(0, 1fr))` }}
@@ -460,6 +559,10 @@ export const DotLinkGame: React.FC<GameProps> = ({ onComplete, onExit }) => {
                   const c = index % puzzle.size;
                   const endpoint = getEndpointColor(r, c);
                   const isActiveEndpoint = endpoint !== null && activeColor === endpoint;
+                  const endpointPair = endpoint
+                    ? puzzle.pairs.find((p) => p.color === endpoint)
+                    : undefined;
+                  const endpointConnected = endpointPair ? isPairConnected(endpointPair) : false;
 
                   return (
                     <button
@@ -473,11 +576,31 @@ export const DotLinkGame: React.FC<GameProps> = ({ onComplete, onExit }) => {
                       aria-label={`Célula ${r + 1},${c + 1}`}
                     >
                       {endpoint && (
-                        <span
-                          className={`w-8 h-8 rounded-full shadow-sm transition-transform relative z-20 ${
+                        <motion.span
+                          animate={
+                            justCompletedColor === endpoint
+                              ? { scale: [1, 1.32, 1.08] }
+                              : isActiveEndpoint
+                                ? { scale: 1.15 }
+                                : endpointConnected
+                                  ? { scale: 1.06 }
+                                  : { scale: 1 }
+                          }
+                          transition={{ type: 'spring', stiffness: 420, damping: 20 }}
+                          className={`w-8 h-8 rounded-full shadow-sm relative z-20 flex items-center justify-center ${
                             COLOR_META[endpoint].bgClass
-                          } ${isActiveEndpoint ? 'ring-4 ring-white scale-110' : 'ring-2 ring-white/80'}`}
-                        />
+                          } ${
+                            isActiveEndpoint
+                              ? 'ring-4 ring-white'
+                              : endpointConnected
+                                ? 'ring-2 ring-white'
+                                : 'ring-2 ring-white/80'
+                          }`}
+                        >
+                          {endpointConnected && (
+                            <Check className="w-4 h-4 text-white stroke-[3]" />
+                          )}
+                        </motion.span>
                       )}
                     </button>
                   );
@@ -495,16 +618,23 @@ export const DotLinkGame: React.FC<GameProps> = ({ onComplete, onExit }) => {
                   const points = list
                     .map(([r, c]) => `${c * 100 + 50},${r * 100 + 50}`)
                     .join(' ');
+                  const connected = isPairConnected(pair);
+                  const justCompleted = justCompletedColor === pair.color;
+
                   return (
-                    <polyline
+                    <motion.polyline
                       key={pair.color}
                       points={points}
                       fill="none"
                       stroke={pair.strokeHex}
-                      strokeWidth="28"
                       strokeLinecap="round"
                       strokeLinejoin="round"
-                      opacity="0.92"
+                      initial={{ opacity: 0.7 }}
+                      animate={{
+                        opacity: connected ? 1 : 0.88,
+                        strokeWidth: justCompleted ? [28, 38, 30] : connected ? 30 : 28,
+                      }}
+                      transition={{ duration: 0.35, ease: 'easeOut' }}
                     />
                   );
                 })}
@@ -512,42 +642,57 @@ export const DotLinkGame: React.FC<GameProps> = ({ onComplete, onExit }) => {
             </div>
           </div>
 
-          {gameState === 'ROUND_SUMMARY' && (
-            <div className="border-t border-slate-100 dark:border-zinc-800 pt-5 flex flex-col sm:flex-row items-center justify-between gap-4">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-lg bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-400 flex items-center justify-center shrink-0">
-                  <Trophy className="w-5 h-5" />
-                </div>
-                <div>
-                  <p className="text-sm font-bold text-slate-900 dark:text-zinc-50 tabular-nums">
-                    {submitting
-                      ? 'Validando solução no sistema antifraude...'
-                      : rewardInfo
-                        ? `+${rewardInfo.credited} pontos creditados`
-                        : 'Tabuleiro concluído!'}
-                  </p>
-                  {rewardInfo && (
-                    <p className="text-xs text-slate-500 dark:text-zinc-400 flex items-center gap-1 mt-0.5">
-                      <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-                      {rewardInfo.verificationStatus === 'verified'
-                        ? 'Sessão verificada com assinatura de integridade'
-                        : rewardInfo.fraudReason}
-                    </p>
-                  )}
-                </div>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => startPuzzle((puzzleIdx + 1) % PUZZLES.length)}
-                disabled={submitting}
-                className="inline-flex items-center gap-2 px-5 py-2.5 bg-slate-900 dark:bg-emerald-600 text-white text-xs font-semibold rounded-lg hover:bg-slate-800 dark:hover:bg-emerald-500 transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50"
+          <AnimatePresence>
+            {gameState === 'ROUND_SUMMARY' && (
+              <motion.div
+                initial={{ opacity: 0, y: 12, scale: 0.98 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: 6 }}
+                transition={{ duration: 0.25 }}
+                className="border-t border-slate-100 dark:border-zinc-800 pt-5 flex flex-col sm:flex-row items-center justify-between gap-4"
               >
-                <RotateCcw className="w-3.5 h-3.5" />
-                Próximo Tabuleiro
-              </button>
-            </div>
-          )}
+                <div className="flex items-center gap-3">
+                  <motion.div
+                    initial={{ scale: 0.7, rotate: -12 }}
+                    animate={{ scale: 1, rotate: 0 }}
+                    transition={{ type: 'spring', stiffness: 360, damping: 18 }}
+                    className="w-10 h-10 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-400 flex items-center justify-center shrink-0"
+                  >
+                    <Trophy className="w-5 h-5" />
+                  </motion.div>
+                  <div>
+                    <p className="text-sm font-bold text-slate-900 dark:text-zinc-50 tabular-nums">
+                      {submitting
+                        ? 'Validando solução no sistema antifraude...'
+                        : rewardInfo
+                          ? `+${rewardInfo.credited} moedas creditadas`
+                          : 'Tabuleiro concluído!'}
+                    </p>
+                    {rewardInfo && (
+                      <p className="text-xs text-slate-500 dark:text-zinc-400 flex items-center gap-1 mt-0.5">
+                        <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                        {rewardInfo.verificationStatus === 'verified'
+                          ? 'Sessão verificada com assinatura de integridade'
+                          : rewardInfo.fraudReason}
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                <motion.button
+                  type="button"
+                  whileHover={{ scale: 1.03 }}
+                  whileTap={{ scale: 0.97 }}
+                  onClick={() => startPuzzle((puzzleIdx + 1) % PUZZLES.length)}
+                  disabled={submitting}
+                  className="inline-flex items-center gap-2 px-5 py-2.5 bg-slate-900 dark:bg-emerald-600 text-white text-xs font-semibold rounded-xl hover:bg-slate-800 dark:hover:bg-emerald-500 transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  Próximo Tabuleiro
+                </motion.button>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
       )}
     </div>

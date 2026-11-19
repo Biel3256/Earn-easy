@@ -179,6 +179,8 @@ export interface PromoCode {
   redemptionCount: number;
   active: boolean;
   publicEvent: boolean;
+  publishDelayMinutes?: number;
+  publishAt?: unknown;
   createdBy: string;
   createdAt: unknown;
   updatedAt: unknown;
@@ -189,6 +191,19 @@ export interface PromoRedemption {
   code: string;
   userId: string;
   pointsAwarded: number;
+  createdAt: unknown;
+}
+
+export interface MailboxMessage {
+  messageId: string;
+  title: string;
+  body: string;
+  category: 'promo_event' | 'system_notice';
+  promoCode: string;
+  pointsValue: number;
+  publishAt: unknown;
+  active: boolean;
+  createdBy: string;
   createdAt: unknown;
 }
 
@@ -208,3 +223,4 @@ export const STREAK_TARGET_DAYS = 30;
 export const STREAK_REWARD_CENTS = 1000;
 export const REFERRAL_SIGNUP_BONUS_POINTS = 500;
 export const REFERRAL_COMMISSION_RATE = 0.12;
+export const MAX_PROMO_CODE_POINTS = 100000;

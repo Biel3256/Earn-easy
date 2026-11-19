@@ -1,6 +1,8 @@
 import React, { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import {
+  BarChart3,
   HelpCircle,
+  Inbox,
   LogOut,
   Menu,
   MoreVertical,
@@ -66,6 +68,7 @@ function MainShell() {
     authReady,
     userAccount,
     isAdmin,
+    unreadMailboxCount,
     needsOnboarding,
     authError,
     signInWithGoogle,
@@ -138,17 +141,18 @@ function MainShell() {
   };
 
   const navItems: { id: NavTab; label: string }[] = [
-    { id: 'games', label: 'Jogos' },
+    { id: 'games', label: 'Início' },
+    { id: 'ranking', label: 'Ranking' },
     { id: 'invites', label: 'Convites & Códigos' },
-    { id: 'ranking', label: 'Ranking Global' },
     { id: 'wallet', label: 'Carteira Pix' },
-    { id: 'dashboard', label: 'Dashboard' },
-    { id: 'notifications', label: 'Notificações' },
+    {
+      id: 'notifications',
+      label: unreadMailboxCount > 0 ? `Caixa de Correio (${unreadMailboxCount})` : 'Caixa de Correio',
+    },
   ];
 
   const isBlackTheme = theme === 'dark';
-  const isRankingNight = !isBackofficeRoute && activeTab === 'ranking';
-  const isDarkView = isBlackTheme || isRankingNight;
+  const isDarkView = isBlackTheme;
 
   useEffect(() => {
     if (!authReady || !firebaseUser || !userAccount || userAccount.status === 'suspended' || isBackofficeRoute) {
@@ -201,9 +205,7 @@ function MainShell() {
       className={`min-h-screen flex flex-col transition-colors ${
         isBlackTheme
           ? 'dark bg-black text-zinc-100'
-          : isRankingNight
-            ? 'dark bg-slate-950 text-slate-100'
-            : 'bg-slate-50 text-slate-900'
+          : 'bg-slate-50 text-slate-900'
       }`}
     >
       {/* Strict 3-Zone Top Bar Contract */}
@@ -211,9 +213,7 @@ function MainShell() {
         className={`sticky top-0 z-30 backdrop-blur border-b transition-colors ${
           isBlackTheme
             ? 'bg-black/95 border-zinc-800'
-            : isRankingNight
-              ? 'bg-slate-950/95 border-slate-800'
-              : 'bg-white/95 border-slate-200'
+            : 'bg-white/95 border-slate-200'
         }`}
       >
         <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-8">
@@ -318,18 +318,12 @@ function MainShell() {
                     className={`absolute right-0 top-full mt-2 w-64 rounded-xl shadow-lg py-2 z-50 border ${
                       isBlackTheme
                         ? 'bg-zinc-900 border-zinc-800 text-zinc-100'
-                        : isRankingNight
-                          ? 'bg-slate-900 border-slate-800 text-slate-100'
-                          : 'bg-white border-slate-200 text-slate-900'
+                        : 'bg-white border-slate-200 text-slate-900'
                     }`}
                   >
                     <div
                       className={`px-4 py-2.5 border-b flex items-center gap-3 ${
-                        isBlackTheme
-                          ? 'border-zinc-800'
-                          : isRankingNight
-                            ? 'border-slate-800'
-                            : 'border-slate-100'
+                        isBlackTheme ? 'border-zinc-800' : 'border-slate-100'
                       }`}
                     >
                       <ProfileAvatar
@@ -385,6 +379,37 @@ function MainShell() {
                     </button>
                     <button
                       type="button"
+                      onClick={() => handleSelectTab('notifications')}
+                      className={`w-full text-left px-4 py-2 text-xs font-medium flex items-center justify-between cursor-pointer ${
+                        isDarkView
+                          ? 'text-zinc-200 hover:bg-zinc-800'
+                          : 'text-slate-700 hover:bg-slate-50'
+                      }`}
+                    >
+                      <span className="inline-flex items-center gap-2">
+                        <Inbox className="w-3.5 h-3.5" />
+                        Caixa de Correio
+                      </span>
+                      {unreadMailboxCount > 0 && (
+                        <span className="text-[11px] font-mono font-bold text-emerald-600 dark:text-emerald-400">
+                          {unreadMailboxCount}
+                        </span>
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSelectTab('dashboard')}
+                      className={`w-full text-left px-4 py-2 text-xs font-medium flex items-center gap-2 cursor-pointer ${
+                        isDarkView
+                          ? 'text-zinc-200 hover:bg-zinc-800'
+                          : 'text-slate-700 hover:bg-slate-50'
+                      }`}
+                    >
+                      <BarChart3 className="w-3.5 h-3.5" />
+                      Resumo Financeiro
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => handleSelectTab('settings')}
                       className={`w-full text-left px-4 py-2 text-xs font-medium flex items-center justify-between cursor-pointer ${
                         isDarkView
@@ -417,11 +442,7 @@ function MainShell() {
                     </button>
                     <div
                       className={`my-1 border-t ${
-                        isBlackTheme
-                          ? 'border-zinc-800'
-                          : isRankingNight
-                            ? 'border-slate-800'
-                            : 'border-slate-100'
+                        isBlackTheme ? 'border-zinc-800' : 'border-slate-100'
                       }`}
                     />
                     <button
@@ -474,9 +495,7 @@ function MainShell() {
             className={`md:hidden border-t px-4 py-3 flex flex-wrap gap-2 ${
               isBlackTheme
                 ? 'border-zinc-800 bg-black'
-                : isRankingNight
-                  ? 'border-slate-800 bg-slate-950'
-                  : 'border-slate-200 bg-white'
+                : 'border-slate-200 bg-white'
             }`}
           >
             {navItems.map((item) => (
@@ -497,6 +516,21 @@ function MainShell() {
                 {item.label}
               </button>
             ))}
+            <button
+              type="button"
+              onClick={() => handleSelectTab('dashboard')}
+              className={`px-3 py-2 text-xs font-semibold rounded-lg whitespace-nowrap ${
+                !isBackofficeRoute && activeTab === 'dashboard'
+                  ? isDarkView
+                    ? 'bg-emerald-600 text-white'
+                    : 'bg-slate-900 text-white'
+                  : isDarkView
+                    ? 'bg-zinc-900 text-zinc-300 border border-zinc-800'
+                    : 'bg-slate-100 text-slate-700'
+              }`}
+            >
+              Resumo
+            </button>
             <button
               type="button"
               onClick={() => handleSelectTab('settings')}
@@ -586,6 +620,9 @@ function MainShell() {
               <GamesHub
                 onNavigateWallet={() => setActiveTab('wallet')}
                 onNavigateProfile={() => setActiveTab('profile')}
+                onNavigateInvites={() => setActiveTab('invites')}
+                onNavigateMailbox={() => setActiveTab('notifications')}
+                onNavigateRanking={() => setActiveTab('ranking')}
               />
             )}
             {activeTab === 'invites' && <InvitesAndCodesSection />}
@@ -615,9 +652,7 @@ function MainShell() {
         className={`border-t transition-colors ${
           isBlackTheme
             ? 'border-zinc-800 bg-black'
-            : isRankingNight
-              ? 'border-slate-800 bg-slate-950'
-              : 'border-slate-200 bg-white'
+            : 'border-slate-200 bg-white'
         }`}
       >
         <div

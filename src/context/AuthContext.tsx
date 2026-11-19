@@ -35,6 +35,7 @@ import {
   GameCategory,
   GameSession,
   LevelReward,
+  MailboxMessage,
   MIN_PIX_WITHDRAWAL_CENTS,
   PixKeyType,
   PixWithdrawal,
@@ -49,6 +50,7 @@ import {
   STREAK_TARGET_DAYS,
   UserAccount,
   UserPrivateInfo,
+  WithdrawalStatus,
 } from '../types/earneasy';
 import {
   generateId,
@@ -56,9 +58,23 @@ import {
   sha256Hex,
   verifyGameSessionWithServer,
 } from '../utils/antifraud';
+import {
+  BrowserNotificationPermissionState,
+  getBrowserNotificationPermission,
+  requestBrowserNotificationPermission,
+  sendBrowserNotification,
+} from '../utils/browserNotifications';
 import { PLAYER_LEVELS } from '../utils/levels';
 import { checkUsernameProfanity, validateUsernameInput } from '../utils/moderation';
-import { formatBRL, getTodayUtcDate, getUtcDateDaysAgo } from '../utils/pix';
+import {
+  formatBRL,
+  formatPoints,
+  formatScheduleRemaining,
+  formatScheduleTime,
+  getTodayUtcDate,
+  getUtcDateDaysAgo,
+  timestampToMillis,
+} from '../utils/pix';
 
 interface AuthContextValue {
   firebaseUser: User | null;
@@ -77,8 +93,18 @@ interface AuthContextValue {
   myInvitedReferrals: Referral[];
   publicPromoEvents: PromoCode[];
   myPromoRedemptions: PromoRedemption[];
+  mailboxMessages: MailboxMessage[];
+  readMailboxIds: string[];
+  unreadMailboxCount: number;
   needsOnboarding: boolean;
   authError: string | null;
+  browserNotifPermission: BrowserNotificationPermissionState;
+  browserNotifEnabled: boolean;
+  requestBrowserNotifications: () => Promise<BrowserNotificationPermissionState>;
+  setBrowserNotifEnabled: (enabled: boolean) => void;
+  sendTestBrowserNotification: () => boolean;
+  markMailboxRead: (messageId: string) => void;
+  markAllMailboxRead: () => void;
   signInWithGoogle: () => Promise<void>;
   logout: () => Promise<void>;
   createUserAccount: (params: {
@@ -211,8 +237,50 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [myInvitedReferrals, setMyInvitedReferrals] = useState<Referral[]>([]);
   const [publicPromoEvents, setPublicPromoEvents] = useState<PromoCode[]>([]);
   const [myPromoRedemptions, setMyPromoRedemptions] = useState<PromoRedemption[]>([]);
+  const [mailboxMessages, setMailboxMessages] = useState<MailboxMessage[]>([]);
+  const [readMailboxIds, setReadMailboxIds] = useState<string[]>([]);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [browserNotifPermission, setBrowserNotifPermission] =
+    useState<BrowserNotificationPermissionState>(() => getBrowserNotificationPermission());
+  const [browserNotifEnabled, setBrowserNotifEnabledState] = useState<boolean>(true);
   const lastSyncedLbSigRef = React.useRef<string>('');
+  const browserNotifPrefsRef = React.useRef({
+    permission: getBrowserNotificationPermission(),
+    enabled: true,
+  });
+  const withdrawalsInitRef = React.useRef(false);
+  const prevWithdrawalStatusRef = React.useRef<Map<string, WithdrawalStatus>>(new Map());
+  const promosInitRef = React.useRef(false);
+  const mailboxInitRef = React.useRef(false);
+  const seenReleasedPromoCodesRef = React.useRef<Set<string>>(new Set());
+  const seenReleasedMailboxIdsRef = React.useRef<Set<string>>(new Set());
+
+  const canDispatchBrowserNotification = () => {
+    const { permission, enabled } = browserNotifPrefsRef.current;
+    return permission === 'granted' && enabled;
+  };
+
+  useEffect(() => {
+    browserNotifPrefsRef.current = {
+      permission: browserNotifPermission,
+      enabled: browserNotifEnabled,
+    };
+  }, [browserNotifPermission, browserNotifEnabled]);
+
+  useEffect(() => {
+    const syncPermission = () => {
+      const next = getBrowserNotificationPermission();
+      setBrowserNotifPermission(next);
+      browserNotifPrefsRef.current.permission = next;
+    };
+    syncPermission();
+    window.addEventListener('focus', syncPermission);
+    document.addEventListener('visibilitychange', syncPermission);
+    return () => {
+      window.removeEventListener('focus', syncPermission);
+      document.removeEventListener('visibilitychange', syncPermission);
+    };
+  }, []);
 
   useEffect(() => {
     const unsubAuth = onAuthStateChanged(auth, async (user) => {
@@ -234,7 +302,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setMyInvitedReferrals([]);
         setPublicPromoEvents([]);
         setMyPromoRedemptions([]);
+        setMailboxMessages([]);
+        setReadMailboxIds([]);
         lastSyncedLbSigRef.current = '';
+        withdrawalsInitRef.current = false;
+        prevWithdrawalStatusRef.current.clear();
+        promosInitRef.current = false;
+        mailboxInitRef.current = false;
+        seenReleasedPromoCodesRef.current.clear();
+        seenReleasedMailboxIdsRef.current.clear();
         setAuthReady(true);
         return;
       }
@@ -371,7 +447,56 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const unsubWithdrawals = onSnapshot(
       query(collection(db, 'withdrawals'), where('userId', '==', uid), orderBy('createdAt', 'desc')),
-      (snap) => setMyWithdrawals(snap.docs.map((d) => d.data() as PixWithdrawal)),
+      (snap) => {
+        const list = snap.docs.map((d) => d.data() as PixWithdrawal);
+        setMyWithdrawals(list);
+
+        if (!withdrawalsInitRef.current) {
+          const initialMap = new Map<string, WithdrawalStatus>();
+          list.forEach((w) => initialMap.set(w.withdrawalId, w.status));
+          prevWithdrawalStatusRef.current = initialMap;
+          withdrawalsInitRef.current = true;
+          return;
+        }
+
+        const prevMap = prevWithdrawalStatusRef.current;
+        for (const w of list) {
+          const prevStatus = prevMap.get(w.withdrawalId);
+          const transitionedToProcessed =
+            prevStatus !== undefined &&
+            prevStatus !== w.status &&
+            (w.status === 'approved' || w.status === 'paid' || w.status === 'rejected');
+          const arrivedAlreadyProcessed =
+            prevStatus === undefined &&
+            (w.status === 'approved' || w.status === 'paid' || w.status === 'rejected');
+
+          if ((transitionedToProcessed || arrivedAlreadyProcessed) && canDispatchBrowserNotification()) {
+            const amountLabel = formatBRL(w.amountCents);
+            if (w.status === 'paid') {
+              sendBrowserNotification({
+                title: 'Pix pago — Earn Easy',
+                body: `Seu saque de ${amountLabel} foi pago na chave ${w.pixKey}.`,
+                tag: `pix_${w.withdrawalId}_paid`,
+              });
+            } else if (w.status === 'approved') {
+              sendBrowserNotification({
+                title: 'Saque Pix aprovado — Earn Easy',
+                body: `Seu saque de ${amountLabel} foi aprovado e está em processamento.`,
+                tag: `pix_${w.withdrawalId}_approved`,
+              });
+            } else if (w.status === 'rejected') {
+              sendBrowserNotification({
+                title: 'Saque Pix recusado — Earn Easy',
+                body: w.adminNote
+                  ? `Seu saque de ${amountLabel} foi recusado: ${w.adminNote}`
+                  : `Seu saque de ${amountLabel} foi recusado e o saldo foi estornado.`,
+                tag: `pix_${w.withdrawalId}_rejected`,
+              });
+            }
+          }
+          prevMap.set(w.withdrawalId, w.status);
+        }
+      },
       (error) => handleFirestoreError(error, OperationType.LIST, 'withdrawals')
     );
 
@@ -439,6 +564,33 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           .map((d) => d.data() as PromoCode)
           .sort((a, b) => b.pointsValue - a.pointsValue);
         setPublicPromoEvents(list);
+
+        const now = Date.now();
+        if (!promosInitRef.current) {
+          list.forEach((p) => {
+            const publishMs = timestampToMillis(p.publishAt);
+            if (publishMs === 0 || publishMs <= now) {
+              seenReleasedPromoCodesRef.current.add(p.code);
+            }
+          });
+          promosInitRef.current = true;
+          return;
+        }
+
+        for (const p of list) {
+          const publishMs = timestampToMillis(p.publishAt);
+          const isReleased = publishMs === 0 || publishMs <= now;
+          if (isReleased && !seenReleasedPromoCodesRef.current.has(p.code)) {
+            seenReleasedPromoCodesRef.current.add(p.code);
+            if (canDispatchBrowserNotification()) {
+              sendBrowserNotification({
+                title: 'Novo código liberado — Earn Easy',
+                body: `${p.code} (${p.title}) vale +${formatPoints(p.pointsValue)} moedas! Resgate na aba Convidar.`,
+                tag: `promo_${p.code}`,
+              });
+            }
+          }
+        }
       },
       (error) => handleFirestoreError(error, OperationType.LIST, 'promoCodes')
     );
@@ -451,7 +603,86 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       (error) => handleFirestoreError(error, OperationType.LIST, 'promoRedemptions')
     );
 
+    const unsubMailbox = onSnapshot(
+      query(collection(db, 'mailboxMessages'), where('active', '==', true)),
+      (snap) => {
+        const list = snap.docs
+          .map((d) => d.data() as MailboxMessage)
+          .sort((a, b) => timestampToMillis(b.createdAt) - timestampToMillis(a.createdAt));
+        setMailboxMessages(list);
+
+        const now = Date.now();
+        if (!mailboxInitRef.current) {
+          list.forEach((m) => {
+            const publishMs = timestampToMillis(m.publishAt);
+            if (publishMs === 0 || publishMs <= now) {
+              seenReleasedMailboxIdsRef.current.add(m.messageId);
+              if (m.promoCode) {
+                seenReleasedPromoCodesRef.current.add(m.promoCode);
+              }
+            }
+          });
+          mailboxInitRef.current = true;
+          return;
+        }
+
+        for (const m of list) {
+          const publishMs = timestampToMillis(m.publishAt);
+          const isReleased = publishMs === 0 || publishMs <= now;
+          if (isReleased && !seenReleasedMailboxIdsRef.current.has(m.messageId)) {
+            seenReleasedMailboxIdsRef.current.add(m.messageId);
+            const alreadyNotifiedByPromo = Boolean(
+              m.promoCode && seenReleasedPromoCodesRef.current.has(m.promoCode)
+            );
+            if (m.promoCode) {
+              seenReleasedPromoCodesRef.current.add(m.promoCode);
+            }
+            if (m.category === 'promo_event' && !alreadyNotifiedByPromo && canDispatchBrowserNotification()) {
+              sendBrowserNotification({
+                title: 'Novo código na Caixa de Correio — Earn Easy',
+                body: m.promoCode
+                  ? `Código ${m.promoCode} liberado (+${formatPoints(m.pointsValue)} moedas). Abra sua Caixa de Correio!`
+                  : m.title,
+                tag: m.promoCode ? `promo_${m.promoCode}` : `mail_${m.messageId}`,
+              });
+            }
+          }
+        }
+      },
+      (error) => handleFirestoreError(error, OperationType.LIST, 'mailboxMessages')
+    );
+
+    try {
+      const saved = window.localStorage.getItem(`earneasy_read_mail_${uid}`);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          setReadMailboxIds(parsed.filter((item): item is string => typeof item === 'string'));
+        }
+      } else {
+        setReadMailboxIds([]);
+      }
+    } catch {
+      setReadMailboxIds([]);
+    }
+
+    try {
+      const notifPref = window.localStorage.getItem(`earneasy_browser_notif_enabled_${uid}`);
+      const nextEnabled = notifPref !== '0';
+      setBrowserNotifEnabledState(nextEnabled);
+      browserNotifPrefsRef.current.enabled = nextEnabled;
+    } catch {
+      setBrowserNotifEnabledState(true);
+      browserNotifPrefsRef.current.enabled = true;
+    }
+
     return () => {
+      withdrawalsInitRef.current = false;
+      prevWithdrawalStatusRef.current.clear();
+      promosInitRef.current = false;
+      mailboxInitRef.current = false;
+      seenReleasedPromoCodesRef.current.clear();
+      seenReleasedMailboxIdsRef.current.clear();
       unsubUser();
       unsubPrivate();
       unsubSessions();
@@ -465,8 +696,56 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       unsubInvitedReferrals();
       unsubPublicPromoEvents();
       unsubPromoRedemptions();
+      unsubMailbox();
     };
   }, [authReady, firebaseUser]);
+
+  // Monitor scheduled promo codes & mailbox events so browser alerts fire as soon as publishAt arrives
+  useEffect(() => {
+    if (!authReady || !firebaseUser) return;
+    const interval = window.setInterval(() => {
+      if (!promosInitRef.current && !mailboxInitRef.current) return;
+      const now = Date.now();
+
+      for (const p of publicPromoEvents) {
+        const publishMs = timestampToMillis(p.publishAt);
+        if (publishMs > 0 && publishMs <= now && !seenReleasedPromoCodesRef.current.has(p.code)) {
+          seenReleasedPromoCodesRef.current.add(p.code);
+          if (canDispatchBrowserNotification()) {
+            sendBrowserNotification({
+              title: 'Código programado liberado — Earn Easy',
+              body: `O código ${p.code} (+${formatPoints(p.pointsValue)} moedas) acabou de ser liberado!`,
+              tag: `promo_${p.code}`,
+            });
+          }
+        }
+      }
+
+      for (const m of mailboxMessages) {
+        const publishMs = timestampToMillis(m.publishAt);
+        if (publishMs > 0 && publishMs <= now && !seenReleasedMailboxIdsRef.current.has(m.messageId)) {
+          seenReleasedMailboxIdsRef.current.add(m.messageId);
+          const alreadyNotifiedByPromo = Boolean(
+            m.promoCode && seenReleasedPromoCodesRef.current.has(m.promoCode)
+          );
+          if (m.promoCode) {
+            seenReleasedPromoCodesRef.current.add(m.promoCode);
+          }
+          if (m.category === 'promo_event' && !alreadyNotifiedByPromo && canDispatchBrowserNotification()) {
+            sendBrowserNotification({
+              title: 'Código liberado na Caixa de Correio — Earn Easy',
+              body: m.promoCode
+                ? `Código ${m.promoCode} (+${formatPoints(m.pointsValue)} moedas) já pode ser resgatado!`
+                : m.title,
+              tag: m.promoCode ? `promo_${m.promoCode}` : `mail_${m.messageId}`,
+            });
+          }
+        }
+      }
+    }, 5000);
+
+    return () => window.clearInterval(interval);
+  }, [authReady, firebaseUser, publicPromoEvents, mailboxMessages]);
 
   const signInWithGoogle = async () => {
     setAuthError(null);
@@ -1291,6 +1570,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (!promo.active) {
           throw new Error('Este evento de código já foi encerrado ou pausado pelo administrador.');
         }
+        const publishMs = timestampToMillis(promo.publishAt);
+        const nowMs = Date.now();
+        if (publishMs > nowMs) {
+          throw new Error(
+            `Este código está agendado para ser publicado às ${formatScheduleTime(publishMs)} (falta ${formatScheduleRemaining(publishMs, nowMs)}).`
+          );
+        }
         if (promo.redemptionCount >= promo.maxRedemptions) {
           throw new Error('Este código atingiu o limite máximo de resgates disponíveis.');
         }
@@ -1343,6 +1629,69 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   };
 
+  const persistReadMailboxIds = (nextIds: string[]) => {
+    setReadMailboxIds(nextIds);
+    if (!firebaseUser) return;
+    try {
+      window.localStorage.setItem(`earneasy_read_mail_${firebaseUser.uid}`, JSON.stringify(nextIds));
+    } catch {
+      // Ignore storage error
+    }
+  };
+
+  const markMailboxRead = (messageId: string) => {
+    if (!messageId || readMailboxIds.includes(messageId)) return;
+    persistReadMailboxIds([...readMailboxIds, messageId]);
+  };
+
+  const markAllMailboxRead = () => {
+    const allIds = mailboxMessages.map((m) => m.messageId);
+    const merged = Array.from(new Set([...readMailboxIds, ...allIds]));
+    persistReadMailboxIds(merged);
+  };
+
+  const setBrowserNotifEnabled = (enabled: boolean) => {
+    setBrowserNotifEnabledState(enabled);
+    browserNotifPrefsRef.current.enabled = enabled;
+    if (!firebaseUser) return;
+    try {
+      window.localStorage.setItem(
+        `earneasy_browser_notif_enabled_${firebaseUser.uid}`,
+        enabled ? '1' : '0'
+      );
+    } catch {
+      // Ignore storage error
+    }
+  };
+
+  const requestBrowserNotifications = async (): Promise<BrowserNotificationPermissionState> => {
+    const result = await requestBrowserNotificationPermission();
+    setBrowserNotifPermission(result);
+    browserNotifPrefsRef.current.permission = result;
+    if (result === 'granted') {
+      setBrowserNotifEnabled(true);
+      sendBrowserNotification({
+        title: 'Alertas ativados — Earn Easy',
+        body: 'Você receberá avisos quando seus saques Pix forem processados ou novos códigos forem liberados.',
+        tag: 'earneasy_notif_enabled',
+      });
+    }
+    return result;
+  };
+
+  const sendTestBrowserNotification = (): boolean => {
+    if (!canDispatchBrowserNotification()) return false;
+    return sendBrowserNotification({
+      title: 'Teste de alerta — Earn Easy',
+      body: 'Notificações nativas funcionando para saques Pix e novos códigos.',
+      tag: 'earneasy_notif_test',
+    });
+  };
+
+  const unreadMailboxCount = mailboxMessages.filter(
+    (m) => !readMailboxIds.includes(m.messageId)
+  ).length;
+
   const needsOnboarding = authReady && Boolean(firebaseUser) && !userAccount;
 
   return (
@@ -1364,8 +1713,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         myInvitedReferrals,
         publicPromoEvents,
         myPromoRedemptions,
+        mailboxMessages,
+        readMailboxIds,
+        unreadMailboxCount,
         needsOnboarding,
         authError,
+        browserNotifPermission,
+        browserNotifEnabled,
+        requestBrowserNotifications,
+        setBrowserNotifEnabled,
+        sendTestBrowserNotification,
         signInWithGoogle,
         logout,
         createUserAccount,
@@ -1377,6 +1734,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         claimDailyCheckin,
         claimLevelReward,
         redeemPromoCode,
+        markMailboxRead,
+        markAllMailboxRead,
       }}
     >
       {children}

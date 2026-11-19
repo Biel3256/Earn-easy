@@ -1,5 +1,16 @@
-import React from 'react';
-import { Check, Moon, ShieldCheck, Sun, UserCheck, Landmark } from 'lucide-react';
+import React, { useState } from 'react';
+import {
+  Bell,
+  BellOff,
+  BellRing,
+  Check,
+  Landmark,
+  Moon,
+  Send,
+  ShieldCheck,
+  Sun,
+  UserCheck,
+} from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { formatBRL, formatPoints } from '../utils/pix';
 
@@ -18,7 +29,82 @@ export const SettingsSection: React.FC<SettingsSectionProps> = ({
   onNavigateProfile,
   onNavigateWallet,
 }) => {
-  const { firebaseUser, userAccount, privateInfo, signInWithGoogle } = useAuth();
+  const {
+    firebaseUser,
+    userAccount,
+    privateInfo,
+    signInWithGoogle,
+    browserNotifPermission,
+    browserNotifEnabled,
+    requestBrowserNotifications,
+    setBrowserNotifEnabled,
+    sendTestBrowserNotification,
+  } = useAuth();
+
+  const [notifRequesting, setNotifRequesting] = useState(false);
+  const [notifFeedback, setNotifFeedback] = useState<{
+    type: 'success' | 'info' | 'error';
+    text: string;
+  } | null>(null);
+
+  const handleRequestNotifications = async () => {
+    setNotifFeedback(null);
+    setNotifRequesting(true);
+    try {
+      const result = await requestBrowserNotifications();
+      if (result === 'granted') {
+        setNotifFeedback({
+          type: 'success',
+          text: 'Permissão concedida! Você receberá alertas nativos de Pix e novos códigos.',
+        });
+      } else if (result === 'denied') {
+        setNotifFeedback({
+          type: 'error',
+          text: 'Permissão bloqueada pelo navegador. Libere as notificações nas configurações do site.',
+        });
+      } else {
+        setNotifFeedback({
+          type: 'info',
+          text: 'Solicitação fechada sem alteração de permissão.',
+        });
+      }
+    } finally {
+      setNotifRequesting(false);
+    }
+  };
+
+  const handleToggleEnabled = () => {
+    const next = !browserNotifEnabled;
+    setBrowserNotifEnabled(next);
+    setNotifFeedback({
+      type: next ? 'success' : 'info',
+      text: next
+        ? 'Alertas nativos reativados neste dispositivo.'
+        : 'Alertas nativos pausados. Você pode reativar quando quiser.',
+    });
+  };
+
+  const handleTestNotification = () => {
+    const sent = sendTestBrowserNotification();
+    setNotifFeedback(
+      sent
+        ? {
+            type: 'success',
+            text: 'Notificação de teste enviada para o sistema.',
+          }
+        : {
+            type: 'error',
+            text: 'Não foi possível exibir a notificação de teste. Verifique se as notificações estão permitidas e ativas.',
+          }
+    );
+  };
+
+  const getNotifStatusLabel = () => {
+    if (browserNotifPermission === 'unsupported') return 'Indisponível neste navegador';
+    if (browserNotifPermission === 'denied') return 'Bloqueadas no navegador';
+    if (browserNotifPermission === 'default') return 'Aguardando ativação';
+    return browserNotifEnabled ? 'Ativas neste navegador' : 'Pausadas pelo usuário';
+  };
 
   return (
     <div className="space-y-8 max-w-4xl mx-auto">
@@ -27,7 +113,7 @@ export const SettingsSection: React.FC<SettingsSectionProps> = ({
           Configurações
         </h1>
         <p className="text-sm text-slate-500 dark:text-zinc-400">
-          Escolha o tema visual do aplicativo e gerencie suas preferências de conta.
+          Escolha o tema visual do aplicativo, alertas do navegador e preferências de conta.
         </p>
       </div>
 
@@ -122,6 +208,126 @@ export const SettingsSection: React.FC<SettingsSectionProps> = ({
               <div className="w-10 h-5 rounded bg-emerald-500" />
             </div>
           </button>
+        </div>
+      </section>
+
+      {/* Browser Native Notifications */}
+      <section className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-6 space-y-5">
+        <div className="flex items-start justify-between gap-4 border-b border-slate-100 dark:border-zinc-800 pb-4">
+          <div>
+            <h2 className="text-base font-bold text-slate-900 dark:text-zinc-50">
+              Notificações Nativas do Navegador
+            </h2>
+            <p className="text-xs text-slate-500 dark:text-zinc-400 mt-0.5">
+              Receba alertas na tela mesmo quando estiver em outra aba.
+            </p>
+          </div>
+          {browserNotifPermission === 'granted' && browserNotifEnabled ? (
+            <BellRing className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+          ) : browserNotifPermission === 'denied' || browserNotifPermission === 'unsupported' ? (
+            <BellOff className="w-5 h-5 text-slate-400 dark:text-zinc-500 shrink-0" />
+          ) : (
+            <Bell className="w-5 h-5 text-slate-600 dark:text-zinc-300 shrink-0" />
+          )}
+        </div>
+
+        <div className="bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 rounded-lg p-4 space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="space-y-1">
+              <div className="text-xs text-slate-500 dark:text-zinc-400">Status atual</div>
+              <div className="text-sm font-semibold text-slate-900 dark:text-zinc-100">
+                {getNotifStatusLabel()}
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2.5">
+              {browserNotifPermission === 'default' && (
+                <button
+                  type="button"
+                  disabled={notifRequesting}
+                  onClick={handleRequestNotifications}
+                  className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-lg transition-colors cursor-pointer"
+                >
+                  <BellRing className="w-3.5 h-3.5" />
+                  {notifRequesting ? 'Solicitando...' : 'Ativar Notificações'}
+                </button>
+              )}
+
+              {browserNotifPermission === 'granted' && (
+                <>
+                  <button
+                    type="button"
+                    onClick={handleToggleEnabled}
+                    className={`inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-lg border transition-colors cursor-pointer ${
+                      browserNotifEnabled
+                        ? 'bg-white dark:bg-zinc-900 text-slate-800 dark:text-zinc-200 border-slate-300 dark:border-zinc-700 hover:bg-slate-100 dark:hover:bg-zinc-800'
+                        : 'bg-emerald-600 hover:bg-emerald-700 text-white border-transparent'
+                    }`}
+                  >
+                    {browserNotifEnabled ? (
+                      <>
+                        <BellOff className="w-3.5 h-3.5" />
+                        Pausar Alertas
+                      </>
+                    ) : (
+                      <>
+                        <BellRing className="w-3.5 h-3.5" />
+                        Reativar Alertas
+                      </>
+                    )}
+                  </button>
+
+                  {browserNotifEnabled && (
+                    <button
+                      type="button"
+                      onClick={handleTestNotification}
+                      className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold bg-slate-900 dark:bg-zinc-800 text-white rounded-lg hover:bg-slate-800 dark:hover:bg-zinc-700 border border-transparent dark:border-zinc-700 transition-colors cursor-pointer"
+                    >
+                      <Send className="w-3.5 h-3.5" />
+                      Testar Notificação
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+
+          <div className="border-t border-slate-200 dark:border-zinc-800 pt-3 grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs text-slate-600 dark:text-zinc-400">
+            <div className="flex items-start gap-2">
+              <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 mt-0.5 shrink-0" />
+              <span>Alerta imediato quando um saque via Pix for aprovado, pago ou recusado.</span>
+            </div>
+            <div className="flex items-start gap-2">
+              <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 mt-0.5 shrink-0" />
+              <span>Aviso automático quando um novo código de convite/moedas for liberado.</span>
+            </div>
+          </div>
+
+          {browserNotifPermission === 'denied' && (
+            <div className="text-xs text-amber-800 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/70 rounded-lg p-3">
+              As notificações estão bloqueadas nas configurações do navegador. Para ativar, clique no ícone de cadeado ou configurações ao lado do endereço do site, altere &ldquo;Notificações&rdquo; para &ldquo;Permitir&rdquo; e recarregue ou retorne a esta aba.
+            </div>
+          )}
+
+          {browserNotifPermission === 'unsupported' && (
+            <div className="text-xs text-slate-600 dark:text-zinc-400 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-lg p-3">
+              Este navegador ou janela incorporada não oferece suporte à API nativa de Notificações Web. Você ainda acompanhará todos os avisos na Caixa de Correio.
+            </div>
+          )}
+
+          {notifFeedback && (
+            <div
+              className={`text-xs rounded-lg p-3 border ${
+                notifFeedback.type === 'success'
+                  ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300'
+                  : notifFeedback.type === 'error'
+                  ? 'bg-red-50 dark:bg-red-950/40 border-red-200 dark:border-red-800 text-red-700 dark:text-red-300'
+                  : 'bg-slate-100 dark:bg-zinc-900 border-slate-200 dark:border-zinc-700 text-slate-700 dark:text-zinc-300'
+              }`}
+            >
+              {notifFeedback.text}
+            </div>
+          )}
         </div>
       </section>
 

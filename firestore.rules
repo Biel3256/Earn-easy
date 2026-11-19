@@ -94,6 +94,10 @@ service cloud.firestore {
         get(/databases/$(database)/documents/users/$(userId)).data.status == 'active';
     }
 
+    function isPromoPublished(promoData) {
+      return !('publishAt' in promoData) || promoData.publishAt <= request.time;
+    }
+
     function isValidReferralCommission(comm, referrerUid, invitedUid) {
       return comm >= 1 &&
         comm <= 60 &&
@@ -402,15 +406,18 @@ service cloud.firestore {
       ]) &&
       data.keys().hasOnly([
         'code', 'title', 'pointsValue', 'maxRedemptions', 'redemptionCount',
-        'active', 'publicEvent', 'createdBy', 'createdAt', 'updatedAt'
+        'active', 'publicEvent', 'publishDelayMinutes', 'publishAt',
+        'createdBy', 'createdAt', 'updatedAt'
       ]) &&
       isValidPromoCodeId(data.code) &&
       data.title is string && data.title.size() >= 3 && data.title.size() <= 120 &&
-      data.pointsValue is number && data.pointsValue >= 10 && data.pointsValue <= 50000 &&
+      data.pointsValue is number && data.pointsValue >= 10 && data.pointsValue <= 100000 &&
       data.maxRedemptions is number && data.maxRedemptions >= 1 && data.maxRedemptions <= 100000 &&
       data.redemptionCount is number && data.redemptionCount >= 0 && data.redemptionCount <= data.maxRedemptions &&
       data.active is bool &&
       data.publicEvent is bool &&
+      (!('publishDelayMinutes' in data) || (data.publishDelayMinutes is number && data.publishDelayMinutes >= 0 && data.publishDelayMinutes <= 1440)) &&
+      (!('publishAt' in data) || data.publishAt is timestamp) &&
       isValidId(data.createdBy) &&
       data.createdAt is timestamp &&
       data.updatedAt is timestamp;
@@ -426,7 +433,28 @@ service cloud.firestore {
       isValidId(data.redemptionId) &&
       isValidPromoCodeId(data.code) &&
       isValidId(data.userId) &&
-      data.pointsAwarded is number && data.pointsAwarded >= 10 && data.pointsAwarded <= 50000 &&
+      data.pointsAwarded is number && data.pointsAwarded >= 10 && data.pointsAwarded <= 100000 &&
+      data.createdAt is timestamp;
+    }
+
+    function isValidMailboxMessage(data) {
+      return data.keys().hasAll([
+        'messageId', 'title', 'body', 'category', 'promoCode',
+        'pointsValue', 'publishAt', 'active', 'createdBy', 'createdAt'
+      ]) &&
+      data.keys().hasOnly([
+        'messageId', 'title', 'body', 'category', 'promoCode',
+        'pointsValue', 'publishAt', 'active', 'createdBy', 'createdAt'
+      ]) &&
+      isValidId(data.messageId) &&
+      data.title is string && data.title.size() >= 3 && data.title.size() <= 140 &&
+      data.body is string && data.body.size() >= 3 && data.body.size() <= 600 &&
+      data.category in ['promo_event', 'system_notice'] &&
+      data.promoCode is string && data.promoCode.size() <= 40 &&
+      data.pointsValue is number && data.pointsValue >= 0 && data.pointsValue <= 100000 &&
+      data.publishAt is timestamp &&
+      data.active is bool &&
+      isValidId(data.createdBy) &&
       data.createdAt is timestamp;
     }
 
@@ -566,7 +594,7 @@ service cloud.firestore {
                   )
                 )
               ) ||
-              // Action J: One-Time Admin Promo Code Redemption
+              // Action J: One-Time Admin Promo Code Redemption (respecting publishAt)
               (
                 incoming().status == existing().status &&
                 incoming().riskScore == existing().riskScore &&
@@ -577,6 +605,7 @@ service cloud.firestore {
                 existsAfter(/databases/$(database)/documents/promoRedemptions/$(promoRedemptionDocId(userId, incoming().lastPromoCode))) &&
                 exists(/databases/$(database)/documents/promoCodes/$(incoming().lastPromoCode)) &&
                 get(/databases/$(database)/documents/promoCodes/$(incoming().lastPromoCode)).data.active == true &&
+                isPromoPublished(get(/databases/$(database)/documents/promoCodes/$(incoming().lastPromoCode)).data) &&
                 get(/databases/$(database)/documents/promoCodes/$(incoming().lastPromoCode)).data.redemptionCount < get(/databases/$(database)/documents/promoCodes/$(incoming().lastPromoCode)).data.maxRedemptions &&
                 (incoming().pointsBalance - existing().pointsBalance) == get(/databases/$(database)/documents/promoCodes/$(incoming().lastPromoCode)).data.pointsValue &&
                 getAfter(/databases/$(database)/documents/promoRedemptions/$(promoRedemptionDocId(userId, incoming().lastPromoCode))).data.pointsAwarded == (incoming().pointsBalance - existing().pointsBalance)
@@ -899,7 +928,7 @@ service cloud.firestore {
       allow delete: if isValidId(invitedUid) && isAdmin();
     }
 
-    // 13. Admin-Generated Promo Code Events
+    // 13. Admin-Generated Promo Code Events (max 100,000 coins/points + scheduled publishAt)
     match /promoCodes/{code} {
       allow get: if isValidPromoCodeId(code) && isSignedIn();
       allow list: if isAdmin() || (
@@ -924,6 +953,7 @@ service cloud.firestore {
           isAdmin() || (
             isActiveUser(request.auth.uid) &&
             existing().active == true &&
+            isPromoPublished(existing()) &&
             existing().redemptionCount < existing().maxRedemptions &&
             incoming().diff(existing()).affectedKeys().hasOnly(['redemptionCount', 'updatedAt']) &&
             incoming().redemptionCount == existing().redemptionCount + 1 &&
@@ -950,12 +980,33 @@ service cloud.firestore {
         isActiveUser(request.auth.uid) &&
         exists(/databases/$(database)/documents/promoCodes/$(incoming().code)) &&
         get(/databases/$(database)/documents/promoCodes/$(incoming().code)).data.active == true &&
+        isPromoPublished(get(/databases/$(database)/documents/promoCodes/$(incoming().code)).data) &&
         get(/databases/$(database)/documents/promoCodes/$(incoming().code)).data.redemptionCount < get(/databases/$(database)/documents/promoCodes/$(incoming().code)).data.maxRedemptions &&
         incoming().pointsAwarded == get(/databases/$(database)/documents/promoCodes/$(incoming().code)).data.pointsValue &&
         getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.pointsBalance ==
           get(/databases/$(database)/documents/users/$(request.auth.uid)).data.pointsBalance + incoming().pointsAwarded;
 
       allow update, delete: if isValidId(redemptionId) && isAdmin();
+    }
+
+    // 15. Caixa de Correio Broadcast Messages (sent when admin creates promo code events)
+    match /mailboxMessages/{messageId} {
+      allow get: if isValidId(messageId) && (isAdmin() || (isSignedIn() && existing().active == true));
+      allow list: if isAdmin() || (isSignedIn() && resource.data.active == true);
+
+      allow create: if isValidId(messageId) &&
+        isAdmin() &&
+        isValidMailboxMessage(incoming()) &&
+        incoming().messageId == messageId &&
+        incoming().createdAt == request.time;
+
+      allow update: if isValidId(messageId) &&
+        isAdmin() &&
+        isValidMailboxMessage(incoming()) &&
+        incoming().messageId == existing().messageId &&
+        incoming().createdAt == existing().createdAt;
+
+      allow delete: if isValidId(messageId) && isAdmin();
     }
   }
 }

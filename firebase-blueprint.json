@@ -322,7 +322,7 @@
     },
     "PromoCode": {
       "title": "PromoCode",
-      "description": "Admin-generated promotional event code worth redeemable points.",
+      "description": "Admin-generated promotional event code worth up to 100,000 redeemable coins/points with optional scheduled publish delay.",
       "type": "object",
       "properties": {
         "code": { "type": "string", "minLength": 3, "maxLength": 40, "pattern": "^[A-Z0-9_\\-]+$" },
@@ -332,6 +332,8 @@
         "redemptionCount": { "type": "number" },
         "active": { "type": "boolean" },
         "publicEvent": { "type": "boolean" },
+        "publishDelayMinutes": { "type": "number" },
+        "publishAt": { "type": "string", "format": "date-time" },
         "createdBy": { "type": "string", "maxLength": 128 },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
@@ -361,6 +363,35 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["redemptionId", "code", "userId", "pointsAwarded", "createdAt"]
+    },
+    "MailboxMessage": {
+      "title": "MailboxMessage",
+      "description": "Admin-dispatched inbox message delivered to users' Caixa de Correio when a promo code event is generated.",
+      "type": "object",
+      "properties": {
+        "messageId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "title": { "type": "string", "minLength": 3, "maxLength": 140 },
+        "body": { "type": "string", "minLength": 3, "maxLength": 600 },
+        "category": { "type": "string", "enum": ["promo_event", "system_notice"] },
+        "promoCode": { "type": "string", "maxLength": 40 },
+        "pointsValue": { "type": "number" },
+        "publishAt": { "type": "string", "format": "date-time" },
+        "active": { "type": "boolean" },
+        "createdBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "messageId",
+        "title",
+        "body",
+        "category",
+        "promoCode",
+        "pointsValue",
+        "publishAt",
+        "active",
+        "createdBy",
+        "createdAt"
+      ]
     }
   },
   "firestore": {
@@ -423,6 +454,10 @@
     "/promoRedemptions/{redemptionId}": {
       "schema": { "$ref": "#/entities/PromoRedemption" },
       "description": "One-time promo code redemptions per user (prm_{uid}_{code})."
+    },
+    "/mailboxMessages/{messageId}": {
+      "schema": { "$ref": "#/entities/MailboxMessage" },
+      "description": "Platform-wide Caixa de Correio inbox messages sent when admin generates promo code events."
     }
   }
 }

@@ -10,14 +10,18 @@ import {
   runTransaction,
   serverTimestamp,
   setDoc,
+  Timestamp,
   updateDoc,
+  writeBatch,
 } from 'firebase/firestore';
 import {
   Ban,
   CheckCircle2,
+  Clock,
   Copy,
   KeyRound,
   Landmark,
+  Mail,
   RefreshCw,
   Send,
   ShieldAlert,
@@ -35,6 +39,7 @@ import {
   FraudEvent,
   GAME_LABELS,
   GameSession,
+  MAX_PROMO_CODE_POINTS,
   PixWithdrawal,
   PromoCode,
   Referral,
@@ -42,7 +47,13 @@ import {
   UserPrivateInfo,
 } from '../types/earneasy';
 import { generateId, sha256Hex } from '../utils/antifraud';
-import { formatBRL, formatPoints } from '../utils/pix';
+import {
+  formatBRL,
+  formatPoints,
+  formatScheduleRemaining,
+  formatScheduleTime,
+  timestampToMillis,
+} from '../utils/pix';
 
 type AdminTab = 'payouts' | 'users' | 'codes' | 'antifraud' | 'api';
 
@@ -77,7 +88,9 @@ export const AdminPanel: React.FC = () => {
   const [promoTitle, setPromoTitle] = useState('');
   const [promoPoints, setPromoPoints] = useState('500');
   const [promoMaxRedemptions, setPromoMaxRedemptions] = useState('100');
+  const [promoDelayMinutes, setPromoDelayMinutes] = useState('0');
   const [promoPublicEvent, setPromoPublicEvent] = useState(true);
+  const [sendMailboxMsg, setSendMailboxMsg] = useState(true);
   const [promoSubmitting, setPromoSubmitting] = useState(false);
   const [promoError, setPromoError] = useState<string | null>(null);
 
@@ -571,6 +584,7 @@ export const AdminPanel: React.FC = () => {
     const cleanTitle = promoTitle.trim().slice(0, 120);
     const pointsNum = Math.round(Number(promoPoints));
     const maxRedeemNum = Math.round(Number(promoMaxRedemptions));
+    const delayNum = Math.round(Number(promoDelayMinutes || 0));
 
     if (!/^[A-Z0-9_-]{3,40}$/.test(normalizedCode)) {
       setPromoError('O código deve ter de 3 a 40 caracteres (A-Z, 0-9, "-" ou "_"), sem espaços.');
@@ -580,12 +594,16 @@ export const AdminPanel: React.FC = () => {
       setPromoError('Informe o nome/título do evento (mínimo 3 caracteres).');
       return;
     }
-    if (!Number.isFinite(pointsNum) || pointsNum < 10 || pointsNum > 50000) {
-      setPromoError('Valor em pontos deve ficar entre 10 e 50.000.');
+    if (!Number.isFinite(pointsNum) || pointsNum < 10 || pointsNum > MAX_PROMO_CODE_POINTS) {
+      setPromoError(`Valor em moedas deve ficar entre 10 e ${formatPoints(MAX_PROMO_CODE_POINTS)}.`);
       return;
     }
     if (!Number.isFinite(maxRedeemNum) || maxRedeemNum < 1 || maxRedeemNum > 100000) {
       setPromoError('Limite de resgates deve ficar entre 1 e 100.000.');
+      return;
+    }
+    if (!Number.isFinite(delayNum) || delayNum < 0 || delayNum > 1440) {
+      setPromoError('O tempo de publicação deve ficar entre 0 (imediato) e 1.440 minutos (24 horas).');
       return;
     }
     if (promoCodes.some((c) => c.code === normalizedCode)) {
@@ -595,7 +613,12 @@ export const AdminPanel: React.FC = () => {
 
     setPromoSubmitting(true);
     try {
-      await setDoc(doc(db, 'promoCodes', normalizedCode), {
+      const publishMs = Date.now() + delayNum * 60_000;
+      const publishAtTimestamp =
+        delayNum === 0 ? Timestamp.now() : Timestamp.fromMillis(publishMs);
+
+      const batch = writeBatch(db);
+      batch.set(doc(db, 'promoCodes', normalizedCode), {
         code: normalizedCode,
         title: cleanTitle,
         pointsValue: pointsNum,
@@ -603,15 +626,57 @@ export const AdminPanel: React.FC = () => {
         redemptionCount: 0,
         active: true,
         publicEvent: promoPublicEvent,
+        publishDelayMinutes: delayNum,
+        publishAt: publishAtTimestamp,
         createdBy: firebaseUser.uid,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
+
+      if (sendMailboxMsg) {
+        const messageId = generateId('mbx');
+        const scheduleLabel =
+          delayNum === 0
+            ? 'Já disponível para resgate imediato no site!'
+            : `Será publicado no site em ${formatScheduleRemaining(publishMs, Date.now())} (às ${formatScheduleTime(publishMs)}).`;
+
+        const mailTitle =
+          delayNum === 0
+            ? `Código Premiado Liberado: +${formatPoints(pointsNum)} moedas`
+            : `Evento Programado (${delayNum} min): +${formatPoints(pointsNum)} moedas`;
+
+        const mailBody = `${cleanTitle} — Vale +${formatPoints(pointsNum)} moedas para os primeiros ${formatPoints(maxRedeemNum)} jogadores que resgatarem. ${scheduleLabel}`;
+
+        batch.set(doc(db, 'mailboxMessages', messageId), {
+          messageId,
+          title: mailTitle.slice(0, 140),
+          body: mailBody.slice(0, 600),
+          category: 'promo_event',
+          promoCode: normalizedCode,
+          pointsValue: pointsNum,
+          publishAt: publishAtTimestamp,
+          active: true,
+          createdBy: firebaseUser.uid,
+          createdAt: serverTimestamp(),
+        });
+      }
+
+      await batch.commit();
+
+      const delayFeedback =
+        delayNum === 0
+          ? 'publicado imediatamente'
+          : `agendado para publicar em ${delayNum} min (às ${formatScheduleTime(publishMs)})`;
+      const mailFeedback = sendMailboxMsg
+        ? ' e enviado para a Caixa de Correio dos jogadores'
+        : '';
+
       setActionMsg(
-        `Evento "${cleanTitle}" (${normalizedCode} = +${formatPoints(pointsNum)} pts) enviado com sucesso${promoPublicEvent ? ' e publicado na aba Convites & Códigos dos jogadores' : ' (modo código privado)'}.`
+        `Evento "${cleanTitle}" (${normalizedCode} = +${formatPoints(pointsNum)} moedas) ${delayFeedback}${mailFeedback}.`
       );
       setPromoCodeInput(buildRandomPromoCode());
       setPromoTitle('');
+      setPromoDelayMinutes('0');
     } catch (err) {
       setPromoError(err instanceof Error ? err.message : 'Erro ao criar evento de código.');
       handleFirestoreError(err, OperationType.CREATE, `promoCodes/${normalizedCode}`);
@@ -1032,13 +1097,13 @@ export const AdminPanel: React.FC = () => {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300 mb-1">
-                    Pontos por Resgate
+                    Moedas por Resgate (máx. 100.000)
                   </label>
                   <input
                     type="number"
                     required
                     min={10}
-                    max={50000}
+                    max={MAX_PROMO_CODE_POINTS}
                     value={promoPoints}
                     onChange={(e) => setPromoPoints(e.target.value)}
                     className="w-full px-3 py-2 text-sm font-mono bg-white dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-lg"
@@ -1060,22 +1125,95 @@ export const AdminPanel: React.FC = () => {
                 </div>
               </div>
 
-              <label className="flex items-start gap-2.5 p-3 rounded-lg bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={promoPublicEvent}
-                  onChange={(e) => setPromoPublicEvent(e.target.checked)}
-                  className="mt-0.5 rounded border-slate-300 text-emerald-600 focus:ring-emerald-600"
-                />
-                <div className="text-xs">
-                  <div className="font-semibold text-slate-900 dark:text-zinc-100">
-                    Enviar e exibir evento publicamente no app
-                  </div>
-                  <div className="text-[11px] text-slate-500 dark:text-zinc-400">
-                    Se marcado, aparece na lista de Eventos Ativos dos usuários. Se desmarcado, apenas quem receber o código de você poderá digitá-lo e resgatar.
-                  </div>
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <label className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-700 dark:text-zinc-300">
+                    <Clock className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                    Publicar no site em (minutos)
+                  </label>
+                  <span className="text-[11px] font-mono text-slate-500 dark:text-zinc-400">
+                    {Number(promoDelayMinutes || 0) === 0
+                      ? 'Imediato'
+                      : `Em ${promoDelayMinutes} min`}
+                  </span>
                 </div>
-              </label>
+
+                <div className="flex flex-wrap gap-1.5">
+                  {[
+                    { label: 'Imediato', mins: '0' },
+                    { label: '5 min', mins: '5' },
+                    { label: '15 min', mins: '15' },
+                    { label: '30 min', mins: '30' },
+                    { label: '1 hora', mins: '60' },
+                    { label: '2 horas', mins: '120' },
+                    { label: '4 horas', mins: '240' },
+                  ].map((preset) => (
+                    <button
+                      key={preset.mins}
+                      type="button"
+                      onClick={() => setPromoDelayMinutes(preset.mins)}
+                      className={`px-2.5 py-1 text-[11px] font-semibold rounded-md border transition-colors cursor-pointer ${
+                        promoDelayMinutes === preset.mins
+                          ? 'bg-emerald-600 text-white border-emerald-600'
+                          : 'bg-slate-50 dark:bg-zinc-950 text-slate-700 dark:text-zinc-300 border-slate-200 dark:border-zinc-800 hover:border-emerald-400'
+                      }`}
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min={0}
+                    max={1440}
+                    value={promoDelayMinutes}
+                    onChange={(e) => setPromoDelayMinutes(e.target.value)}
+                    className="w-28 px-3 py-1.5 text-xs font-mono bg-white dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-lg"
+                  />
+                  <span className="text-[11px] text-slate-500 dark:text-zinc-400">
+                    minutos (0 = imediato, até 1.440 min = 24 horas)
+                  </span>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <label className="flex items-start gap-2.5 p-3 rounded-lg bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={promoPublicEvent}
+                    onChange={(e) => setPromoPublicEvent(e.target.checked)}
+                    className="mt-0.5 rounded border-slate-300 text-emerald-600 focus:ring-emerald-600"
+                  />
+                  <div className="text-xs">
+                    <div className="font-semibold text-slate-900 dark:text-zinc-100">
+                      Exibir nos Destaques e Eventos Públicos do site
+                    </div>
+                    <div className="text-[11px] text-slate-500 dark:text-zinc-400">
+                      Aparece automaticamente na área de Destaques e em Convites & Códigos quando o horário de publicação chegar.
+                    </div>
+                  </div>
+                </label>
+
+                <label className="flex items-start gap-2.5 p-3 rounded-lg bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={sendMailboxMsg}
+                    onChange={(e) => setSendMailboxMsg(e.target.checked)}
+                    className="mt-0.5 rounded border-slate-300 text-emerald-600 focus:ring-emerald-600"
+                  />
+                  <div className="text-xs">
+                    <div className="inline-flex items-center gap-1.5 font-semibold text-slate-900 dark:text-zinc-100">
+                      <Mail className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                      Enviar mensagem na Caixa de Correio dos usuários
+                    </div>
+                    <div className="text-[11px] text-slate-500 dark:text-zinc-400">
+                      Todos os jogadores recebem um aviso imediato na Caixa de Correio informando o código ou o horário programado de liberação.
+                    </div>
+                  </div>
+                </label>
+              </div>
 
               {promoError && (
                 <div className="p-3 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 rounded-lg text-xs text-red-700 dark:text-red-300">
@@ -1111,7 +1249,11 @@ export const AdminPanel: React.FC = () => {
                 </p>
               ) : (
                 <div className="divide-y divide-slate-100 dark:divide-zinc-800">
-                  {promoCodes.map((p) => (
+                  {promoCodes.map((p) => {
+                    const publishMs = timestampToMillis(p.publishAt);
+                    const nowMs = Date.now();
+                    const isScheduledPending = publishMs > nowMs;
+                    return (
                     <div key={p.code} className="py-3.5 flex flex-wrap items-center justify-between gap-3">
                       <div className="space-y-1 min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
@@ -1130,7 +1272,7 @@ export const AdminPanel: React.FC = () => {
                             <Copy className="w-3.5 h-3.5" />
                           </button>
                           <span className="text-xs font-mono font-bold text-emerald-700 dark:text-emerald-400 tabular-nums">
-                            +{formatPoints(p.pointsValue)} pts
+                            +{formatPoints(p.pointsValue)} moedas
                           </span>
                         </div>
                         <div className="text-xs font-medium text-slate-800 dark:text-zinc-200">
@@ -1139,7 +1281,10 @@ export const AdminPanel: React.FC = () => {
                         <div className="text-[11px] font-mono text-slate-500 dark:text-zinc-400 tabular-nums">
                           Resgates: {p.redemptionCount} / {p.maxRedemptions} ·{' '}
                           {p.publicEvent ? 'Evento Público' : 'Código Privado'} ·{' '}
-                          {p.active ? 'Ativo' : 'Pausado'}
+                          {p.active ? 'Ativo' : 'Pausado'} ·{' '}
+                          {isScheduledPending
+                            ? `Agendado p/ ${formatScheduleTime(publishMs)} (falta ${formatScheduleRemaining(publishMs, nowMs)})`
+                            : 'Publicado'}
                         </div>
                       </div>
 
@@ -1164,7 +1309,8 @@ export const AdminPanel: React.FC = () => {
                         </button>
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
