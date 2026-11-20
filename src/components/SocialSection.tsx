@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   addDoc, collection, doc, getDoc, getDocs, limit, onSnapshot, orderBy,
-  query, serverTimestamp, setDoc, startAt, endAt, where, writeBatch,
+  query, serverTimestamp, setDoc, updateDoc, startAt, endAt, where, writeBatch,
 } from 'firebase/firestore';
 import { MessageCircle, Search, Send, Users, UserPlus, Check, X, Circle } from 'lucide-react';
 import { db } from '../firebase';
@@ -128,11 +128,21 @@ export function SocialSection() {
     setBusy(true); setError('');
     try {
       const requestId = friendshipId(uid, profile.uid);
-      await setDoc(doc(db, 'friendRequests', requestId), {
-        senderUid: uid, recipientUid: profile.uid, senderName: myName,
-        recipientName: profile.displayName, participantUids: [uid, profile.uid],
-        status: 'pending', createdAt: serverTimestamp(),
-      });
+      const requestRef = doc(db, 'friendRequests', requestId);
+      const existingRequest = await getDoc(requestRef);
+      if (existingRequest.exists()) {
+        if (existingRequest.data().status !== 'rejected' || existingRequest.data().senderUid !== uid) {
+          setError('Já existe uma solicitação ou amizade com esse usuário.');
+          return;
+        }
+        await updateDoc(requestRef, { status: 'pending', createdAt: serverTimestamp(), respondedAt: null });
+      } else {
+        await setDoc(requestRef, {
+          senderUid: uid, recipientUid: profile.uid, senderName: myName,
+          recipientName: profile.displayName, participantUids: [uid, profile.uid],
+          status: 'pending', createdAt: serverTimestamp(),
+        });
+      }
     } catch { setError('Não foi possível enviar. Talvez já exista uma solicitação.'); }
     finally { setBusy(false); }
   };
