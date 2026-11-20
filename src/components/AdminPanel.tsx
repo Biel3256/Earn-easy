@@ -19,9 +19,12 @@ import {
   CheckCircle2,
   Clock,
   Copy,
+  Headset,
   History,
+  Inbox,
   KeyRound,
   Landmark,
+  LayoutDashboard,
   Mail,
   RefreshCw,
   Search,
@@ -30,8 +33,10 @@ import {
   ShieldCheck,
   SlidersHorizontal,
   Ticket,
+  UserCheck,
   Users,
   Webhook,
+  Wrench,
   X,
   XCircle,
 } from 'lucide-react';
@@ -48,6 +53,8 @@ import {
   PixWithdrawal,
   PromoCode,
   Referral,
+  SupportMessage,
+  SupportTicket,
   UserAccount,
   UserPrivateInfo,
   WithdrawalAttemptLog,
@@ -55,6 +62,7 @@ import {
 } from '../types/earneasy';
 import { generateId, sha256Hex } from '../utils/antifraud';
 import {
+  extractReadableError,
   formatBRL,
   formatPoints,
   formatScheduleRemaining,
@@ -62,7 +70,7 @@ import {
   timestampToMillis,
 } from '../utils/pix';
 
-type AdminTab = 'payouts' | 'users' | 'codes' | 'antifraud' | 'api';
+type AdminTab = 'overview' | 'payouts' | 'users' | 'codes' | 'support' | 'antifraud' | 'api';
 
 const ATTEMPT_STATUS_META: Record<
   WithdrawalAttemptStatus,
@@ -145,8 +153,16 @@ function buildRandomPromoCode(): string {
 const ADMIN_QUICK_AMOUNT_CHOICES = [1, 5, 10, 25, 50, 100, 200, 500, 1000, 2000];
 
 export const AdminPanel: React.FC = () => {
-  const { firebaseUser, isAdmin, withdrawalSettings } = useAuth();
-  const [tab, setTab] = useState<AdminTab>('payouts');
+  const {
+    firebaseUser,
+    userAccount,
+    isAdmin,
+    withdrawalSettings,
+    maintenanceSettings,
+    updateMaintenanceSettings,
+  } = useAuth();
+
+  const [tab, setTab] = useState<AdminTab>('overview');
   const [users, setUsers] = useState<UserAccount[]>([]);
   const [privateMap, setPrivateMap] = useState<Record<string, UserPrivateInfo>>({});
   const [withdrawals, setWithdrawals] = useState<PixWithdrawal[]>([]);
@@ -156,6 +172,12 @@ export const AdminPanel: React.FC = () => {
   const [promoCodes, setPromoCodes] = useState<PromoCode[]>([]);
   const [referrals, setReferrals] = useState<Referral[]>([]);
   const [withdrawalAttempts, setWithdrawalAttempts] = useState<WithdrawalAttemptLog[]>([]);
+  const [supportTickets, setSupportTickets] = useState<SupportTicket[]>([]);
+  const [selectedTicketId, setSelectedTicketId] = useState<string | null>(null);
+  const [supportMessages, setSupportMessages] = useState<SupportMessage[]>([]);
+  const [supportFilter, setSupportFilter] = useState<'all' | 'waiting_human' | 'active_human' | 'closed'>('all');
+  const [supportReplyDraft, setSupportReplyDraft] = useState('');
+  const [supportBusy, setSupportBusy] = useState(false);
 
   const [payoutFilter, setPayoutFilter] = useState<'all' | 'pending' | 'approved' | 'paid' | 'rejected'>('all');
   const [attemptFilter, setAttemptFilter] = useState<
@@ -165,7 +187,22 @@ export const AdminPanel: React.FC = () => {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [userSearch, setUserSearch] = useState('');
   const [actionMsg, setActionMsg] = useState<string | null>(null);
+  const [actionErr, setActionErr] = useState<string | null>(null);
   const [txIds, setTxIds] = useState<Record<string, string>>({});
+
+  // Maintenance settings form state
+  const [maintEnabled, setMaintEnabled] = useState(maintenanceSettings.enabled);
+  const [maintTitle, setMaintTitle] = useState(maintenanceSettings.title);
+  const [maintMessage, setMaintMessage] = useState(maintenanceSettings.message);
+  const [maintReturn, setMaintReturn] = useState(maintenanceSettings.estimatedReturn);
+  const [savingMaint, setSavingMaint] = useState(false);
+
+  useEffect(() => {
+    setMaintEnabled(maintenanceSettings.enabled);
+    setMaintTitle(maintenanceSettings.title);
+    setMaintMessage(maintenanceSettings.message);
+    setMaintReturn(maintenanceSettings.estimatedReturn);
+  }, [maintenanceSettings]);
 
   // Pix withdrawal minimum & values settings state
   const [firstMinReais, setFirstMinReais] = useState(
@@ -200,6 +237,11 @@ export const AdminPanel: React.FC = () => {
   const [sendMailboxMsg, setSendMailboxMsg] = useState(true);
   const [promoSubmitting, setPromoSubmitting] = useState(false);
   const [promoError, setPromoError] = useState<string | null>(null);
+
+  // Direct Broadcast Notice to Mailbox
+  const [noticeTitle, setNoticeTitle] = useState('');
+  const [noticeBody, setNoticeBody] = useState('');
+  const [noticeSending, setNoticeSending] = useState(false);
 
   // Ban modal state
   const [banTarget, setBanTarget] = useState<UserAccount | null>(null);
@@ -314,6 +356,12 @@ export const AdminPanel: React.FC = () => {
       (err) => handleFirestoreError(err, OperationType.LIST, 'withdrawalAttempts')
     );
 
+    const u9 = onSnapshot(
+      query(collection(db, 'supportTickets'), orderBy('updatedAt', 'desc')),
+      (snap) => setSupportTickets(snap.docs.map((d) => d.data() as SupportTicket)),
+      (err) => handleFirestoreError(err, OperationType.LIST, 'supportTickets')
+    );
+
     return () => {
       u1();
       u2();
@@ -323,10 +371,26 @@ export const AdminPanel: React.FC = () => {
       u6();
       u7();
       u8();
+      u9();
     };
   }, [firebaseUser, isAdmin]);
 
-  // Keep Enterprise API ledger snapshot synced with Express backend
+  useEffect(() => {
+    if (!isAdmin || !selectedTicketId) {
+      setSupportMessages([]);
+      return;
+    }
+    const msgsQ = query(
+      collection(db, 'supportTickets', selectedTicketId, 'messages'),
+      orderBy('createdAt', 'asc')
+    );
+    return onSnapshot(
+      msgsQ,
+      (snap) => setSupportMessages(snap.docs.map((d) => d.data() as SupportMessage)),
+      (err) => handleFirestoreError(err, OperationType.LIST, `supportTickets/${selectedTicketId}/messages`)
+    );
+  }, [isAdmin, selectedTicketId]);
+
   useEffect(() => {
     if (!isAdmin) return;
     const totalPointsCirculating = users.reduce((acc, u) => acc + u.pointsBalance, 0);
@@ -374,6 +438,30 @@ export const AdminPanel: React.FC = () => {
       })
       .catch(() => {});
   }, [isAdmin, firebaseUser?.email]);
+
+  const handleSaveMaintenance = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setActionErr(null);
+    setActionMsg(null);
+    setSavingMaint(true);
+    try {
+      await updateMaintenanceSettings({
+        enabled: maintEnabled,
+        title: maintTitle,
+        message: maintMessage,
+        estimatedReturn: maintReturn,
+      });
+      setActionMsg(
+        maintEnabled
+          ? 'Modo Manutenção ATIVADO! Todos os jogadores agora veem a tela de manutenção organizada.'
+          : 'Modo Manutenção DESATIVADO! A plataforma voltou a ficar online para todos os usuários.'
+      );
+    } catch (err) {
+      setActionErr(extractReadableError(err, 'Erro ao atualizar configurações de manutenção.'));
+    } finally {
+      setSavingMaint(false);
+    }
+  };
 
   const handleVerifySmtp = async () => {
     setSmtpChecking(true);
@@ -435,11 +523,11 @@ export const AdminPanel: React.FC = () => {
 
   if (!isAdmin) {
     return (
-      <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-10 text-center max-w-lg mx-auto">
+      <div className="bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-2xl p-10 text-center max-w-lg mx-auto">
         <ShieldAlert className="w-8 h-8 text-red-600 dark:text-red-400 mx-auto mb-3" />
         <h2 className="text-lg font-bold text-slate-900 dark:text-zinc-50">Acesso Restrito ao Administrador</h2>
         <p className="text-sm text-slate-600 dark:text-zinc-400 mt-1">
-          Apenas contas administrativas autorizadas podem gerenciar usuários, pagamentos Pix e integrações empresariais.
+          Apenas contas administrativas autorizadas podem gerenciar usuários, pagamentos Pix, manutenção e suporte.
         </p>
       </div>
     );
@@ -515,6 +603,7 @@ export const AdminPanel: React.FC = () => {
     nextStatus: 'approved' | 'paid' | 'rejected'
   ) => {
     setActionMsg(null);
+    setActionErr(null);
     const pixTxId = (txIds[w.withdrawalId] || `PIX_${Date.now()}`).slice(0, 120);
 
     try {
@@ -618,7 +707,7 @@ export const AdminPanel: React.FC = () => {
 
       setActionMsg(`Saque ${w.withdrawalId} atualizado para "${nextStatus}".`);
     } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, `withdrawals/${w.withdrawalId}`);
+      setActionErr(extractReadableError(err, 'Erro ao atualizar saque Pix.'));
     }
   };
 
@@ -682,10 +771,7 @@ export const AdminPanel: React.FC = () => {
         `Valores de saque atualizados: 1º saque mínimo ${formatBRL(parsedFirst)} · Demais saques a partir de ${formatBRL(parsedStandard)}.`
       );
     } catch (err) {
-      setSettingsError(
-        err instanceof Error ? err.message : 'Erro ao salvar configurações de saque.'
-      );
-      handleFirestoreError(err, OperationType.WRITE, 'appSettings/withdrawal');
+      setSettingsError(extractReadableError(err, 'Erro ao salvar configurações de saque.'));
     } finally {
       setSavingSettings(false);
     }
@@ -767,15 +853,12 @@ export const AdminPanel: React.FC = () => {
         createdAt: serverTimestamp(),
       });
 
-      setActionMsg(
-        `Usuário ${banTarget.displayName} banido. Motivo: "${trimmedReason}".`
-      );
+      setActionMsg(`Usuário ${banTarget.displayName} banido. Motivo: "${trimmedReason}".`);
       setBanTarget(null);
       setBanReason('');
       setBanExplanation('');
     } catch (err) {
-      setBanError(err instanceof Error ? err.message : 'Erro ao aplicar banimento.');
-      handleFirestoreError(err, OperationType.UPDATE, `users/${banTarget.uid}`);
+      setBanError(extractReadableError(err, 'Erro ao aplicar banimento.'));
     } finally {
       setBanSubmitting(false);
     }
@@ -803,7 +886,7 @@ export const AdminPanel: React.FC = () => {
       });
       setActionMsg(`Usuário ${u.displayName} reativado com sucesso.`);
     } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, `users/${u.uid}`);
+      setActionErr(extractReadableError(err, 'Erro ao reativar usuário.'));
     }
   };
 
@@ -818,7 +901,7 @@ export const AdminPanel: React.FC = () => {
       });
       setActionMsg(`${u.displayName} promovido a administrador.`);
     } catch (err) {
-      handleFirestoreError(err, OperationType.CREATE, `admins/${u.uid}`);
+      setActionErr(extractReadableError(err, 'Erro ao promover usuário.'));
     }
   };
 
@@ -827,7 +910,7 @@ export const AdminPanel: React.FC = () => {
       await updateDoc(doc(db, 'fraudLogs', logId), { resolved: true });
       setActionMsg(`Alerta ${logId} marcado como resolvido.`);
     } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, `fraudLogs/${logId}`);
+      setActionErr(extractReadableError(err, 'Erro ao resolver alerta.'));
     }
   };
 
@@ -870,7 +953,7 @@ export const AdminPanel: React.FC = () => {
       setEndpointUrl('');
       setActionMsg('Integração API criada e sincronizada com o gateway.');
     } catch (err) {
-      handleFirestoreError(err, OperationType.CREATE, `integrations/${integrationId}`);
+      setActionErr(extractReadableError(err, 'Erro ao criar integração.'));
     }
   };
 
@@ -943,8 +1026,8 @@ export const AdminPanel: React.FC = () => {
     setPromoSubmitting(true);
     try {
       const publishMs = Date.now() + delayNum * 60_000;
-      const publishAtTimestamp =
-        delayNum === 0 ? Timestamp.now() : Timestamp.fromMillis(publishMs);
+      const publishAtValue =
+        delayNum === 0 ? serverTimestamp() : Timestamp.fromMillis(publishMs);
 
       const batch = writeBatch(db);
       batch.set(doc(db, 'promoCodes', normalizedCode), {
@@ -956,7 +1039,7 @@ export const AdminPanel: React.FC = () => {
         active: true,
         publicEvent: promoPublicEvent,
         publishDelayMinutes: delayNum,
-        publishAt: publishAtTimestamp,
+        publishAt: publishAtValue,
         createdBy: firebaseUser.uid,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
@@ -983,7 +1066,7 @@ export const AdminPanel: React.FC = () => {
           category: 'promo_event',
           promoCode: normalizedCode,
           pointsValue: pointsNum,
-          publishAt: publishAtTimestamp,
+          publishAt: publishAtValue,
           active: true,
           createdBy: firebaseUser.uid,
           createdAt: serverTimestamp(),
@@ -1007,10 +1090,44 @@ export const AdminPanel: React.FC = () => {
       setPromoTitle('');
       setPromoDelayMinutes('0');
     } catch (err) {
-      setPromoError(err instanceof Error ? err.message : 'Erro ao criar evento de código.');
-      handleFirestoreError(err, OperationType.CREATE, `promoCodes/${normalizedCode}`);
+      setPromoError(extractReadableError(err, 'Erro ao criar evento de código.'));
     } finally {
       setPromoSubmitting(false);
+    }
+  };
+
+  const handleSendBroadcastNotice = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!firebaseUser) return;
+    const t = noticeTitle.trim().slice(0, 140);
+    const b = noticeBody.trim().slice(0, 600);
+    if (t.length < 3 || b.length < 3) {
+      setActionErr('Informe um título e mensagem com pelo menos 3 caracteres.');
+      return;
+    }
+    setNoticeSending(true);
+    setActionErr(null);
+    try {
+      const messageId = generateId('mbx');
+      await setDoc(doc(db, 'mailboxMessages', messageId), {
+        messageId,
+        title: t,
+        body: b,
+        category: 'system_notice',
+        promoCode: '',
+        pointsValue: 0,
+        publishAt: serverTimestamp(),
+        active: true,
+        createdBy: firebaseUser.uid,
+        createdAt: serverTimestamp(),
+      });
+      setNoticeTitle('');
+      setNoticeBody('');
+      setActionMsg('Aviso enviado para a Caixa de Correio de todos os jogadores!');
+    } catch (err) {
+      setActionErr(extractReadableError(err, 'Erro ao enviar aviso para a Caixa de Correio.'));
+    } finally {
+      setNoticeSending(false);
     }
   };
 
@@ -1022,7 +1139,7 @@ export const AdminPanel: React.FC = () => {
       });
       setActionMsg(`Código ${p.code} ${!p.active ? 'ativado' : 'pausado'}.`);
     } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, `promoCodes/${p.code}`);
+      setActionErr(extractReadableError(err, 'Erro ao alterar status do código.'));
     }
   };
 
@@ -1036,7 +1153,7 @@ export const AdminPanel: React.FC = () => {
         `Evento ${p.code} agora está ${!p.publicEvent ? 'visível publicamente no app' : 'em modo privado (somente quem digitar o código)'}.`
       );
     } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, `promoCodes/${p.code}`);
+      setActionErr(extractReadableError(err, 'Erro ao alterar visibilidade do evento.'));
     }
   };
 
@@ -1055,751 +1172,333 @@ export const AdminPanel: React.FC = () => {
     .filter((w) => w.status === 'pending' || w.status === 'approved')
     .reduce((acc, w) => acc + w.amountCents, 0);
 
+  const waitingSupportCount = supportTickets.filter((t) => t.status === 'waiting_human').length;
+  const filteredSupportTickets = supportTickets.filter((t) =>
+    supportFilter === 'all' ? true : t.status === supportFilter
+  );
+  const selectedSupportTicket =
+    supportTickets.find((t) => t.ticketId === selectedTicketId) || null;
+  const selectedTicketUser = selectedSupportTicket
+    ? users.find((u) => u.uid === selectedSupportTicket.userId) || null
+    : null;
+
+  const acceptSupportTicket = async (ticket: SupportTicket) => {
+    if (!firebaseUser || supportBusy) return;
+    setSupportBusy(true);
+    const adminName = (userAccount?.displayName || firebaseUser.displayName || 'Administrador').slice(0, 80);
+    const messageId = generateId('smsg');
+    try {
+      const batch = writeBatch(db);
+      batch.update(doc(db, 'supportTickets', ticket.ticketId), {
+        status: 'active_human',
+        assignedAdminUid: firebaseUser.uid,
+        assignedAdminName: adminName,
+        updatedAt: serverTimestamp(),
+      });
+      batch.set(doc(db, 'supportTickets', ticket.ticketId, 'messages', messageId), {
+        messageId,
+        ticketId: ticket.ticketId,
+        senderUid: firebaseUser.uid,
+        senderName: adminName,
+        senderRole: 'admin',
+        text: `Olá, ${ticket.userDisplayName}! Sou ${adminName}, administrador do Earn Easy. Aceitei seu atendimento e já estou vendo sua mensagem.`,
+        createdAt: serverTimestamp(),
+      });
+      await batch.commit();
+      setSelectedTicketId(ticket.ticketId);
+      setActionMsg(`Atendimento de ${ticket.userDisplayName} aceito. Chat ao vivo liberado.`);
+    } catch (err) {
+      setActionErr(extractReadableError(err, 'Não foi possível aceitar o chamado.'));
+    } finally {
+      setSupportBusy(false);
+    }
+  };
+
+  const sendAdminSupportReply = async () => {
+    if (!firebaseUser || !selectedSupportTicket || supportBusy) return;
+    const text = supportReplyDraft.trim().slice(0, 800);
+    if (!text) return;
+    setSupportBusy(true);
+    const adminName = (userAccount?.displayName || firebaseUser.displayName || 'Administrador').slice(0, 80);
+    const messageId = generateId('smsg');
+    try {
+      const batch = writeBatch(db);
+      batch.set(doc(db, 'supportTickets', selectedSupportTicket.ticketId, 'messages', messageId), {
+        messageId,
+        ticketId: selectedSupportTicket.ticketId,
+        senderUid: firebaseUser.uid,
+        senderName: adminName,
+        senderRole: 'admin',
+        text,
+        createdAt: serverTimestamp(),
+      });
+      batch.update(doc(db, 'supportTickets', selectedSupportTicket.ticketId), {
+        status: 'active_human',
+        assignedAdminUid: selectedSupportTicket.assignedAdminUid || firebaseUser.uid,
+        assignedAdminName: selectedSupportTicket.assignedAdminName || adminName,
+        updatedAt: serverTimestamp(),
+      });
+      await batch.commit();
+      setSupportReplyDraft('');
+    } catch (err) {
+      setActionErr(extractReadableError(err, 'Erro ao enviar resposta ao usuário.'));
+    } finally {
+      setSupportBusy(false);
+    }
+  };
+
+  const closeSupportTicket = async (ticket: SupportTicket) => {
+    if (supportBusy) return;
+    setSupportBusy(true);
+    try {
+      await updateDoc(doc(db, 'supportTickets', ticket.ticketId), {
+        status: 'closed',
+        updatedAt: serverTimestamp(),
+      });
+      setActionMsg(`Chamado ${ticket.ticketId} encerrado.`);
+    } catch (err) {
+      setActionErr(extractReadableError(err, 'Erro ao encerrar chamado.'));
+    } finally {
+      setSupportBusy(false);
+    }
+  };
+
+  const ADMIN_TABS: Array<{
+    id: AdminTab;
+    label: string;
+    Icon: React.FC<{ className?: string }>;
+    badge?: number;
+  }> = [
+    { id: 'overview', label: 'Visão Geral & Manutenção', Icon: LayoutDashboard },
+    {
+      id: 'payouts',
+      label: 'Saques Pix & Logs',
+      Icon: Landmark,
+      badge: withdrawals.filter((w) => w.status === 'pending').length || undefined,
+    },
+    { id: 'users', label: 'Usuários', Icon: Users },
+    { id: 'codes', label: 'Códigos & Correio', Icon: Ticket },
+    {
+      id: 'support',
+      label: 'Suporte ao Vivo',
+      Icon: Headset,
+      badge: waitingSupportCount || undefined,
+    },
+    {
+      id: 'antifraud',
+      label: 'Antifraude',
+      Icon: ShieldCheck,
+      badge: fraudLogs.filter((f) => !f.resolved).length || undefined,
+    },
+    { id: 'api', label: 'API & SMTP', Icon: Webhook },
+  ];
+
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h2 className="text-xl font-bold text-slate-900 dark:text-zinc-50">Painel Administrativo</h2>
-          <p className="text-sm text-slate-500 dark:text-zinc-400">
-            Gestão de usuários, liquidação de saques Pix, auditoria antifraude e API empresarial
-          </p>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-1 p-1 bg-slate-100 dark:bg-zinc-900 border border-transparent dark:border-zinc-800 rounded-lg">
-          {(
-            [
-              { id: 'payouts', label: 'Pagamentos Pix', Icon: Landmark },
-              { id: 'users', label: 'Usuários', Icon: Users },
-              { id: 'codes', label: 'Códigos & Eventos', Icon: Ticket },
-              { id: 'antifraud', label: 'Antifraude', Icon: ShieldCheck },
-              { id: 'api', label: 'API Empresarial', Icon: Webhook },
-            ] as const
-          ).map(({ id, label, Icon }) => (
-            <button
-              key={id}
-              type="button"
-              onClick={() => setTab(id)}
-              className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-md transition-colors whitespace-nowrap cursor-pointer ${
-                tab === id
-                  ? 'bg-white dark:bg-zinc-800 text-slate-900 dark:text-zinc-50 shadow-sm'
-                  : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-zinc-100'
+      {/* Header + Clean Horizontal Navigation Bar */}
+      <div className="bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-3xl p-4 sm:p-6 space-y-4 shadow-sm">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div>
+            <h2 className="text-xl sm:text-2xl font-display font-extrabold text-slate-900 dark:text-white tracking-tight">
+              Painel Administrativo
+            </h2>
+            <p className="text-xs sm:text-sm text-slate-500 dark:text-zinc-400">
+              Central organizada para manutenção, saques Pix, suporte ao vivo, códigos e antifraude.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <span
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold border inline-flex items-center gap-1.5 ${
+                maintenanceSettings.enabled
+                  ? 'bg-amber-500/15 border-amber-500/40 text-amber-700 dark:text-amber-300'
+                  : 'bg-emerald-50 dark:bg-lime-500/15 border-emerald-200 dark:border-lime-500/30 text-emerald-700 dark:text-lime-400'
               }`}
             >
-              <Icon className="w-3.5 h-3.5" />
-              {label}
-            </button>
-          ))}
+              <Wrench className="w-3.5 h-3.5" />
+              {maintenanceSettings.enabled ? 'Manutenção Ativa' : 'Site Online'}
+            </span>
+          </div>
         </div>
+
+        <nav className="flex flex-wrap gap-1.5 pt-2 border-t border-slate-100 dark:border-zinc-800">
+          {ADMIN_TABS.map(({ id, label, Icon, badge }) => {
+            const active = tab === id;
+            return (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setTab(id)}
+                className={`inline-flex items-center gap-1.5 min-h-[40px] px-3.5 py-2 text-xs font-bold rounded-xl border transition-colors cursor-pointer ${
+                  active
+                    ? 'bg-slate-900 dark:bg-lime-400 text-white dark:text-slate-950 border-transparent shadow-sm'
+                    : 'bg-slate-50 dark:bg-[#090d12] text-slate-700 dark:text-zinc-300 border-slate-200 dark:border-zinc-800 hover:border-lime-400/60'
+                }`}
+              >
+                <Icon className="w-3.5 h-3.5 shrink-0" />
+                <span>{label}</span>
+                {typeof badge === 'number' && badge > 0 && (
+                  <span
+                    className={`px-1.5 py-0.5 rounded-md text-[10px] font-mono font-bold tabular-nums ${
+                      active
+                        ? 'bg-white/20 dark:bg-slate-950 dark:text-lime-400'
+                        : 'bg-amber-500 text-white'
+                    }`}
+                  >
+                    {badge}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </nav>
       </div>
 
       {actionMsg && (
-        <div className="bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300 text-xs font-medium px-4 py-3 rounded-lg flex items-center justify-between">
+        <div className="bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300 text-xs font-medium px-4 py-3 rounded-2xl flex items-center justify-between gap-3">
           <span>{actionMsg}</span>
-          <button type="button" onClick={() => setActionMsg(null)} className="underline cursor-pointer">
+          <button type="button" onClick={() => setActionMsg(null)} className="underline cursor-pointer shrink-0">
             Fechar
           </button>
         </div>
       )}
 
-      {/* Summary Strip */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-4">
-          <div className="text-xs text-slate-500 dark:text-zinc-400">Total de Usuários</div>
-          <div className="text-2xl font-mono font-bold text-slate-900 dark:text-zinc-50 tabular-nums mt-1">{users.length}</div>
+      {actionErr && (
+        <div className="bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 text-xs font-medium px-4 py-3 rounded-2xl flex items-center justify-between gap-3">
+          <span>{actionErr}</span>
+          <button type="button" onClick={() => setActionErr(null)} className="underline cursor-pointer shrink-0">
+            Fechar
+          </button>
         </div>
-        <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-4">
-          <div className="text-xs text-slate-500 dark:text-zinc-400">Fila Pix Pendente</div>
-          <div className="text-2xl font-mono font-bold text-amber-600 dark:text-amber-400 tabular-nums mt-1">
-            {formatBRL(pendingTotalCents)}
-          </div>
-        </div>
-        <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-4">
-          <div className="text-xs text-slate-500 dark:text-zinc-400">Alertas Antifraude Abertos</div>
-          <div className="text-2xl font-mono font-bold text-red-600 dark:text-red-400 tabular-nums mt-1">
-            {fraudLogs.filter((f) => !f.resolved).length}
-          </div>
-        </div>
-        <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-4">
-          <div className="text-xs text-slate-500 dark:text-zinc-400">Integrações Ativas</div>
-          <div className="text-2xl font-mono font-bold text-slate-900 dark:text-zinc-50 tabular-nums mt-1">
-            {integrations.filter((i) => i.active).length}
-          </div>
-        </div>
-      </div>
+      )}
 
-      {/* TAB 1: PAYOUTS */}
-      {tab === 'payouts' && (
+      {/* TAB 1: VISÃO GERAL & MODO MANUTENÇÃO */}
+      {tab === 'overview' && (
         <div className="space-y-6">
-          {/* Configurable Pix Withdrawal Minimums & Quick Amounts (R$ 0,01 to R$ 20,00) */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3.5 sm:gap-4">
+            <div className="bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-2xl p-4 sm:p-5">
+              <div className="text-xs text-slate-500 dark:text-zinc-400">Total de Jogadores</div>
+              <div className="text-2xl font-mono font-extrabold text-slate-900 dark:text-white tabular-nums mt-1">
+                {users.length}
+              </div>
+            </div>
+            <div className="bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-2xl p-4 sm:p-5">
+              <div className="text-xs text-slate-500 dark:text-zinc-400">Fila Pix Pendente</div>
+              <div className="text-2xl font-mono font-extrabold text-amber-600 dark:text-amber-400 tabular-nums mt-1">
+                {formatBRL(pendingTotalCents)}
+              </div>
+            </div>
+            <div className="bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-2xl p-4 sm:p-5">
+              <div className="text-xs text-slate-500 dark:text-zinc-400">Chamados Aguardando</div>
+              <div className="text-2xl font-mono font-extrabold text-emerald-700 dark:text-lime-400 tabular-nums mt-1">
+                {waitingSupportCount}
+              </div>
+            </div>
+            <div className="bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-2xl p-4 sm:p-5">
+              <div className="text-xs text-slate-500 dark:text-zinc-400">Alertas Antifraude</div>
+              <div className="text-2xl font-mono font-extrabold text-red-600 dark:text-red-400 tabular-nums mt-1">
+                {fraudLogs.filter((f) => !f.resolved).length}
+              </div>
+            </div>
+          </div>
+
           <form
-            onSubmit={handleSaveWithdrawalSettings}
-            className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-6 space-y-5"
+            onSubmit={handleSaveMaintenance}
+            className="bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 sm:p-6 space-y-5 shadow-sm"
           >
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-zinc-800 pb-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 dark:border-zinc-800 pb-4">
               <div className="flex items-start gap-3">
-                <div className="w-9 h-9 rounded-lg bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-400 flex items-center justify-center shrink-0">
-                  <SlidersHorizontal className="w-4 h-4" />
+                <div className="w-10 h-10 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-600 dark:text-lime-400 flex items-center justify-center shrink-0">
+                  <Wrench className="w-5 h-5" />
                 </div>
                 <div>
-                  <h3 className="text-base font-bold text-slate-900 dark:text-zinc-50">
-                    Configurar Valores e Mínimo de Saque Pix
+                  <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                    Modo Manutenção do Aplicativo
                   </h3>
-                  <p className="text-xs text-slate-500 dark:text-zinc-400 mt-0.5">
-                    Ajuste livremente o mínimo do 1º saque e dos próximos saques entre R$ 0,01 e R$ 20,00.
+                  <p className="text-xs text-slate-500 dark:text-zinc-400 mt-0.5 leading-relaxed">
+                    Quando ativado, jogadores comuns visualizam uma tela de manutenção organizada com saldo protegido, enquanto administradores continuam com acesso total ao painel.
                   </p>
                 </div>
               </div>
 
               <button
-                type="submit"
-                disabled={savingSettings}
-                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                type="button"
+                onClick={() => setMaintEnabled((v) => !v)}
+                className={`min-h-[44px] px-4 py-2 rounded-xl text-xs font-extrabold border transition-colors shrink-0 cursor-pointer ${
+                  maintEnabled
+                    ? 'bg-amber-500 text-slate-950 border-amber-400'
+                    : 'bg-slate-100 dark:bg-zinc-800 text-slate-700 dark:text-zinc-200 border-slate-200 dark:border-zinc-700'
+                }`}
               >
-                {savingSettings ? 'Salvando...' : 'Salvar Valores de Saque'}
+                {maintEnabled ? 'ATIVADO (Bloquear Público)' : 'DESATIVADO (Site Normal)'}
               </button>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-              <div className="space-y-2">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-1.5">
                 <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300">
-                  Mínimo do 1º Saque (R$ 0,01 a R$ 20,00)
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={firstMinReais}
-                  onChange={(e) => setFirstMinReais(e.target.value)}
-                  placeholder="0.10"
-                  className="w-full px-3 py-2 text-sm font-mono bg-white dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                />
-                <div className="flex flex-wrap gap-1.5">
-                  {[1, 10, 50, 100, 500, 1000, 2000].map((c) => (
-                    <button
-                      key={`first-${c}`}
-                      type="button"
-                      onClick={() => setFirstMinReais((c / 100).toFixed(2))}
-                      className={`px-2 py-1 text-[11px] font-mono rounded border transition-colors cursor-pointer ${
-                        Math.round(Number(firstMinReais.replace(',', '.')) * 100) === c
-                          ? 'bg-emerald-600 text-white border-emerald-600'
-                          : 'bg-slate-50 dark:bg-zinc-950 text-slate-700 dark:text-zinc-300 border-slate-200 dark:border-zinc-800 hover:border-emerald-400'
-                      }`}
-                    >
-                      {formatBRL(c)}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300">
-                  Mínimo dos Demais Saques (R$ 0,01 a R$ 20,00)
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={standardMinReais}
-                  onChange={(e) => setStandardMinReais(e.target.value)}
-                  placeholder="5.00"
-                  className="w-full px-3 py-2 text-sm font-mono bg-white dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                />
-                <div className="flex flex-wrap gap-1.5">
-                  {[1, 10, 50, 100, 200, 500, 1000, 2000].map((c) => (
-                    <button
-                      key={`std-${c}`}
-                      type="button"
-                      onClick={() => setStandardMinReais((c / 100).toFixed(2))}
-                      className={`px-2 py-1 text-[11px] font-mono rounded border transition-colors cursor-pointer ${
-                        Math.round(Number(standardMinReais.replace(',', '.')) * 100) === c
-                          ? 'bg-slate-900 dark:bg-emerald-600 text-white border-transparent'
-                          : 'bg-slate-50 dark:bg-zinc-950 text-slate-700 dark:text-zinc-300 border-slate-200 dark:border-zinc-800 hover:border-slate-400'
-                      }`}
-                    >
-                      {formatBRL(c)}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-
-            <div className="space-y-2 pt-2 border-t border-slate-100 dark:border-zinc-800">
-              <div className="text-xs font-semibold text-slate-700 dark:text-zinc-300">
-                Botões de Valores Rápidos na Carteira (clique para ativar/desativar entre R$ 0,01 e R$ 20,00)
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {ADMIN_QUICK_AMOUNT_CHOICES.map((cents) => {
-                  const active = quickAmountsSelected.includes(cents);
-                  return (
-                    <button
-                      key={`quick-${cents}`}
-                      type="button"
-                      onClick={() => toggleQuickAmountChoice(cents)}
-                      className={`px-2.5 py-1.5 text-xs font-mono font-semibold rounded-lg border transition-colors cursor-pointer ${
-                        active
-                          ? 'bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700'
-                          : 'bg-white dark:bg-zinc-950 text-slate-500 dark:text-zinc-400 border-slate-200 dark:border-zinc-800 hover:text-slate-900 dark:hover:text-zinc-100'
-                      }`}
-                    >
-                      {formatBRL(cents)}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {settingsError && (
-              <div className="p-3 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 rounded-lg text-xs text-red-700 dark:text-red-300">
-                {settingsError}
-              </div>
-            )}
-          </form>
-
-          <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-6 space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <h3 className="text-base font-bold text-slate-900 dark:text-zinc-50">Solicitações de Saque Pix</h3>
-              <div className="flex items-center gap-1 p-1 bg-slate-100 dark:bg-zinc-950 border border-transparent dark:border-zinc-800 rounded-lg">
-                {(['all', 'pending', 'approved', 'paid', 'rejected'] as const).map((st) => (
-                <button
-                  key={st}
-                  type="button"
-                  onClick={() => setPayoutFilter(st)}
-                  className={`px-3 py-1 text-xs font-medium rounded-md cursor-pointer ${
-                    payoutFilter === st
-                      ? 'bg-white dark:bg-zinc-800 text-slate-900 dark:text-zinc-50 shadow-sm'
-                      : 'text-slate-600 dark:text-zinc-400'
-                  }`}
-                >
-                  {st === 'all'
-                    ? 'Todos'
-                    : st === 'pending'
-                      ? 'Pendentes'
-                      : st === 'approved'
-                        ? 'Aprovados'
-                        : st === 'paid'
-                          ? 'Pagos'
-                          : 'Recusados'}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead>
-                <tr className="border-b border-slate-200 dark:border-zinc-800 text-slate-500 dark:text-zinc-400">
-                  <th className="py-2 font-medium">Usuário</th>
-                  <th className="py-2 font-medium">Chave Pix</th>
-                  <th className="py-2 font-medium text-right">Valor</th>
-                  <th className="py-2 font-medium">ID Comprovante</th>
-                  <th className="py-2 font-medium">Status</th>
-                  <th className="py-2 font-medium text-right">Ações</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 dark:divide-zinc-800">
-                {filteredWithdrawals.map((w) => (
-                  <tr key={w.withdrawalId} className="min-h-[44px]">
-                    <td className="py-2.5">
-                      <div className="font-semibold text-slate-900 dark:text-zinc-100">{w.userDisplayName}</div>
-                      <div className="text-[11px] font-mono text-slate-500 dark:text-zinc-400">{w.requestedDate}</div>
-                    </td>
-                    <td className="py-2.5 font-mono text-slate-700 dark:text-zinc-300">
-                      <span className="text-slate-400 dark:text-zinc-500 mr-1">{w.pixKeyType.toUpperCase()}:</span>
-                      {w.pixKey}
-                    </td>
-                    <td className="py-2.5 font-mono tabular-nums text-right font-bold text-slate-900 dark:text-zinc-100">
-                      {formatBRL(w.amountCents)}
-                    </td>
-                    <td className="py-2.5">
-                      {w.status === 'pending' || w.status === 'approved' ? (
-                        <input
-                          type="text"
-                          value={txIds[w.withdrawalId] || ''}
-                          onChange={(e) =>
-                            setTxIds((prev) => ({ ...prev, [w.withdrawalId]: e.target.value }))
-                          }
-                          placeholder="E2E Pix ID (opcional)"
-                          className="px-2 py-1 text-xs font-mono bg-white dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded w-36"
-                        />
-                      ) : (
-                        <span className="font-mono text-slate-600 dark:text-zinc-400">{w.pixTransactionId || '-'}</span>
-                      )}
-                    </td>
-                    <td className="py-2.5 font-medium">
-                      {w.status === 'paid' && <span className="text-emerald-700 dark:text-emerald-400">Pago</span>}
-                      {w.status === 'pending' && <span className="text-amber-700 dark:text-amber-400">Pendente</span>}
-                      {w.status === 'approved' && <span className="text-sky-700 dark:text-sky-400">Aprovado</span>}
-                      {w.status === 'rejected' && <span className="text-red-700 dark:text-red-400">Recusado</span>}
-                    </td>
-                    <td className="py-2.5 text-right space-x-1.5 whitespace-nowrap">
-                      {(w.status === 'pending' || w.status === 'approved') && (
-                        <>
-                          {w.status === 'pending' && (
-                            <button
-                              type="button"
-                              onClick={() => handleWithdrawalDecision(w, 'approved')}
-                              className="px-2.5 py-1 bg-sky-50 dark:bg-sky-950/50 text-sky-700 dark:text-sky-300 border border-sky-200 dark:border-sky-800 rounded font-medium hover:bg-sky-100 dark:hover:bg-sky-900/60 cursor-pointer"
-                            >
-                              Aprovar
-                            </button>
-                          )}
-                          <button
-                            type="button"
-                            onClick={() => handleWithdrawalDecision(w, 'paid')}
-                            className="inline-flex items-center gap-1 px-2.5 py-1 bg-emerald-600 text-white rounded font-medium hover:bg-emerald-700 cursor-pointer"
-                          >
-                            <CheckCircle2 className="w-3 h-3" />
-                            Marcar Pago
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleWithdrawalDecision(w, 'rejected')}
-                            className="inline-flex items-center gap-1 px-2.5 py-1 bg-red-50 dark:bg-red-950/50 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800 rounded font-medium hover:bg-red-100 dark:hover:bg-red-900/60 cursor-pointer"
-                          >
-                            <XCircle className="w-3 h-3" />
-                            Estornar
-                          </button>
-                        </>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-                {filteredWithdrawals.length === 0 && (
-                  <tr>
-                    <td colSpan={6} className="py-6 text-center text-slate-500 dark:text-zinc-400">
-                      Nenhum saque Pix nesta fila.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-        </div>
-      )}
-
-      {/* TAB 2: USERS */}
-      {tab === 'users' && (
-        <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-6 space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <h3 className="text-base font-bold text-slate-900 dark:text-zinc-50">Controle de Usuários</h3>
-            <input
-              type="text"
-              value={userSearch}
-              onChange={(e) => setUserSearch(e.target.value)}
-              placeholder="Buscar por nome, e-mail ou UID..."
-              className="px-3 py-1.5 text-xs bg-white dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-lg w-64"
-            />
-          </div>
-
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead>
-                <tr className="border-b border-slate-200 dark:border-zinc-800 text-slate-500 dark:text-zinc-400">
-                  <th className="py-2 font-medium">Usuário</th>
-                  <th className="py-2 font-medium text-right">Pontos</th>
-                  <th className="py-2 font-medium text-right">Saldo R$</th>
-                  <th className="py-2 font-medium text-right">Sacado</th>
-                  <th className="py-2 font-medium text-right">Risco</th>
-                  <th className="py-2 font-medium">Status</th>
-                  <th className="py-2 font-medium text-right">Controles</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 dark:divide-zinc-800">
-                {filteredUsers.map((u) => {
-                  const userBanHistory = fraudLogs.filter(
-                    (f) =>
-                      f.userId === u.uid &&
-                      (f.eventType === 'admin_ban' || f.eventType === 'profanity_username_ban')
-                  );
-                  return (
-                  <tr key={u.uid} className="min-h-[48px]">
-                    <td className="py-2.5 pr-3">
-                      <div className="font-semibold text-slate-900 dark:text-zinc-100">{u.displayName}</div>
-                      <div className="text-[11px] font-mono text-slate-500 dark:text-zinc-400">
-                        {privateMap[u.uid]?.email || u.uid}
-                      </div>
-                      {u.status === 'suspended' && (u.banReason || u.banExplanation) && (
-                        <div className="mt-1 text-[11px] text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/70 rounded px-2 py-1 max-w-md space-y-0.5">
-                          {u.banReason && (
-                            <div>
-                              <span className="font-semibold">Motivo:</span> {u.banReason}
-                            </div>
-                          )}
-                          {u.banExplanation && (
-                            <div className="text-red-700/90 dark:text-red-300/90">
-                              <span className="font-semibold">Por quê:</span> {u.banExplanation}
-                            </div>
-                          )}
-                          {u.bannedBy && (
-                            <div className="text-[10px] font-mono text-red-600/80 dark:text-red-400/80">
-                              Banido por: {u.bannedBy}
-                            </div>
-                          )}
-                        </div>
-                      )}
-                      {u.status === 'active' && userBanHistory.length > 0 && (
-                        <div className="mt-1 text-[11px] text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/60 rounded px-2 py-0.5 max-w-md">
-                          Histórico anterior ({userBanHistory.length}): {userBanHistory[0].details}
-                        </div>
-                      )}
-                    </td>
-                    <td className="py-2.5 font-mono tabular-nums text-right text-slate-700 dark:text-zinc-300">{formatPoints(u.pointsBalance)}</td>
-                    <td className="py-2.5 font-mono tabular-nums text-right text-emerald-700 dark:text-emerald-400 font-semibold">
-                      {formatBRL(u.brlBalanceCents)}
-                    </td>
-                    <td className="py-2.5 font-mono tabular-nums text-right text-slate-700 dark:text-zinc-300">{formatBRL(u.totalWithdrawnCents)}</td>
-                    <td className="py-2.5 font-mono tabular-nums text-right text-slate-700 dark:text-zinc-300">{u.riskScore}/100</td>
-                    <td className="py-2.5 font-medium">
-                      <span className={u.status === 'active' ? 'text-emerald-700 dark:text-emerald-400' : 'text-red-700 dark:text-red-400'}>
-                        {u.status === 'active' ? 'Ativo' : 'Banido'}
-                      </span>
-                    </td>
-                    <td className="py-2.5 text-right space-x-1.5 whitespace-nowrap">
-                      {u.status === 'active' ? (
-                        <button
-                          type="button"
-                          onClick={() => openBanModal(u)}
-                          className="inline-flex items-center gap-1 px-2.5 py-1 bg-red-50 dark:bg-red-950/50 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800 rounded font-medium hover:bg-red-100 dark:hover:bg-red-900/60 cursor-pointer"
-                        >
-                          <Ban className="w-3 h-3" />
-                          Banir
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => reactivateUser(u)}
-                          className="px-2.5 py-1 bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 rounded font-medium hover:bg-emerald-100 dark:hover:bg-emerald-900/60 cursor-pointer"
-                        >
-                          Reativar
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        onClick={() => promoteAdmin(u)}
-                        className="px-2.5 py-1 bg-slate-100 dark:bg-zinc-800 text-slate-800 dark:text-zinc-200 border border-slate-200 dark:border-zinc-700 rounded font-medium hover:bg-slate-200 dark:hover:bg-zinc-700 cursor-pointer"
-                      >
-                        Tornar Admin
-                      </button>
-                    </td>
-                  </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {/* TAB 3: CÓDIGOS DE EVENTO & CONVITES */}
-      {tab === 'codes' && (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-          <div className="lg:col-span-5 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-6 space-y-4">
-            <div className="flex items-center gap-2">
-              <Ticket className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
-              <div>
-                <h3 className="text-base font-bold text-slate-900 dark:text-zinc-50">
-                  Gerar e Enviar Evento de Código
-                </h3>
-                <p className="text-xs text-slate-500 dark:text-zinc-400">
-                  Crie códigos valendo pontos e envie para os jogadores resgatarem no app.
-                </p>
-              </div>
-            </div>
-
-            <form onSubmit={handleCreatePromoCode} className="space-y-3.5">
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300 mb-1">
-                  Código do Evento
-                </label>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    required
-                    minLength={3}
-                    maxLength={40}
-                    value={promoCodeInput}
-                    onChange={(e) => setPromoCodeInput(e.target.value.toUpperCase().replace(/[^A-Z0-9_-]/g, ''))}
-                    placeholder="EE-BONUS500"
-                    className="flex-1 px-3 py-2 text-sm font-mono uppercase bg-white dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-lg"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setPromoCodeInput(buildRandomPromoCode())}
-                    className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold bg-slate-100 dark:bg-zinc-800 text-slate-800 dark:text-zinc-200 border border-slate-200 dark:border-zinc-700 rounded-lg hover:bg-slate-200 dark:hover:bg-zinc-700 cursor-pointer shrink-0"
-                  >
-                    <RefreshCw className="w-3.5 h-3.5" />
-                    Gerar Aleatório
-                  </button>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300 mb-1">
-                  Título / Descrição do Evento
+                  Título exibido na tela de manutenção
                 </label>
                 <input
                   type="text"
                   required
                   minLength={3}
                   maxLength={120}
-                  value={promoTitle}
-                  onChange={(e) => setPromoTitle(e.target.value)}
-                  placeholder="Ex: Evento Relâmpago de Fim de Semana"
-                  className="w-full px-3 py-2 text-sm bg-white dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-lg"
+                  value={maintTitle}
+                  onChange={(e) => setMaintTitle(e.target.value)}
+                  className="w-full min-h-[44px] px-3.5 py-2.5 text-sm bg-white dark:bg-[#090d12] border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-xl focus:outline-none focus:ring-2 focus:ring-lime-400"
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300 mb-1">
-                    Moedas por Resgate (máx. 100.000)
-                  </label>
-                  <input
-                    type="number"
-                    required
-                    min={10}
-                    max={MAX_PROMO_CODE_POINTS}
-                    value={promoPoints}
-                    onChange={(e) => setPromoPoints(e.target.value)}
-                    className="w-full px-3 py-2 text-sm font-mono bg-white dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-lg"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300 mb-1">
-                    Limite de Resgates
-                  </label>
-                  <input
-                    type="number"
-                    required
-                    min={1}
-                    max={100000}
-                    value={promoMaxRedemptions}
-                    onChange={(e) => setPromoMaxRedemptions(e.target.value)}
-                    className="w-full px-3 py-2 text-sm font-mono bg-white dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-lg"
-                  />
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <div className="flex items-center justify-between gap-2">
-                  <label className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-700 dark:text-zinc-300">
-                    <Clock className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-                    Publicar no site em (minutos)
-                  </label>
-                  <span className="text-[11px] font-mono text-slate-500 dark:text-zinc-400">
-                    {Number(promoDelayMinutes || 0) === 0
-                      ? 'Imediato'
-                      : `Em ${promoDelayMinutes} min`}
-                  </span>
-                </div>
-
-                <div className="flex flex-wrap gap-1.5">
-                  {[
-                    { label: 'Imediato', mins: '0' },
-                    { label: '5 min', mins: '5' },
-                    { label: '15 min', mins: '15' },
-                    { label: '30 min', mins: '30' },
-                    { label: '1 hora', mins: '60' },
-                    { label: '2 horas', mins: '120' },
-                    { label: '4 horas', mins: '240' },
-                  ].map((preset) => (
-                    <button
-                      key={preset.mins}
-                      type="button"
-                      onClick={() => setPromoDelayMinutes(preset.mins)}
-                      className={`px-2.5 py-1 text-[11px] font-semibold rounded-md border transition-colors cursor-pointer ${
-                        promoDelayMinutes === preset.mins
-                          ? 'bg-emerald-600 text-white border-emerald-600'
-                          : 'bg-slate-50 dark:bg-zinc-950 text-slate-700 dark:text-zinc-300 border-slate-200 dark:border-zinc-800 hover:border-emerald-400'
-                      }`}
-                    >
-                      {preset.label}
-                    </button>
-                  ))}
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <input
-                    type="number"
-                    min={0}
-                    max={1440}
-                    value={promoDelayMinutes}
-                    onChange={(e) => setPromoDelayMinutes(e.target.value)}
-                    className="w-28 px-3 py-1.5 text-xs font-mono bg-white dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-lg"
-                  />
-                  <span className="text-[11px] text-slate-500 dark:text-zinc-400">
-                    minutos (0 = imediato, até 1.440 min = 24 horas)
-                  </span>
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <label className="flex items-start gap-2.5 p-3 rounded-lg bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={promoPublicEvent}
-                    onChange={(e) => setPromoPublicEvent(e.target.checked)}
-                    className="mt-0.5 rounded border-slate-300 text-emerald-600 focus:ring-emerald-600"
-                  />
-                  <div className="text-xs">
-                    <div className="font-semibold text-slate-900 dark:text-zinc-100">
-                      Exibir nos Destaques e Eventos Públicos do site
-                    </div>
-                    <div className="text-[11px] text-slate-500 dark:text-zinc-400">
-                      Aparece automaticamente na área de Destaques e em Convites & Códigos quando o horário de publicação chegar.
-                    </div>
-                  </div>
+              <div className="space-y-1.5">
+                <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300">
+                  Previsão de retorno (ex: Em alguns minutos)
                 </label>
-
-                <label className="flex items-start gap-2.5 p-3 rounded-lg bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={sendMailboxMsg}
-                    onChange={(e) => setSendMailboxMsg(e.target.checked)}
-                    className="mt-0.5 rounded border-slate-300 text-emerald-600 focus:ring-emerald-600"
-                  />
-                  <div className="text-xs">
-                    <div className="inline-flex items-center gap-1.5 font-semibold text-slate-900 dark:text-zinc-100">
-                      <Mail className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-                      Enviar mensagem na Caixa de Correio dos usuários
-                    </div>
-                    <div className="text-[11px] text-slate-500 dark:text-zinc-400">
-                      Todos os jogadores recebem um aviso imediato na Caixa de Correio informando o código ou o horário programado de liberação.
-                    </div>
-                  </div>
-                </label>
+                <input
+                  type="text"
+                  maxLength={80}
+                  value={maintReturn}
+                  onChange={(e) => setMaintReturn(e.target.value)}
+                  placeholder="Em alguns minutos"
+                  className="w-full min-h-[44px] px-3.5 py-2.5 text-sm bg-white dark:bg-[#090d12] border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-xl focus:outline-none focus:ring-2 focus:ring-lime-400"
+                />
               </div>
+            </div>
 
-              {promoError && (
-                <div className="p-3 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 rounded-lg text-xs text-red-700 dark:text-red-300">
-                  {promoError}
-                </div>
-              )}
+            <div className="space-y-1.5">
+              <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300">
+                Mensagem explicativa para os jogadores
+              </label>
+              <textarea
+                required
+                minLength={5}
+                maxLength={600}
+                rows={3}
+                value={maintMessage}
+                onChange={(e) => setMaintMessage(e.target.value)}
+                className="w-full px-3.5 py-2.5 text-sm bg-white dark:bg-[#090d12] border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-xl focus:outline-none focus:ring-2 focus:ring-lime-400 resize-none"
+              />
+            </div>
 
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2 border-t border-slate-100 dark:border-zinc-800">
+              <span className="text-xs text-slate-500 dark:text-zinc-400">
+                {maintenanceSettings.updatedBy
+                  ? `Última alteração por ${maintenanceSettings.updatedBy}`
+                  : 'Alteração aplicada em tempo real para todos os dispositivos conectados.'}
+              </span>
               <button
                 type="submit"
-                disabled={promoSubmitting}
-                className="w-full inline-flex items-center justify-center gap-2 py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-semibold rounded-lg transition-colors cursor-pointer"
+                disabled={savingMaint}
+                className="min-h-[44px] px-5 py-2.5 rounded-xl bg-lime-400 hover:bg-lime-300 disabled:opacity-50 text-slate-950 text-xs sm:text-sm font-extrabold transition-colors cursor-pointer"
               >
-                <Send className="w-3.5 h-3.5" />
-                {promoSubmitting ? 'Enviando evento...' : 'Gerar e Enviar Evento de Código'}
+                {savingMaint ? 'Salvando...' : 'Salvar Estado da Manutenção'}
               </button>
-            </form>
-          </div>
-
-          <div className="lg:col-span-7 space-y-6">
-            <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-6 space-y-4">
-              <div className="flex items-center justify-between gap-2">
-                <h3 className="text-base font-bold text-slate-900 dark:text-zinc-50">
-                  Eventos de Código Gerados ({promoCodes.length})
-                </h3>
-                <span className="text-xs text-slate-500 dark:text-zinc-400">
-                  {promoCodes.filter((c) => c.active).length} ativos
-                </span>
-              </div>
-
-              {promoCodes.length === 0 ? (
-                <p className="text-xs text-slate-500 dark:text-zinc-400 py-6 text-center">
-                  Nenhum código promocional gerado ainda. Crie o primeiro evento ao lado!
-                </p>
-              ) : (
-                <div className="divide-y divide-slate-100 dark:divide-zinc-800">
-                  {promoCodes.map((p) => {
-                    const publishMs = timestampToMillis(p.publishAt);
-                    const nowMs = Date.now();
-                    const isScheduledPending = publishMs > nowMs;
-                    return (
-                    <div key={p.code} className="py-3.5 flex flex-wrap items-center justify-between gap-3">
-                      <div className="space-y-1 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <code className="px-2 py-0.5 text-xs font-mono font-bold bg-slate-100 dark:bg-zinc-800 text-slate-900 dark:text-zinc-100 rounded border border-slate-200 dark:border-zinc-700">
-                            {p.code}
-                          </code>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              navigator.clipboard.writeText(p.code);
-                              setActionMsg(`Código ${p.code} copiado!`);
-                            }}
-                            className="p-1 text-slate-400 hover:text-slate-700 dark:hover:text-zinc-200 cursor-pointer"
-                            title="Copiar código"
-                          >
-                            <Copy className="w-3.5 h-3.5" />
-                          </button>
-                          <span className="text-xs font-mono font-bold text-emerald-700 dark:text-emerald-400 tabular-nums">
-                            +{formatPoints(p.pointsValue)} moedas
-                          </span>
-                        </div>
-                        <div className="text-xs font-medium text-slate-800 dark:text-zinc-200">
-                          {p.title}
-                        </div>
-                        <div className="text-[11px] font-mono text-slate-500 dark:text-zinc-400 tabular-nums">
-                          Resgates: {p.redemptionCount} / {p.maxRedemptions} ·{' '}
-                          {p.publicEvent ? 'Evento Público' : 'Código Privado'} ·{' '}
-                          {p.active ? 'Ativo' : 'Pausado'} ·{' '}
-                          {isScheduledPending
-                            ? `Agendado p/ ${formatScheduleTime(publishMs)} (falta ${formatScheduleRemaining(publishMs, nowMs)})`
-                            : 'Publicado'}
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-1.5 shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => togglePromoPublic(p)}
-                          className="px-2.5 py-1 text-[11px] font-semibold rounded border border-slate-200 dark:border-zinc-700 bg-slate-50 dark:bg-zinc-800 text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-700 cursor-pointer"
-                        >
-                          {p.publicEvent ? 'Tornar Privado' : 'Publicar no App'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => togglePromoActive(p)}
-                          className={`px-2.5 py-1 text-[11px] font-semibold rounded border cursor-pointer ${
-                            p.active
-                              ? 'bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800'
-                              : 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800'
-                          }`}
-                        >
-                          {p.active ? 'Pausar' : 'Reativar'}
-                        </button>
-                      </div>
-                    </div>
-                    );
-                  })}
-                </div>
-              )}
             </div>
-
-            <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-6 space-y-3">
-              <h3 className="text-base font-bold text-slate-900 dark:text-zinc-50">
-                Auditoria de Convites (+500 pts & 12%)
-              </h3>
-              <div className="grid grid-cols-3 gap-3 text-xs">
-                <div className="p-3 rounded-lg bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800">
-                  <div className="text-slate-500 dark:text-zinc-400">Indicações</div>
-                  <div className="text-lg font-mono font-bold text-slate-900 dark:text-zinc-50 tabular-nums">
-                    {referrals.length}
-                  </div>
-                </div>
-                <div className="p-3 rounded-lg bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800">
-                  <div className="text-slate-500 dark:text-zinc-400">Bônus +500</div>
-                  <div className="text-lg font-mono font-bold text-emerald-700 dark:text-emerald-400 tabular-nums">
-                    {formatPoints(referrals.reduce((s, r) => s + r.signupBonusPoints, 0))}
-                  </div>
-                </div>
-                <div className="p-3 rounded-lg bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800">
-                  <div className="text-slate-500 dark:text-zinc-400">Comissões 12%</div>
-                  <div className="text-lg font-mono font-bold text-emerald-700 dark:text-emerald-400 tabular-nums">
-                    {formatPoints(referrals.reduce((s, r) => s + r.totalCommissionPointsEarned, 0))}
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
+          </form>
         </div>
       )}
 
-      {/* TAB 4: ANTIFRAUD */}
-      {tab === 'antifraud' && (() => {
+      {/* TAB 2: SAQUES PIX & LOGS */}
+      {tab === 'payouts' && (() => {
         const searchTerm = attemptSearch.trim().toLowerCase();
         const filteredAttempts = withdrawalAttempts.filter((a) => {
           const meta = ATTEMPT_STATUS_META[a.status];
@@ -1826,42 +1525,367 @@ export const AdminPanel: React.FC = () => {
 
         return (
           <div className="space-y-6">
-            {/* Detailed Pix Withdrawal Attempt Log */}
-            <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-6 space-y-4">
-              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-slate-100 dark:border-zinc-800 pb-4">
+            {/* Configurable Pix Withdrawal Minimums */}
+            <form
+              onSubmit={handleSaveWithdrawalSettings}
+              className="bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 sm:p-6 space-y-5"
+            >
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-zinc-800 pb-4">
                 <div className="flex items-start gap-3">
-                  <div className="w-9 h-9 rounded-lg bg-slate-100 dark:bg-zinc-800 text-slate-700 dark:text-zinc-200 flex items-center justify-center shrink-0">
-                    <History className="w-4 h-4" />
+                  <div className="w-9 h-9 rounded-xl bg-emerald-50 dark:bg-lime-500/15 text-emerald-700 dark:text-lime-400 flex items-center justify-center shrink-0">
+                    <SlidersHorizontal className="w-4 h-4" />
                   </div>
                   <div>
-                    <h3 className="text-base font-bold text-slate-900 dark:text-zinc-50">
-                      Log Detalhado de Tentativas de Saque Pix
+                    <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                      Configurar Valores e Mínimo de Saque Pix
                     </h3>
                     <p className="text-xs text-slate-500 dark:text-zinc-400 mt-0.5">
-                      Registro cronológico com status, data/hora exata, chave Pix, dispositivo e ID completo do usuário para rastreamento antifraude.
+                      Ajuste livremente o mínimo do 1º saque e dos próximos saques entre R$ 0,01 e R$ 20,00.
                     </p>
                   </div>
                 </div>
 
-                <div className="flex flex-wrap items-center gap-3 text-xs">
-                  <div className="px-3 py-1.5 rounded-lg bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 font-mono tabular-nums text-slate-700 dark:text-zinc-300">
-                    Total: <strong className="text-slate-900 dark:text-zinc-50">{withdrawalAttempts.length}</strong>
+                <button
+                  type="submit"
+                  disabled={savingSettings}
+                  className="min-h-[42px] px-4 py-2 bg-lime-400 hover:bg-lime-300 disabled:opacity-50 text-slate-950 text-xs font-extrabold rounded-xl transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  {savingSettings ? 'Salvando...' : 'Salvar Valores'}
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                <div className="space-y-2">
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300">
+                    Mínimo do 1º Saque (R$ 0,01 a R$ 20,00)
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={firstMinReais}
+                    onChange={(e) => setFirstMinReais(e.target.value)}
+                    placeholder="0.10"
+                    className="w-full min-h-[42px] px-3 py-2 text-sm font-mono bg-white dark:bg-[#090d12] border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-xl"
+                  />
+                  <div className="flex flex-wrap gap-1.5">
+                    {[1, 10, 50, 100, 500, 1000, 2000].map((c) => (
+                      <button
+                        key={`first-${c}`}
+                        type="button"
+                        onClick={() => setFirstMinReais((c / 100).toFixed(2))}
+                        className={`px-2.5 py-1 text-[11px] font-mono rounded-lg border transition-colors cursor-pointer ${
+                          Math.round(Number(firstMinReais.replace(',', '.')) * 100) === c
+                            ? 'bg-lime-400 text-slate-950 border-lime-300 font-bold'
+                            : 'bg-slate-50 dark:bg-[#090d12] text-slate-700 dark:text-zinc-300 border-slate-200 dark:border-zinc-800 hover:border-lime-400'
+                        }`}
+                      >
+                        {formatBRL(c)}
+                      </button>
+                    ))}
                   </div>
-                  <div className="px-3 py-1.5 rounded-lg bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900 font-mono tabular-nums text-rose-700 dark:text-rose-300">
+                </div>
+
+                <div className="space-y-2">
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300">
+                    Mínimo dos Demais Saques (R$ 0,01 a R$ 20,00)
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={standardMinReais}
+                    onChange={(e) => setStandardMinReais(e.target.value)}
+                    placeholder="5.00"
+                    className="w-full min-h-[42px] px-3 py-2 text-sm font-mono bg-white dark:bg-[#090d12] border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-xl"
+                  />
+                  <div className="flex flex-wrap gap-1.5">
+                    {[1, 10, 50, 100, 200, 500, 1000, 2000].map((c) => (
+                      <button
+                        key={`std-${c}`}
+                        type="button"
+                        onClick={() => setStandardMinReais((c / 100).toFixed(2))}
+                        className={`px-2.5 py-1 text-[11px] font-mono rounded-lg border transition-colors cursor-pointer ${
+                          Math.round(Number(standardMinReais.replace(',', '.')) * 100) === c
+                            ? 'bg-lime-400 text-slate-950 border-lime-300 font-bold'
+                            : 'bg-slate-50 dark:bg-[#090d12] text-slate-700 dark:text-zinc-300 border-slate-200 dark:border-zinc-800 hover:border-lime-400'
+                        }`}
+                      >
+                        {formatBRL(c)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-2 pt-2 border-t border-slate-100 dark:border-zinc-800">
+                <div className="text-xs font-semibold text-slate-700 dark:text-zinc-300">
+                  Botões de Valores Rápidos na Carteira (R$ 0,01 a R$ 20,00)
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {ADMIN_QUICK_AMOUNT_CHOICES.map((cents) => {
+                    const active = quickAmountsSelected.includes(cents);
+                    return (
+                      <button
+                        key={`quick-${cents}`}
+                        type="button"
+                        onClick={() => toggleQuickAmountChoice(cents)}
+                        className={`px-2.5 py-1.5 text-xs font-mono font-semibold rounded-lg border transition-colors cursor-pointer ${
+                          active
+                            ? 'bg-emerald-50 dark:bg-lime-500/15 text-emerald-700 dark:text-lime-300 border-emerald-300 dark:border-lime-500/40'
+                            : 'bg-white dark:bg-[#090d12] text-slate-500 dark:text-zinc-400 border-slate-200 dark:border-zinc-800'
+                        }`}
+                      >
+                        {formatBRL(cents)}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {settingsError && (
+                <div className="p-3 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 rounded-xl text-xs text-red-700 dark:text-red-300">
+                  {settingsError}
+                </div>
+              )}
+            </form>
+
+            {/* Solicitações de Saque Pix */}
+            <div className="bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 sm:p-6 space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                  Solicitações de Saque Pix ({filteredWithdrawals.length})
+                </h3>
+                <div className="flex flex-wrap items-center gap-1 p-1 bg-slate-100 dark:bg-[#090d12] border border-slate-200 dark:border-zinc-800 rounded-xl">
+                  {(['all', 'pending', 'approved', 'paid', 'rejected'] as const).map((st) => (
+                    <button
+                      key={st}
+                      type="button"
+                      onClick={() => setPayoutFilter(st)}
+                      className={`px-3 py-1.5 text-xs font-semibold rounded-lg cursor-pointer ${
+                        payoutFilter === st
+                          ? 'bg-white dark:bg-lime-400 text-slate-900 dark:text-slate-950 shadow-sm'
+                          : 'text-slate-600 dark:text-zinc-400'
+                      }`}
+                    >
+                      {st === 'all'
+                        ? 'Todos'
+                        : st === 'pending'
+                          ? 'Pendentes'
+                          : st === 'approved'
+                            ? 'Aprovados'
+                            : st === 'paid'
+                              ? 'Pagos'
+                              : 'Recusados'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {filteredWithdrawals.length === 0 ? (
+                <p className="py-8 text-center text-xs text-slate-500 dark:text-zinc-400">
+                  Nenhum saque Pix nesta fila.
+                </p>
+              ) : (
+                <>
+                  {/* Mobile Cards */}
+                  <div className="md:hidden space-y-3">
+                    {filteredWithdrawals.map((w) => (
+                      <div
+                        key={w.withdrawalId}
+                        className="p-4 rounded-2xl border border-slate-200 dark:border-zinc-800 bg-slate-50/70 dark:bg-[#090d12] space-y-3 text-xs"
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <div className="font-bold text-slate-900 dark:text-white">{w.userDisplayName}</div>
+                            <div className="text-[11px] font-mono text-slate-500 dark:text-zinc-400">{w.requestedDate}</div>
+                          </div>
+                          <div className="text-right">
+                            <div className="font-mono text-sm font-extrabold text-slate-900 dark:text-white">
+                              {formatBRL(w.amountCents)}
+                            </div>
+                            <div className="text-[11px] font-bold">
+                              {w.status === 'paid' && <span className="text-emerald-600 dark:text-lime-400">Pago</span>}
+                              {w.status === 'pending' && <span className="text-amber-600 dark:text-amber-400">Pendente</span>}
+                              {w.status === 'approved' && <span className="text-sky-600 dark:text-sky-400">Aprovado</span>}
+                              {w.status === 'rejected' && <span className="text-red-600 dark:text-red-400">Recusado</span>}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="font-mono text-[11px] text-slate-600 dark:text-zinc-300 break-all bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-xl p-2.5">
+                          <span className="text-slate-400 mr-1">{w.pixKeyType.toUpperCase()}:</span>
+                          {w.pixKey}
+                        </div>
+
+                        {(w.status === 'pending' || w.status === 'approved') && (
+                          <div className="space-y-2">
+                            <input
+                              type="text"
+                              value={txIds[w.withdrawalId] || ''}
+                              onChange={(e) =>
+                                setTxIds((prev) => ({ ...prev, [w.withdrawalId]: e.target.value }))
+                              }
+                              placeholder="E2E Pix ID (opcional)"
+                              className="w-full min-h-[40px] px-3 py-1.5 text-xs font-mono bg-white dark:bg-[#0e1319] border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-xl"
+                            />
+                            <div className="flex flex-wrap gap-2">
+                              {w.status === 'pending' && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleWithdrawalDecision(w, 'approved')}
+                                  className="flex-1 min-h-[40px] px-3 py-1.5 bg-sky-50 dark:bg-sky-950/50 text-sky-700 dark:text-sky-300 border border-sky-200 dark:border-sky-800 rounded-xl font-bold cursor-pointer"
+                                >
+                                  Aprovar
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => handleWithdrawalDecision(w, 'paid')}
+                                className="flex-1 min-h-[40px] inline-flex items-center justify-center gap-1 px-3 py-1.5 bg-lime-400 text-slate-950 rounded-xl font-extrabold cursor-pointer"
+                              >
+                                <CheckCircle2 className="w-3.5 h-3.5" />
+                                Marcar Pago
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleWithdrawalDecision(w, 'rejected')}
+                                className="flex-1 min-h-[40px] inline-flex items-center justify-center gap-1 px-3 py-1.5 bg-red-50 dark:bg-red-950/50 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800 rounded-xl font-bold cursor-pointer"
+                              >
+                                <XCircle className="w-3.5 h-3.5" />
+                                Estornar
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Desktop Table */}
+                  <div className="hidden md:block overflow-x-auto">
+                    <table className="w-full text-left text-xs">
+                      <thead>
+                        <tr className="border-b border-slate-200 dark:border-zinc-800 text-slate-500 dark:text-zinc-400">
+                          <th className="py-2.5 font-medium">Usuário</th>
+                          <th className="py-2.5 font-medium">Chave Pix</th>
+                          <th className="py-2.5 font-medium text-right">Valor</th>
+                          <th className="py-2.5 font-medium">ID Comprovante</th>
+                          <th className="py-2.5 font-medium">Status</th>
+                          <th className="py-2.5 font-medium text-right">Ações</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 dark:divide-zinc-800">
+                        {filteredWithdrawals.map((w) => (
+                          <tr key={w.withdrawalId} className="min-h-[48px]">
+                            <td className="py-3 pr-3">
+                              <div className="font-semibold text-slate-900 dark:text-zinc-100">{w.userDisplayName}</div>
+                              <div className="text-[11px] font-mono text-slate-500 dark:text-zinc-400">{w.requestedDate}</div>
+                            </td>
+                            <td className="py-3 pr-3 font-mono text-slate-700 dark:text-zinc-300 break-all">
+                              <span className="text-slate-400 dark:text-zinc-500 mr-1">{w.pixKeyType.toUpperCase()}:</span>
+                              {w.pixKey}
+                            </td>
+                            <td className="py-3 pr-3 font-mono tabular-nums text-right font-bold text-slate-900 dark:text-zinc-100 whitespace-nowrap">
+                              {formatBRL(w.amountCents)}
+                            </td>
+                            <td className="py-3 pr-3">
+                              {w.status === 'pending' || w.status === 'approved' ? (
+                                <input
+                                  type="text"
+                                  value={txIds[w.withdrawalId] || ''}
+                                  onChange={(e) =>
+                                    setTxIds((prev) => ({ ...prev, [w.withdrawalId]: e.target.value }))
+                                  }
+                                  placeholder="E2E Pix ID"
+                                  className="px-2.5 py-1.5 text-xs font-mono bg-white dark:bg-[#090d12] border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-lg w-36"
+                                />
+                              ) : (
+                                <span className="font-mono text-slate-600 dark:text-zinc-400 break-all">
+                                  {w.pixTransactionId || '-'}
+                                </span>
+                              )}
+                            </td>
+                            <td className="py-3 pr-3 font-semibold whitespace-nowrap">
+                              {w.status === 'paid' && <span className="text-emerald-700 dark:text-lime-400">Pago</span>}
+                              {w.status === 'pending' && <span className="text-amber-700 dark:text-amber-400">Pendente</span>}
+                              {w.status === 'approved' && <span className="text-sky-700 dark:text-sky-400">Aprovado</span>}
+                              {w.status === 'rejected' && <span className="text-red-700 dark:text-red-400">Recusado</span>}
+                            </td>
+                            <td className="py-3 text-right space-x-1.5 whitespace-nowrap">
+                              {(w.status === 'pending' || w.status === 'approved') && (
+                                <>
+                                  {w.status === 'pending' && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleWithdrawalDecision(w, 'approved')}
+                                      className="px-2.5 py-1.5 bg-sky-50 dark:bg-sky-950/50 text-sky-700 dark:text-sky-300 border border-sky-200 dark:border-sky-800 rounded-lg font-semibold cursor-pointer"
+                                    >
+                                      Aprovar
+                                    </button>
+                                  )}
+                                  <button
+                                    type="button"
+                                    onClick={() => handleWithdrawalDecision(w, 'paid')}
+                                    className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-lime-400 text-slate-950 rounded-lg font-bold cursor-pointer"
+                                  >
+                                    <CheckCircle2 className="w-3 h-3" />
+                                    Marcar Pago
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleWithdrawalDecision(w, 'rejected')}
+                                    className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-red-50 dark:bg-red-950/50 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800 rounded-lg font-semibold cursor-pointer"
+                                  >
+                                    <XCircle className="w-3 h-3" />
+                                    Estornar
+                                  </button>
+                                </>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
+            </div>
+
+            {/* Log Detalhado de Tentativas de Saque Pix */}
+            <div className="bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 sm:p-6 space-y-4">
+              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-slate-100 dark:border-zinc-800 pb-4">
+                <div className="flex items-start gap-3">
+                  <div className="w-9 h-9 rounded-xl bg-slate-100 dark:bg-zinc-800 text-slate-700 dark:text-zinc-200 flex items-center justify-center shrink-0">
+                    <History className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                      Log Detalhado de Tentativas de Saque Pix
+                    </h3>
+                    <p className="text-xs text-slate-500 dark:text-zinc-400 mt-0.5">
+                      Registro cronológico com status, timestamp, chave Pix e ID completo do usuário.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2 text-xs">
+                  <span className="px-3 py-1.5 rounded-xl bg-slate-50 dark:bg-[#090d12] border border-slate-200 dark:border-zinc-800 font-mono tabular-nums">
+                    Total: <strong>{withdrawalAttempts.length}</strong>
+                  </span>
+                  <span className="px-3 py-1.5 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900 font-mono tabular-nums text-rose-700 dark:text-rose-300">
                     Bloqueios / Recusas: <strong>{blockedCount}</strong>
-                  </div>
+                  </span>
                 </div>
               </div>
 
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
                 <div className="relative flex-1 max-w-md">
-                  <Search className="w-3.5 h-3.5 text-slate-400 dark:text-zinc-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
                   <input
                     type="text"
                     value={attemptSearch}
                     onChange={(e) => setAttemptSearch(e.target.value)}
-                    placeholder="Buscar por ID do usuário (UID), nome, chave Pix ou saque..."
-                    className="w-full pl-9 pr-3 py-2 text-xs bg-white dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    placeholder="Buscar por UID, nome, chave Pix ou saque..."
+                    className="w-full min-h-[40px] pl-9 pr-3 py-2 text-xs bg-white dark:bg-[#090d12] border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-xl"
                   />
                 </div>
 
@@ -1880,10 +1904,10 @@ export const AdminPanel: React.FC = () => {
                       key={f.id}
                       type="button"
                       onClick={() => setAttemptFilter(f.id)}
-                      className={`px-2.5 py-1.5 text-[11px] font-semibold rounded-md border transition-colors cursor-pointer ${
+                      className={`px-2.5 py-1.5 text-[11px] font-semibold rounded-lg border transition-colors cursor-pointer ${
                         attemptFilter === f.id
-                          ? 'bg-slate-900 dark:bg-emerald-600 text-white border-slate-900 dark:border-emerald-600'
-                          : 'bg-slate-50 dark:bg-zinc-950 text-slate-600 dark:text-zinc-300 border-slate-200 dark:border-zinc-800 hover:border-slate-300 dark:hover:border-zinc-700'
+                          ? 'bg-slate-900 dark:bg-lime-400 text-white dark:text-slate-950 border-transparent'
+                          : 'bg-slate-50 dark:bg-[#090d12] text-slate-600 dark:text-zinc-300 border-slate-200 dark:border-zinc-800'
                       }`}
                     >
                       {f.label}
@@ -1893,184 +1917,859 @@ export const AdminPanel: React.FC = () => {
               </div>
 
               {filteredAttempts.length === 0 ? (
-                <p className="text-sm text-slate-500 dark:text-zinc-400 py-8 text-center">
-                  {withdrawalAttempts.length === 0
-                    ? 'Nenhuma tentativa de saque Pix registrada ainda.'
-                    : 'Nenhuma tentativa encontrada para o filtro ou busca informada.'}
+                <p className="text-xs text-slate-500 dark:text-zinc-400 py-8 text-center">
+                  Nenhuma tentativa de saque Pix encontrada.
                 </p>
               ) : (
-                <div className="overflow-x-auto -mx-2 px-2">
-                  <div className="min-w-[760px] divide-y divide-slate-100 dark:divide-zinc-800">
-                    {filteredAttempts.slice(0, 60).map((attempt) => {
-                      const meta = ATTEMPT_STATUS_META[attempt.status];
-                      return (
-                        <div
-                          key={attempt.attemptId}
-                          className="py-3.5 grid grid-cols-12 gap-3 items-start text-xs"
-                        >
-                          <div className="col-span-3 space-y-1">
-                            <span
-                              className={`inline-flex items-center px-2 py-0.5 text-[11px] font-semibold rounded border ${meta.badgeClass}`}
-                            >
-                              {meta.label}
-                            </span>
-                            <div className="text-[11px] font-mono text-slate-500 dark:text-zinc-400 tabular-nums">
-                              {formatAttemptTimestamp(attempt.createdAt)}
-                            </div>
-                            <div className="text-[10px] font-mono text-slate-400 dark:text-zinc-500">
-                              Log: {attempt.attemptId}
-                            </div>
-                          </div>
-
-                          <div className="col-span-4 space-y-1 min-w-0">
-                            <div className="font-semibold text-slate-900 dark:text-zinc-100 truncate">
-                              {attempt.userDisplayName}
-                            </div>
-                            <div className="flex items-center gap-1.5">
-                              <code className="text-[11px] font-mono text-slate-600 dark:text-zinc-300 bg-slate-100 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 px-1.5 py-0.5 rounded break-all">
-                                UID: {attempt.userId}
-                              </code>
-                              <button
-                                type="button"
-                                onClick={() => handleCopyUid(attempt.userId, attempt.attemptId)}
-                                className="p-1 text-slate-500 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-zinc-100 shrink-0 cursor-pointer"
-                                title="Copiar ID do usuário"
-                              >
-                                {copiedId === attempt.attemptId ? (
-                                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-                                ) : (
-                                  <Copy className="w-3.5 h-3.5" />
-                                )}
-                              </button>
-                            </div>
-                            <div className="text-[11px] font-mono text-slate-400 dark:text-zinc-500 truncate">
-                              Dispositivo: {attempt.deviceFingerprint || 'n/d'}
-                              {attempt.actorUid !== attempt.userId ? ` · Ação Admin: ${attempt.actorUid}` : ''}
-                            </div>
-                          </div>
-
-                          <div className="col-span-2 space-y-1">
-                            <div className="font-mono font-bold text-slate-900 dark:text-zinc-50 tabular-nums">
-                              {formatBRL(attempt.amountCents)}
-                            </div>
-                            <div className="text-[11px] font-mono text-slate-500 dark:text-zinc-400 break-all">
-                              {attempt.pixKeyType !== 'none'
-                                ? `${attempt.pixKeyType.toUpperCase()}: ${attempt.pixKey || '—'}`
-                                : 'Chave não informada'}
-                            </div>
-                            {attempt.withdrawalId && (
-                              <div className="text-[10px] font-mono text-emerald-700 dark:text-emerald-400 truncate">
-                                Saque: {attempt.withdrawalId}
-                              </div>
-                            )}
-                          </div>
-
-                          <div className="col-span-3 text-slate-700 dark:text-zinc-300 leading-relaxed">
-                            {attempt.details}
+                <div className="space-y-2.5">
+                  {filteredAttempts.slice(0, 60).map((attempt) => {
+                    const meta = ATTEMPT_STATUS_META[attempt.status];
+                    return (
+                      <div
+                        key={attempt.attemptId}
+                        className="p-3.5 rounded-2xl border border-slate-200 dark:border-zinc-800 bg-slate-50/70 dark:bg-[#090d12] grid grid-cols-1 md:grid-cols-12 gap-3 text-xs"
+                      >
+                        <div className="md:col-span-3 space-y-1">
+                          <span
+                            className={`inline-flex items-center px-2 py-0.5 text-[11px] font-semibold rounded-lg border ${meta.badgeClass}`}
+                          >
+                            {meta.label}
+                          </span>
+                          <div className="text-[11px] font-mono text-slate-500 dark:text-zinc-400 tabular-nums">
+                            {formatAttemptTimestamp(attempt.createdAt)}
                           </div>
                         </div>
-                      );
-                    })}
-                  </div>
+
+                        <div className="md:col-span-4 space-y-1 min-w-0">
+                          <div className="font-bold text-slate-900 dark:text-white break-words">
+                            {attempt.userDisplayName}
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <code className="text-[11px] font-mono text-slate-600 dark:text-zinc-300 bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 px-1.5 py-0.5 rounded break-all">
+                              UID: {attempt.userId}
+                            </code>
+                            <button
+                              type="button"
+                              onClick={() => handleCopyUid(attempt.userId, attempt.attemptId)}
+                              className="p-1 text-slate-500 hover:text-slate-900 dark:hover:text-white shrink-0 cursor-pointer"
+                              title="Copiar ID do usuário"
+                            >
+                              {copiedId === attempt.attemptId ? (
+                                <CheckCircle2 className="w-3.5 h-3.5 text-lime-400" />
+                              ) : (
+                                <Copy className="w-3.5 h-3.5" />
+                              )}
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="md:col-span-2 space-y-0.5">
+                          <div className="font-mono font-bold text-slate-900 dark:text-white tabular-nums">
+                            {formatBRL(attempt.amountCents)}
+                          </div>
+                          <div className="text-[11px] font-mono text-slate-500 dark:text-zinc-400 break-all">
+                            {attempt.pixKeyType !== 'none'
+                              ? `${attempt.pixKeyType.toUpperCase()}: ${attempt.pixKey || '—'}`
+                              : 'Sem chave Pix'}
+                          </div>
+                        </div>
+
+                        <div className="md:col-span-3 text-slate-700 dark:text-zinc-300 leading-relaxed break-words">
+                          {attempt.details}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
-            </div>
-
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-6 space-y-4">
-                <h3 className="text-base font-bold text-slate-900 dark:text-zinc-50">Eventos Antifraude</h3>
-                {fraudLogs.length === 0 ? (
-                  <p className="text-sm text-slate-500 dark:text-zinc-400 py-6 text-center">Nenhum incidente antifraude registrado.</p>
-                ) : (
-                  <div className="divide-y divide-slate-100 dark:divide-zinc-800">
-                    {fraudLogs.slice(0, 20).map((f) => {
-                      const targetUser = users.find((u) => u.uid === f.userId);
-                      const eventLabel =
-                        f.eventType === 'admin_ban'
-                          ? 'Banimento Administrativo'
-                          : f.eventType === 'profanity_username_ban'
-                            ? 'Banimento por Palavrão'
-                            : f.eventType;
-                      return (
-                      <div key={f.logId} className="py-3 flex items-start justify-between gap-3">
-                        <div className="space-y-1">
-                          <div className="text-xs font-mono text-slate-500 dark:text-zinc-400">
-                            {eventLabel} · severidade {f.severity} · {targetUser?.displayName || f.userId.slice(0, 10)}
-                          </div>
-                          <div className="text-xs font-medium text-slate-900 dark:text-zinc-100">{f.details}</div>
-                        </div>
-                        {!f.resolved ? (
-                          <button
-                            type="button"
-                            onClick={() => resolveFraudLog(f.logId)}
-                            className="px-2.5 py-1 text-xs bg-slate-900 dark:bg-zinc-800 text-white rounded hover:bg-slate-800 dark:hover:bg-zinc-700 shrink-0 cursor-pointer"
-                          >
-                            Resolver
-                          </button>
-                        ) : (
-                          <span className="text-xs text-emerald-700 dark:text-emerald-400 font-medium shrink-0">Resolvido</span>
-                        )}
-                      </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-
-              <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-6 space-y-4">
-                <h3 className="text-base font-bold text-slate-900 dark:text-zinc-50">Partidas Sinalizadas</h3>
-                {flaggedSessions.length === 0 ? (
-                  <p className="text-sm text-slate-500 dark:text-zinc-400 py-6 text-center">Todas as partidas passaram na verificação de integridade.</p>
-                ) : (
-                  <div className="divide-y divide-slate-100 dark:divide-zinc-800">
-                    {flaggedSessions.slice(0, 15).map((s) => (
-                      <div key={s.sessionId} className="py-3 space-y-1">
-                        <div className="flex items-center justify-between text-xs">
-                          <span className="font-semibold text-slate-900 dark:text-zinc-100">{GAME_LABELS[s.gameCategory]}</span>
-                          <span className="font-mono text-amber-700 dark:text-amber-400">{s.verificationStatus}</span>
-                        </div>
-                        <div className="text-xs text-slate-600 dark:text-zinc-400">{s.fraudReason}</div>
-                        <div className="text-[11px] font-mono text-slate-400 dark:text-zinc-500">
-                          Usuário: {s.userId} · {(s.durationMs / 1000).toFixed(1)}s
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
             </div>
           </div>
         );
       })()}
 
-      {/* TAB 4: ENTERPRISE API & WEBHOOKS */}
+      {/* TAB 3: USUÁRIOS & MODERAÇÃO */}
+      {tab === 'users' && (
+        <div className="bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 sm:p-6 space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <h3 className="text-base font-bold text-slate-900 dark:text-white">
+              Controle de Usuários ({filteredUsers.length})
+            </h3>
+            <div className="relative w-full sm:w-72">
+              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                type="text"
+                value={userSearch}
+                onChange={(e) => setUserSearch(e.target.value)}
+                placeholder="Buscar por nome, e-mail ou UID..."
+                className="w-full min-h-[42px] pl-9 pr-3 py-2 text-xs bg-white dark:bg-[#090d12] border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-xl"
+              />
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            {filteredUsers.map((u) => {
+              const userBanHistory = fraudLogs.filter(
+                (f) =>
+                  f.userId === u.uid &&
+                  (f.eventType === 'admin_ban' || f.eventType === 'profanity_username_ban')
+              );
+              return (
+                <div
+                  key={u.uid}
+                  className="p-4 rounded-2xl border border-slate-200 dark:border-zinc-800 bg-slate-50/70 dark:bg-[#090d12] flex flex-col lg:flex-row lg:items-center justify-between gap-4 text-xs"
+                >
+                  <div className="space-y-1.5 min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-bold text-slate-900 dark:text-white break-words">
+                        {u.displayName}
+                      </span>
+                      <span
+                        className={`px-2 py-0.5 rounded-lg text-[11px] font-bold ${
+                          u.status === 'active'
+                            ? 'bg-emerald-50 dark:bg-lime-500/15 text-emerald-700 dark:text-lime-400'
+                            : 'bg-red-50 dark:bg-red-950/50 text-red-700 dark:text-red-300'
+                        }`}
+                      >
+                        {u.status === 'active' ? 'Ativo' : 'Banido'}
+                      </span>
+                    </div>
+
+                    <div className="font-mono text-[11px] text-slate-500 dark:text-zinc-400 break-all">
+                      {privateMap[u.uid]?.email ? `${privateMap[u.uid].email} · ` : ''}UID: {u.uid}
+                    </div>
+
+                    <div className="flex flex-wrap gap-x-4 gap-y-1 font-mono text-[11px] pt-1">
+                      <span className="text-slate-700 dark:text-zinc-300">
+                        Pontos: <strong>{formatPoints(u.pointsBalance)}</strong>
+                      </span>
+                      <span className="text-emerald-700 dark:text-lime-400">
+                        Saldo: <strong>{formatBRL(u.brlBalanceCents)}</strong>
+                      </span>
+                      <span className="text-slate-700 dark:text-zinc-300">
+                        Sacado: <strong>{formatBRL(u.totalWithdrawnCents)}</strong>
+                      </span>
+                      <span className="text-slate-700 dark:text-zinc-300">
+                        Risco: <strong>{u.riskScore}/100</strong>
+                      </span>
+                    </div>
+
+                    {u.status === 'suspended' && (u.banReason || u.banExplanation) && (
+                      <div className="mt-1.5 text-[11px] text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/70 rounded-xl p-2.5 space-y-0.5">
+                        {u.banReason && (
+                          <div>
+                            <strong>Motivo:</strong> {u.banReason}
+                          </div>
+                        )}
+                        {u.banExplanation && (
+                          <div>
+                            <strong>Por quê:</strong> {u.banExplanation}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {u.status === 'active' && userBanHistory.length > 0 && (
+                      <div className="text-[11px] text-amber-700 dark:text-amber-300">
+                        Histórico anterior ({userBanHistory.length}): {userBanHistory[0].details}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    {u.status === 'active' ? (
+                      <button
+                        type="button"
+                        onClick={() => openBanModal(u)}
+                        className="min-h-[40px] inline-flex items-center gap-1.5 px-3 py-1.5 bg-red-50 dark:bg-red-950/50 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800 rounded-xl font-bold cursor-pointer"
+                      >
+                        <Ban className="w-3.5 h-3.5" />
+                        Banir
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => reactivateUser(u)}
+                        className="min-h-[40px] px-3 py-1.5 bg-emerald-50 dark:bg-lime-500/15 text-emerald-700 dark:text-lime-400 border border-emerald-200 dark:border-lime-500/40 rounded-xl font-bold cursor-pointer"
+                      >
+                        Reativar
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => promoteAdmin(u)}
+                      className="min-h-[40px] px-3 py-1.5 bg-white dark:bg-zinc-800 text-slate-800 dark:text-zinc-200 border border-slate-200 dark:border-zinc-700 rounded-xl font-semibold hover:border-lime-400 cursor-pointer"
+                    >
+                      Tornar Admin
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* TAB 4: CÓDIGOS & CAIXA DE CORREIO */}
+      {tab === 'codes' && (
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+          <div className="lg:col-span-5 space-y-6">
+            {/* Criar Evento de Código */}
+            <div className="bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 sm:p-6 space-y-4">
+              <div className="flex items-center gap-2.5">
+                <Ticket className="w-5 h-5 text-emerald-600 dark:text-lime-400" />
+                <div>
+                  <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                    Gerar Evento de Código Promocional
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-zinc-400">
+                    Crie códigos valendo pontos e envie direto para o app e Correio.
+                  </p>
+                </div>
+              </div>
+
+              <form onSubmit={handleCreatePromoCode} className="space-y-3.5">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300 mb-1">
+                    Código do Evento
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      required
+                      minLength={3}
+                      maxLength={40}
+                      value={promoCodeInput}
+                      onChange={(e) => setPromoCodeInput(e.target.value.toUpperCase().replace(/[^A-Z0-9_-]/g, ''))}
+                      placeholder="EE-BONUS500"
+                      className="flex-1 min-h-[42px] px-3 py-2 text-sm font-mono uppercase bg-white dark:bg-[#090d12] border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-xl"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setPromoCodeInput(buildRandomPromoCode())}
+                      className="inline-flex items-center gap-1.5 min-h-[42px] px-3 py-2 text-xs font-semibold bg-slate-100 dark:bg-zinc-800 text-slate-800 dark:text-zinc-200 border border-slate-200 dark:border-zinc-700 rounded-xl cursor-pointer shrink-0"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5" />
+                      Aleatório
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300 mb-1">
+                    Título do Evento
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    minLength={3}
+                    maxLength={120}
+                    value={promoTitle}
+                    onChange={(e) => setPromoTitle(e.target.value)}
+                    placeholder="Ex: Evento Relâmpago de Fim de Semana"
+                    className="w-full min-h-[42px] px-3 py-2 text-sm bg-white dark:bg-[#090d12] border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-xl"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300 mb-1">
+                      Moedas (10–100.000)
+                    </label>
+                    <input
+                      type="number"
+                      required
+                      min={10}
+                      max={MAX_PROMO_CODE_POINTS}
+                      value={promoPoints}
+                      onChange={(e) => setPromoPoints(e.target.value)}
+                      className="w-full min-h-[42px] px-3 py-2 text-sm font-mono bg-white dark:bg-[#090d12] border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-xl"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300 mb-1">
+                      Limite de Resgates
+                    </label>
+                    <input
+                      type="number"
+                      required
+                      min={1}
+                      max={100000}
+                      value={promoMaxRedemptions}
+                      onChange={(e) => setPromoMaxRedemptions(e.target.value)}
+                      className="w-full min-h-[42px] px-3 py-2 text-sm font-mono bg-white dark:bg-[#090d12] border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-xl"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <label className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-700 dark:text-zinc-300">
+                      <Clock className="w-3.5 h-3.5 text-emerald-600 dark:text-lime-400" />
+                      Publicar em (min)
+                    </label>
+                    <span className="text-[11px] font-mono text-slate-500 dark:text-zinc-400">
+                      {Number(promoDelayMinutes || 0) === 0 ? 'Imediato' : `Em ${promoDelayMinutes} min`}
+                    </span>
+                  </div>
+
+                  <div className="flex flex-wrap gap-1.5">
+                    {[
+                      { label: 'Agora', mins: '0' },
+                      { label: '5m', mins: '5' },
+                      { label: '15m', mins: '15' },
+                      { label: '30m', mins: '30' },
+                      { label: '1h', mins: '60' },
+                      { label: '2h', mins: '120' },
+                    ].map((preset) => (
+                      <button
+                        key={preset.mins}
+                        type="button"
+                        onClick={() => setPromoDelayMinutes(preset.mins)}
+                        className={`px-2.5 py-1 text-[11px] font-semibold rounded-lg border cursor-pointer ${
+                          promoDelayMinutes === preset.mins
+                            ? 'bg-lime-400 text-slate-950 border-lime-300'
+                            : 'bg-slate-50 dark:bg-[#090d12] text-slate-700 dark:text-zinc-300 border-slate-200 dark:border-zinc-800'
+                        }`}
+                      >
+                        {preset.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="flex items-start gap-2.5 p-3 rounded-xl bg-slate-50 dark:bg-[#090d12] border border-slate-200 dark:border-zinc-800 cursor-pointer text-xs">
+                    <input
+                      type="checkbox"
+                      checked={promoPublicEvent}
+                      onChange={(e) => setPromoPublicEvent(e.target.checked)}
+                      className="mt-0.5 rounded text-lime-500"
+                    />
+                    <span>Exibir publicamente nos Destaques e Convites & Códigos</span>
+                  </label>
+
+                  <label className="flex items-start gap-2.5 p-3 rounded-xl bg-slate-50 dark:bg-[#090d12] border border-slate-200 dark:border-zinc-800 cursor-pointer text-xs">
+                    <input
+                      type="checkbox"
+                      checked={sendMailboxMsg}
+                      onChange={(e) => setSendMailboxMsg(e.target.checked)}
+                      className="mt-0.5 rounded text-lime-500"
+                    />
+                    <span>Enviar notificação na Caixa de Correio de todos os usuários</span>
+                  </label>
+                </div>
+
+                {promoError && (
+                  <div className="p-3 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 rounded-xl text-xs text-red-700 dark:text-red-300">
+                    {promoError}
+                  </div>
+                )}
+
+                <button
+                  type="submit"
+                  disabled={promoSubmitting}
+                  className="w-full min-h-[44px] inline-flex items-center justify-center gap-2 py-2.5 px-4 bg-lime-400 hover:bg-lime-300 disabled:opacity-50 text-slate-950 text-xs font-extrabold rounded-xl transition-colors cursor-pointer"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  {promoSubmitting ? 'Enviando evento...' : 'Gerar e Enviar Evento de Código'}
+                </button>
+              </form>
+            </div>
+
+            {/* Enviar Aviso Direto para Caixa de Correio */}
+            <form
+              onSubmit={handleSendBroadcastNotice}
+              className="bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 sm:p-6 space-y-3.5"
+            >
+              <div className="flex items-center gap-2.5">
+                <Inbox className="w-5 h-5 text-emerald-600 dark:text-lime-400" />
+                <div>
+                  <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                    Enviar Mensagem no Correio Geral
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-zinc-400">
+                    Dispare avisos ou novidades direto para o Correio dos jogadores.
+                  </p>
+                </div>
+              </div>
+
+              <input
+                type="text"
+                required
+                minLength={3}
+                maxLength={140}
+                value={noticeTitle}
+                onChange={(e) => setNoticeTitle(e.target.value)}
+                placeholder="Título do comunicado"
+                className="w-full min-h-[42px] px-3 py-2 text-sm bg-white dark:bg-[#090d12] border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-xl"
+              />
+              <textarea
+                required
+                minLength={3}
+                maxLength={600}
+                rows={3}
+                value={noticeBody}
+                onChange={(e) => setNoticeBody(e.target.value)}
+                placeholder="Escreva a mensagem completa que aparecerá na Caixa de Correio..."
+                className="w-full px-3 py-2 text-sm bg-white dark:bg-[#090d12] border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-xl resize-none"
+              />
+              <button
+                type="submit"
+                disabled={noticeSending}
+                className="w-full min-h-[42px] inline-flex items-center justify-center gap-2 px-4 py-2 bg-slate-900 dark:bg-zinc-800 hover:bg-slate-800 dark:hover:bg-zinc-700 disabled:opacity-50 text-white text-xs font-bold rounded-xl cursor-pointer"
+              >
+                <Send className="w-3.5 h-3.5" />
+                {noticeSending ? 'Enviando...' : 'Enviar para Caixa de Correio'}
+              </button>
+            </form>
+          </div>
+
+          <div className="lg:col-span-7 space-y-6">
+            <div className="bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 sm:p-6 space-y-4">
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                  Eventos de Código Gerados ({promoCodes.length})
+                </h3>
+                <span className="text-xs text-slate-500 dark:text-zinc-400">
+                  {promoCodes.filter((c) => c.active).length} ativos
+                </span>
+              </div>
+
+              {promoCodes.length === 0 ? (
+                <p className="text-xs text-slate-500 dark:text-zinc-400 py-6 text-center">
+                  Nenhum código promocional gerado ainda.
+                </p>
+              ) : (
+                <div className="divide-y divide-slate-100 dark:divide-zinc-800">
+                  {promoCodes.map((p) => {
+                    const publishMs = timestampToMillis(p.publishAt);
+                    const nowMs = Date.now();
+                    const isScheduledPending = publishMs > nowMs;
+                    return (
+                      <div key={p.code} className="py-3.5 flex flex-wrap items-center justify-between gap-3">
+                        <div className="space-y-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <code className="px-2 py-0.5 text-xs font-mono font-bold bg-slate-100 dark:bg-zinc-800 text-slate-900 dark:text-zinc-100 rounded border border-slate-200 dark:border-zinc-700">
+                              {p.code}
+                            </code>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                navigator.clipboard?.writeText(p.code).catch(() => {});
+                                setActionMsg(`Código ${p.code} copiado!`);
+                              }}
+                              className="p-1 text-slate-400 hover:text-slate-700 dark:hover:text-zinc-200 cursor-pointer"
+                              title="Copiar código"
+                            >
+                              <Copy className="w-3.5 h-3.5" />
+                            </button>
+                            <span className="text-xs font-mono font-bold text-emerald-700 dark:text-lime-400 tabular-nums">
+                              +{formatPoints(p.pointsValue)} moedas
+                            </span>
+                          </div>
+                          <div className="text-xs font-medium text-slate-800 dark:text-zinc-200 break-words">
+                            {p.title}
+                          </div>
+                          <div className="text-[11px] font-mono text-slate-500 dark:text-zinc-400 tabular-nums">
+                            Resgates: {p.redemptionCount} / {p.maxRedemptions} ·{' '}
+                            {p.publicEvent ? 'Público' : 'Privado'} ·{' '}
+                            {p.active ? 'Ativo' : 'Pausado'} ·{' '}
+                            {isScheduledPending
+                              ? `Agendado p/ ${formatScheduleTime(publishMs)} (falta ${formatScheduleRemaining(publishMs, nowMs)})`
+                              : 'Publicado'}
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => togglePromoPublic(p)}
+                            className="px-2.5 py-1.5 text-[11px] font-semibold rounded-lg border border-slate-200 dark:border-zinc-700 bg-slate-50 dark:bg-zinc-800 text-slate-700 dark:text-zinc-200 cursor-pointer"
+                          >
+                            {p.publicEvent ? 'Tornar Privado' : 'Publicar'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => togglePromoActive(p)}
+                            className={`px-2.5 py-1.5 text-[11px] font-semibold rounded-lg border cursor-pointer ${
+                              p.active
+                                ? 'bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800'
+                                : 'bg-emerald-50 dark:bg-lime-500/15 text-emerald-700 dark:text-lime-400 border-emerald-200 dark:border-lime-500/40'
+                            }`}
+                          >
+                            {p.active ? 'Pausar' : 'Reativar'}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            <div className="bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 sm:p-6 space-y-3">
+              <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                Auditoria de Convites (+500 pts & 12%)
+              </h3>
+              <div className="grid grid-cols-3 gap-3 text-xs">
+                <div className="p-3 rounded-xl bg-slate-50 dark:bg-[#090d12] border border-slate-200 dark:border-zinc-800">
+                  <div className="text-slate-500 dark:text-zinc-400">Indicações</div>
+                  <div className="text-lg font-mono font-bold text-slate-900 dark:text-white tabular-nums">
+                    {referrals.length}
+                  </div>
+                </div>
+                <div className="p-3 rounded-xl bg-slate-50 dark:bg-[#090d12] border border-slate-200 dark:border-zinc-800">
+                  <div className="text-slate-500 dark:text-zinc-400">Bônus +500</div>
+                  <div className="text-lg font-mono font-bold text-emerald-700 dark:text-lime-400 tabular-nums">
+                    {formatPoints(referrals.reduce((s, r) => s + r.signupBonusPoints, 0))}
+                  </div>
+                </div>
+                <div className="p-3 rounded-xl bg-slate-50 dark:bg-[#090d12] border border-slate-200 dark:border-zinc-800">
+                  <div className="text-slate-500 dark:text-zinc-400">Comissões 12%</div>
+                  <div className="text-lg font-mono font-bold text-emerald-700 dark:text-lime-400 tabular-nums">
+                    {formatPoints(referrals.reduce((s, r) => s + r.totalCommissionPointsEarned, 0))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 5: SUPORTE AO VIVO */}
+      {tab === 'support' && (
+        <div className="grid grid-cols-1 lg:grid-cols-[340px_1fr] gap-5 items-stretch">
+          <div className="bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-3xl p-4 sm:p-5 space-y-4">
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                Fila de Suporte ({filteredSupportTickets.length})
+              </h3>
+              {waitingSupportCount > 0 && (
+                <span className="text-[11px] font-mono font-bold text-amber-600 dark:text-amber-400">
+                  {waitingSupportCount} aguardando
+                </span>
+              )}
+            </div>
+
+            <div className="flex flex-wrap gap-1.5">
+              {(
+                [
+                  { id: 'all', label: 'Todos' },
+                  { id: 'waiting_human', label: 'Aguardando' },
+                  { id: 'active_human', label: 'Em Chat' },
+                  { id: 'closed', label: 'Encerrados' },
+                ] as const
+              ).map((f) => (
+                <button
+                  key={f.id}
+                  type="button"
+                  onClick={() => setSupportFilter(f.id)}
+                  className={`px-2.5 py-1.5 text-[11px] font-semibold rounded-lg border transition-colors cursor-pointer ${
+                    supportFilter === f.id
+                      ? 'bg-slate-900 dark:bg-lime-400 text-white dark:text-slate-950 border-transparent'
+                      : 'bg-slate-50 dark:bg-[#090d12] text-slate-600 dark:text-zinc-400 border-slate-200 dark:border-zinc-800'
+                  }`}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+
+            {filteredSupportTickets.length === 0 ? (
+              <p className="text-xs text-slate-500 dark:text-zinc-400 py-6 text-center">
+                Nenhum chamado nesta fila.
+              </p>
+            ) : (
+              <div className="space-y-2 max-h-[520px] overflow-y-auto pr-1">
+                {filteredSupportTickets.map((t) => {
+                  const selected = selectedTicketId === t.ticketId;
+                  return (
+                    <button
+                      key={t.ticketId}
+                      type="button"
+                      onClick={() => setSelectedTicketId(t.ticketId)}
+                      className={`w-full rounded-2xl border p-3 text-left transition-colors space-y-1.5 cursor-pointer ${
+                        selected
+                          ? 'bg-emerald-50 dark:bg-lime-500/10 border-emerald-300 dark:border-lime-500/50'
+                          : 'bg-slate-50/70 dark:bg-[#090d12] border-slate-200 dark:border-zinc-800 hover:border-slate-300 dark:hover:border-zinc-700'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-bold text-slate-900 dark:text-white break-words">
+                          {t.userDisplayName}
+                        </span>
+                        <span
+                          className={`text-[10px] font-bold shrink-0 ${
+                            t.status === 'waiting_human'
+                              ? 'text-amber-600 dark:text-amber-400'
+                              : t.status === 'active_human'
+                                ? 'text-emerald-600 dark:text-lime-400'
+                                : 'text-slate-400 dark:text-zinc-500'
+                          }`}
+                        >
+                          {t.status === 'waiting_human'
+                            ? 'Aguardando'
+                            : t.status === 'active_human'
+                              ? 'Ativo'
+                              : 'Encerrado'}
+                        </span>
+                      </div>
+                      <div className="text-xs text-slate-700 dark:text-zinc-300 leading-snug break-words">
+                        {t.subject}
+                      </div>
+                      <div className="text-[10px] font-mono text-slate-400 dark:text-zinc-500">
+                        {formatAttemptTimestamp(t.updatedAt)}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          <div className="bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-3xl p-4 sm:p-5 flex min-h-[520px] max-h-[660px] flex-col">
+            {selectedSupportTicket ? (
+              <>
+                <div className="pb-4 border-b border-slate-100 dark:border-zinc-800 flex flex-wrap items-start justify-between gap-3">
+                  <div className="space-y-1 min-w-0">
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                      <span className="font-bold text-slate-900 dark:text-white">
+                        {selectedSupportTicket.userDisplayName}
+                      </span>
+                      <span className="text-slate-400">·</span>
+                      <span className="font-mono text-slate-500 dark:text-zinc-400 break-all">
+                        {privateMap[selectedSupportTicket.userId]?.email || selectedSupportTicket.userId}
+                      </span>
+                    </div>
+                    <div className="text-xs text-slate-700 dark:text-zinc-200 break-words">
+                      {selectedSupportTicket.subject}
+                    </div>
+                    {selectedTicketUser && (
+                      <div className="text-[11px] font-mono text-slate-500 dark:text-zinc-400 tabular-nums">
+                        Saldo Pix: {formatBRL(selectedTicketUser.brlBalanceCents)} · Moedas:{' '}
+                        {formatPoints(selectedTicketUser.pointsBalance)} · Status:{' '}
+                        {selectedTicketUser.status}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-2 shrink-0">
+                    {selectedSupportTicket.status === 'waiting_human' && (
+                      <button
+                        type="button"
+                        disabled={supportBusy}
+                        onClick={() => acceptSupportTicket(selectedSupportTicket)}
+                        className="inline-flex items-center gap-1.5 min-h-[40px] px-3.5 py-2 bg-lime-400 hover:bg-lime-300 disabled:opacity-50 text-slate-950 text-xs font-extrabold rounded-xl whitespace-nowrap cursor-pointer"
+                      >
+                        <UserCheck className="w-3.5 h-3.5" />
+                        Aceitar Suporte
+                      </button>
+                    )}
+                    {selectedSupportTicket.status !== 'closed' && (
+                      <button
+                        type="button"
+                        disabled={supportBusy}
+                        onClick={() => closeSupportTicket(selectedSupportTicket)}
+                        className="min-h-[40px] px-3 py-2 border border-slate-300 dark:border-zinc-700 text-slate-700 dark:text-zinc-200 text-xs font-semibold rounded-xl hover:bg-slate-50 dark:hover:bg-zinc-800 whitespace-nowrap cursor-pointer"
+                      >
+                        Encerrar
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="mt-3 p-3 rounded-xl bg-slate-50 dark:bg-[#090d12] border border-slate-200 dark:border-zinc-800 text-xs text-slate-600 dark:text-zinc-300 break-words">
+                  <strong className="text-slate-800 dark:text-zinc-100">Resumo do Biel:</strong>{' '}
+                  {selectedSupportTicket.bielSummary}
+                </div>
+
+                <div className="flex-1 overflow-y-auto py-4 space-y-2.5 pr-1">
+                  {supportMessages.map((msg) => {
+                    const isAdminSender = msg.senderRole === 'admin';
+                    const isBiel = msg.senderRole === 'biel';
+                    return (
+                      <div
+                        key={msg.messageId}
+                        className={`flex flex-col ${isAdminSender ? 'items-end' : 'items-start'}`}
+                      >
+                        <div
+                          className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed break-words ${
+                            isAdminSender
+                              ? 'bg-emerald-600 dark:bg-lime-400 text-white dark:text-slate-950 font-medium'
+                              : isBiel
+                                ? 'bg-slate-100 dark:bg-[#090d12] text-slate-700 dark:text-zinc-300 border border-slate-200 dark:border-zinc-800'
+                                : 'bg-slate-200/80 dark:bg-zinc-800 text-slate-900 dark:text-zinc-100'
+                          }`}
+                        >
+                          {msg.text}
+                        </div>
+                        <span className="mt-1 text-[10px] font-mono text-slate-400 dark:text-zinc-500">
+                          {msg.senderName} · {formatAttemptTimestamp(msg.createdAt)}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {selectedSupportTicket.status === 'closed' ? (
+                  <div className="pt-3 border-t border-slate-100 dark:border-zinc-800 text-xs text-slate-500 dark:text-zinc-400">
+                    Chamado encerrado.
+                  </div>
+                ) : (
+                  <div className="pt-3 border-t border-slate-100 dark:border-zinc-800 flex gap-2">
+                    <input
+                      type="text"
+                      value={supportReplyDraft}
+                      maxLength={800}
+                      onChange={(e) => setSupportReplyDraft(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && sendAdminSupportReply()}
+                      placeholder={
+                        selectedSupportTicket.status === 'waiting_human'
+                          ? 'Responda aqui para aceitar e iniciar o chat...'
+                          : 'Escreva sua resposta para o jogador...'
+                      }
+                      className="flex-1 min-h-[44px] rounded-xl border border-slate-300 dark:border-zinc-700 bg-white dark:bg-[#090d12] px-3.5 py-2 text-sm text-slate-900 dark:text-zinc-100"
+                    />
+                    <button
+                      type="button"
+                      disabled={supportBusy || !supportReplyDraft.trim()}
+                      onClick={sendAdminSupportReply}
+                      className="inline-flex items-center gap-1.5 min-h-[44px] px-4 py-2 bg-lime-400 hover:bg-lime-300 disabled:opacity-50 text-slate-950 text-xs font-extrabold rounded-xl whitespace-nowrap shrink-0 cursor-pointer"
+                    >
+                      <Send className="w-3.5 h-3.5" />
+                      Responder
+                    </button>
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="flex-1 flex flex-col items-center justify-center text-center text-slate-500 dark:text-zinc-400 gap-2 px-4">
+                <Headset className="w-8 h-8 opacity-40" />
+                <p className="text-sm font-semibold text-slate-700 dark:text-zinc-300">
+                  Selecione um chamado ao lado
+                </p>
+                <p className="text-xs max-w-sm leading-relaxed">
+                  Conversas enviadas pelo suporte do Biel aparecem aqui para você aceitar e responder ao vivo.
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* TAB 6: ANTIFRAUDE */}
+      {tab === 'antifraud' && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 sm:p-6 space-y-4">
+            <h3 className="text-base font-bold text-slate-900 dark:text-white">
+              Eventos Antifraude ({fraudLogs.length})
+            </h3>
+            {fraudLogs.length === 0 ? (
+              <p className="text-xs text-slate-500 dark:text-zinc-400 py-6 text-center">
+                Nenhum incidente antifraude registrado.
+              </p>
+            ) : (
+              <div className="divide-y divide-slate-100 dark:divide-zinc-800">
+                {fraudLogs.slice(0, 30).map((f) => {
+                  const targetUser = users.find((u) => u.uid === f.userId);
+                  const eventLabel =
+                    f.eventType === 'admin_ban'
+                      ? 'Banimento Administrativo'
+                      : f.eventType === 'profanity_username_ban'
+                        ? 'Banimento por Palavrão'
+                        : f.eventType;
+                  return (
+                    <div key={f.logId} className="py-3 flex items-start justify-between gap-3">
+                      <div className="space-y-1 min-w-0">
+                        <div className="text-xs font-mono text-slate-500 dark:text-zinc-400 break-words">
+                          {eventLabel} · severidade {f.severity} · {targetUser?.displayName || f.userId}
+                        </div>
+                        <div className="text-xs font-medium text-slate-900 dark:text-zinc-100 break-words">
+                          {f.details}
+                        </div>
+                      </div>
+                      {!f.resolved ? (
+                        <button
+                          type="button"
+                          onClick={() => resolveFraudLog(f.logId)}
+                          className="px-2.5 py-1.5 text-xs bg-lime-400 text-slate-950 font-bold rounded-lg shrink-0 cursor-pointer"
+                        >
+                          Resolver
+                        </button>
+                      ) : (
+                        <span className="text-xs text-emerald-700 dark:text-lime-400 font-semibold shrink-0">
+                          Resolvido
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          <div className="bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 sm:p-6 space-y-4">
+            <h3 className="text-base font-bold text-slate-900 dark:text-white">
+              Partidas Sinalizadas ({flaggedSessions.length})
+            </h3>
+            {flaggedSessions.length === 0 ? (
+              <p className="text-xs text-slate-500 dark:text-zinc-400 py-6 text-center">
+                Todas as partidas passaram na verificação de integridade.
+              </p>
+            ) : (
+              <div className="divide-y divide-slate-100 dark:divide-zinc-800">
+                {flaggedSessions.slice(0, 20).map((s) => (
+                  <div key={s.sessionId} className="py-3 space-y-1">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-semibold text-slate-900 dark:text-zinc-100">
+                        {GAME_LABELS[s.gameCategory] || s.gameCategory}
+                      </span>
+                      <span className="font-mono text-amber-700 dark:text-amber-400">{s.verificationStatus}</span>
+                    </div>
+                    <div className="text-xs text-slate-600 dark:text-zinc-400">{s.fraudReason}</div>
+                    <div className="text-[11px] font-mono text-slate-400 dark:text-zinc-500 break-all">
+                      Usuário: {s.userId} · {(s.durationMs / 1000).toFixed(1)}s
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* TAB 7: API EMPRESARIAL & SMTP */}
       {tab === 'api' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          <div className="lg:col-span-5 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-6 space-y-4">
+          <div className="lg:col-span-5 bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 sm:p-6 space-y-4">
             <div className="flex items-center gap-2">
-              <KeyRound className="w-5 h-5 text-slate-700 dark:text-zinc-300" />
-              <h3 className="text-base font-bold text-slate-900 dark:text-zinc-50">Nova Integração ERP / Financeira</h3>
+              <KeyRound className="w-5 h-5 text-slate-700 dark:text-lime-400" />
+              <h3 className="text-base font-bold text-slate-900 dark:text-white">Nova Integração ERP / Financeira</h3>
             </div>
 
             <form onSubmit={handleCreateIntegration} className="space-y-3">
               <div>
-                <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300 mb-1">Nome da Ferramenta / ERP</label>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300 mb-1">
+                  Nome da Ferramenta / ERP
+                </label>
                 <input
                   type="text"
                   required
                   value={apiName}
                   onChange={(e) => setApiName(e.target.value)}
                   placeholder="Ex: Conta Azul / Omie / Power BI"
-                  className="w-full px-3 py-2 text-sm bg-white dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-lg"
+                  className="w-full min-h-[42px] px-3 py-2 text-sm bg-white dark:bg-[#090d12] border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-xl"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300 mb-1">Tipo de Integração</label>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300 mb-1">
+                  Tipo de Integração
+                </label>
                 <select
                   value={providerType}
                   onChange={(e) => setProviderType(e.target.value as EnterpriseIntegration['providerType'])}
-                  className="w-full px-3 py-2 text-sm border border-slate-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-950 text-slate-900 dark:text-zinc-100"
+                  className="w-full min-h-[42px] px-3 py-2 text-sm border border-slate-300 dark:border-zinc-700 rounded-xl bg-white dark:bg-[#090d12] text-slate-900 dark:text-zinc-100"
                 >
                   <option value="erp_webhook">Webhook ERP Financeiro</option>
                   <option value="accounting_api">API Contábil (REST)</option>
@@ -2080,30 +2779,32 @@ export const AdminPanel: React.FC = () => {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300 mb-1">URL do Webhook (opcional)</label>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300 mb-1">
+                  URL do Webhook (opcional)
+                </label>
                 <input
                   type="url"
                   value={endpointUrl}
                   onChange={(e) => setEndpointUrl(e.target.value)}
                   placeholder="https://sua-empresa.com/webhooks/earneasy"
-                  className="w-full px-3 py-2 text-sm font-mono bg-white dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-lg"
+                  className="w-full min-h-[42px] px-3 py-2 text-sm font-mono bg-white dark:bg-[#090d12] border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-xl"
                 />
               </div>
 
               <button
                 type="submit"
-                className="w-full py-2.5 bg-slate-900 dark:bg-emerald-600 text-white text-xs font-semibold rounded-lg hover:bg-slate-800 dark:hover:bg-emerald-500 transition-colors cursor-pointer"
+                className="w-full min-h-[44px] py-2.5 bg-lime-400 hover:bg-lime-300 text-slate-950 text-xs font-extrabold rounded-xl transition-colors cursor-pointer"
               >
                 Gerar Chave de API e Salvar
               </button>
             </form>
 
             {generatedRawKey && (
-              <div className="bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-lg p-3 space-y-1.5">
+              <div className="bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-xl p-3 space-y-1.5">
                 <div className="text-xs font-semibold text-emerald-900 dark:text-emerald-300">
-                  Chave gerada (copie agora — armazenada apenas em hash SHA-256):
+                  Chave gerada (copie agora):
                 </div>
-                <div className="flex items-center justify-between gap-2 bg-white dark:bg-zinc-950 border border-emerald-200 dark:border-emerald-800 rounded px-2.5 py-1.5">
+                <div className="flex items-center justify-between gap-2 bg-white dark:bg-[#090d12] border border-emerald-200 dark:border-emerald-800 rounded-lg px-2.5 py-1.5">
                   <code className="text-xs font-mono text-slate-900 dark:text-zinc-100 break-all">{generatedRawKey}</code>
                   <button
                     type="button"
@@ -2119,107 +2820,57 @@ export const AdminPanel: React.FC = () => {
           </div>
 
           <div className="lg:col-span-7 space-y-6">
-            <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-6 space-y-4">
-              <h3 className="text-base font-bold text-slate-900 dark:text-zinc-50">Integrações Registradas</h3>
-              {webhookTestResult && (
-                <div className="p-3 bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 rounded-lg text-xs text-slate-800 dark:text-zinc-200 font-mono">
-                  {webhookTestResult}
-                </div>
-              )}
-
-              {integrations.length === 0 ? (
-                <p className="text-sm text-slate-500 dark:text-zinc-400">Nenhuma integração cadastrada ainda.</p>
-              ) : (
-                <div className="divide-y divide-slate-100 dark:divide-zinc-800">
-                  {integrations.map((intg) => (
-                    <div key={intg.integrationId} className="py-3 flex flex-wrap items-center justify-between gap-3">
-                      <div>
-                        <div className="text-sm font-semibold text-slate-900 dark:text-zinc-100">{intg.name}</div>
-                        <div className="text-xs font-mono text-slate-500 dark:text-zinc-400">
-                          Prefixo: {intg.apiKeyPrefix}... · {intg.providerType}
-                        </div>
-                        {intg.endpointUrl && (
-                          <div className="text-[11px] font-mono text-slate-400 dark:text-zinc-500 truncate max-w-sm">
-                            {intg.endpointUrl}
-                          </div>
-                        )}
-                      </div>
-                      {intg.endpointUrl && (
-                        <button
-                          type="button"
-                          onClick={() => handleTestWebhook(intg)}
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-slate-900 dark:bg-zinc-800 text-white rounded-lg hover:bg-slate-800 dark:hover:bg-zinc-700 cursor-pointer"
-                        >
-                          <Send className="w-3.5 h-3.5" />
-                          Testar Webhook
-                        </button>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-6 space-y-4">
+            <div className="bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 sm:p-6 space-y-4">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="flex items-center gap-2.5">
-                  <div className="w-9 h-9 rounded-lg bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-400 flex items-center justify-center shrink-0">
+                  <div className="w-9 h-9 rounded-xl bg-emerald-50 dark:bg-lime-500/15 text-emerald-700 dark:text-lime-400 flex items-center justify-center shrink-0">
                     <Mail className="w-4 h-4" />
                   </div>
                   <div>
-                    <h3 className="text-base font-bold text-slate-900 dark:text-zinc-50">
+                    <h3 className="text-base font-bold text-slate-900 dark:text-white">
                       Automação de E-mail SMTP (Nodemailer)
                     </h3>
                     <p className="text-xs text-slate-500 dark:text-zinc-400">
-                      Dispara e-mails automáticos de saques Pix e convites usando as variáveis SMTP do ambiente.
+                      Notificações automáticas de saques Pix e convites.
                     </p>
                   </div>
                 </div>
 
                 <span
-                  className={`px-2.5 py-1 text-[11px] font-semibold rounded border ${
+                  className={`px-2.5 py-1 text-[11px] font-semibold rounded-lg border ${
                     smtpStatus?.configured
-                      ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800'
+                      ? 'bg-emerald-50 dark:bg-lime-500/15 text-emerald-700 dark:text-lime-400 border-emerald-200 dark:border-lime-500/40'
                       : 'bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800'
                   }`}
                 >
-                  {smtpStatus?.configured ? 'SMTP Configurado' : 'Aguardando Variáveis SMTP'}
+                  {smtpStatus?.configured ? 'SMTP Configurado' : 'Aguardando SMTP'}
                 </span>
               </div>
 
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-xs">
-                <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800">
+                <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-[#090d12] border border-slate-200 dark:border-zinc-800">
                   <div className="text-[11px] text-slate-500 dark:text-zinc-400">SMTP_HOST</div>
-                  <div className="font-mono font-semibold text-slate-900 dark:text-zinc-100 truncate mt-0.5">
+                  <div className="font-mono font-semibold text-slate-900 dark:text-zinc-100 break-all mt-0.5">
                     {smtpStatus?.host || 'Não definido'}
                   </div>
                 </div>
-                <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800">
+                <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-[#090d12] border border-slate-200 dark:border-zinc-800">
                   <div className="text-[11px] text-slate-500 dark:text-zinc-400">SMTP_PORT</div>
                   <div className="font-mono font-semibold text-slate-900 dark:text-zinc-100 mt-0.5">
-                    {smtpStatus?.port || 587} {smtpStatus?.secure ? '(TLS)' : '(STARTTLS)'}
+                    {smtpStatus?.port || 587}
                   </div>
                 </div>
-                <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800">
+                <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-[#090d12] border border-slate-200 dark:border-zinc-800">
                   <div className="text-[11px] text-slate-500 dark:text-zinc-400">SMTP_USER</div>
-                  <div className="font-mono font-semibold text-slate-900 dark:text-zinc-100 truncate mt-0.5">
+                  <div className="font-mono font-semibold text-slate-900 dark:text-zinc-100 break-all mt-0.5">
                     {smtpStatus?.userMasked || 'Não definido'}
                   </div>
                 </div>
-                <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800">
+                <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-[#090d12] border border-slate-200 dark:border-zinc-800">
                   <div className="text-[11px] text-slate-500 dark:text-zinc-400">SMTP_FROM</div>
-                  <div className="font-mono font-semibold text-slate-900 dark:text-zinc-100 truncate mt-0.5">
+                  <div className="font-mono font-semibold text-slate-900 dark:text-zinc-100 break-all mt-0.5">
                     {smtpStatus?.from || 'Padrão'}
                   </div>
-                </div>
-              </div>
-
-              <div className="text-xs text-slate-600 dark:text-zinc-400 space-y-1">
-                <div className="font-semibold text-slate-800 dark:text-zinc-200">
-                  Gatilhos automáticos ativos:
-                </div>
-                <div>
-                  Saques Pix (solicitado, aprovado, pago e recusado/estornado) · Convites (convite enviado por e-mail, boas-vindas ao indicado e aviso de +500 pts + 12% ao indicador).
                 </div>
               </div>
 
@@ -2230,21 +2881,21 @@ export const AdminPanel: React.FC = () => {
                   value={smtpTestEmail}
                   onChange={(e) => setSmtpTestEmail(e.target.value)}
                   placeholder="E-mail para teste SMTP"
-                  className="flex-1 px-3 py-2 text-xs bg-white dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-lg"
+                  className="flex-1 min-h-[42px] px-3 py-2 text-xs bg-white dark:bg-[#090d12] border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-xl"
                 />
                 <button
                   type="button"
                   disabled={smtpChecking}
                   onClick={handleVerifySmtp}
-                  className="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold border border-slate-300 dark:border-zinc-700 text-slate-700 dark:text-zinc-200 rounded-lg hover:bg-slate-50 dark:hover:bg-zinc-800 cursor-pointer"
+                  className="min-h-[42px] inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold border border-slate-300 dark:border-zinc-700 text-slate-700 dark:text-zinc-200 rounded-xl cursor-pointer"
                 >
                   <RefreshCw className={`w-3.5 h-3.5 ${smtpChecking ? 'animate-spin' : ''}`} />
-                  Verificar Conexão
+                  Verificar
                 </button>
                 <button
                   type="submit"
                   disabled={smtpTestSending || !smtpTestEmail.trim()}
-                  className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 text-xs font-semibold bg-slate-900 dark:bg-emerald-600 hover:bg-slate-800 dark:hover:bg-emerald-500 disabled:opacity-50 text-white rounded-lg cursor-pointer"
+                  className="min-h-[42px] inline-flex items-center justify-center gap-1.5 px-3.5 py-2 text-xs font-extrabold bg-lime-400 hover:bg-lime-300 disabled:opacity-50 text-slate-950 rounded-xl cursor-pointer"
                 >
                   <Send className="w-3.5 h-3.5" />
                   {smtpTestSending ? 'Enviando...' : 'Testar Envio'}
@@ -2253,7 +2904,7 @@ export const AdminPanel: React.FC = () => {
 
               {smtpTestMsg && (
                 <div
-                  className={`p-3 rounded-lg border text-xs ${
+                  className={`p-3 rounded-xl border text-xs ${
                     smtpTestMsg.type === 'success'
                       ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300'
                       : 'bg-red-50 dark:bg-red-950/40 border-red-200 dark:border-red-800 text-red-700 dark:text-red-300'
@@ -2264,24 +2915,51 @@ export const AdminPanel: React.FC = () => {
               )}
             </div>
 
-            <div className="bg-slate-900 dark:bg-zinc-900 dark:border dark:border-zinc-800 text-slate-100 rounded-xl p-6 space-y-3">
-              <h3 className="text-sm font-bold">Endpoints REST para Ferramentas Financeiras</h3>
-              <p className="text-xs text-slate-300">
-                Autentique via cabeçalho <code className="text-emerald-400">x-api-key</code> para consumir o razão financeiro e lotes de saque Pix no seu ERP ou BI:
-              </p>
-              <pre className="bg-slate-950 border border-slate-800 rounded-lg p-3 text-xs font-mono overflow-x-auto text-emerald-300">
-{`GET /api/v1/ledger
-Header: x-api-key: ee_live_sua_chave_aqui
+            <div className="bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 sm:p-6 space-y-4">
+              <h3 className="text-base font-bold text-slate-900 dark:text-white">Integrações Registradas</h3>
+              {webhookTestResult && (
+                <div className="p-3 bg-slate-50 dark:bg-[#090d12] border border-slate-200 dark:border-zinc-800 rounded-xl text-xs font-mono">
+                  {webhookTestResult}
+                </div>
+              )}
 
-GET /api/v1/payouts?status=pending
-Header: x-api-key: ee_live_sua_chave_aqui`}
-              </pre>
+              {integrations.length === 0 ? (
+                <p className="text-xs text-slate-500 dark:text-zinc-400">Nenhuma integração cadastrada ainda.</p>
+              ) : (
+                <div className="divide-y divide-slate-100 dark:divide-zinc-800">
+                  {integrations.map((intg) => (
+                    <div key={intg.integrationId} className="py-3 flex flex-wrap items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-sm font-semibold text-slate-900 dark:text-zinc-100">{intg.name}</div>
+                        <div className="text-xs font-mono text-slate-500 dark:text-zinc-400">
+                          Prefixo: {intg.apiKeyPrefix}... · {intg.providerType}
+                        </div>
+                        {intg.endpointUrl && (
+                          <div className="text-[11px] font-mono text-slate-400 dark:text-zinc-500 break-all">
+                            {intg.endpointUrl}
+                          </div>
+                        )}
+                      </div>
+                      {intg.endpointUrl && (
+                        <button
+                          type="button"
+                          onClick={() => handleTestWebhook(intg)}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-slate-900 dark:bg-zinc-800 text-white rounded-lg cursor-pointer"
+                        >
+                          <Send className="w-3.5 h-3.5" />
+                          Testar Webhook
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         </div>
       )}
 
-      {/* MODAL: BANIR USUÁRIO COM MOTIVO E PORQUÊ */}
+      {/* MODAL: BANIR USUÁRIO */}
       {banTarget && (
         <div
           role="dialog"
@@ -2289,14 +2967,14 @@ Header: x-api-key: ee_live_sua_chave_aqui`}
           aria-labelledby="ban-modal-title"
           className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-xs"
         >
-          <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden">
+          <div className="bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-3xl shadow-2xl max-w-lg w-full overflow-hidden">
             <div className="px-6 py-4 border-b border-slate-100 dark:border-zinc-800 flex items-center justify-between gap-4">
               <div className="flex items-center gap-2.5">
                 <div className="w-9 h-9 rounded-xl bg-red-50 dark:bg-red-950/60 border border-red-200 dark:border-red-800 flex items-center justify-center text-red-600 dark:text-red-400 shrink-0">
                   <Ban className="w-4 h-4" />
                 </div>
                 <div>
-                  <h3 id="ban-modal-title" className="text-base font-bold text-slate-900 dark:text-zinc-50">
+                  <h3 id="ban-modal-title" className="text-base font-bold text-slate-900 dark:text-white">
                     Banir Usuário
                   </h3>
                   <p className="text-xs text-slate-500 dark:text-zinc-400">
@@ -2309,24 +2987,17 @@ Header: x-api-key: ee_live_sua_chave_aqui`}
                 onClick={closeBanModal}
                 disabled={banSubmitting}
                 aria-label="Fechar modal de banimento"
-                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 cursor-pointer"
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-zinc-200 cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
             <form onSubmit={confirmBanUser} className="p-6 space-y-4">
-              <div className="bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 rounded-xl p-3.5 text-xs space-y-1">
-                <div className="font-semibold text-slate-900 dark:text-zinc-100">
-                  {banTarget.displayName}
-                </div>
-                <div className="font-mono text-slate-500 dark:text-zinc-400">
+              <div className="bg-slate-50 dark:bg-[#090d12] border border-slate-200 dark:border-zinc-800 rounded-xl p-3.5 text-xs space-y-1">
+                <div className="font-semibold text-slate-900 dark:text-zinc-100">{banTarget.displayName}</div>
+                <div className="font-mono text-slate-500 dark:text-zinc-400 break-all">
                   {privateMap[banTarget.uid]?.email || banTarget.uid}
-                </div>
-                <div className="text-slate-600 dark:text-zinc-400 pt-1">
-                  Saldo: <span className="font-mono font-semibold">{formatBRL(banTarget.brlBalanceCents)}</span> · Pontos:{' '}
-                  <span className="font-mono font-semibold">{formatPoints(banTarget.pointsBalance)}</span> · Risco:{' '}
-                  <span className="font-mono font-semibold">{banTarget.riskScore}/100</span>
                 </div>
               </div>
 
@@ -2340,10 +3011,10 @@ Header: x-api-key: ee_live_sua_chave_aqui`}
                       key={suggestion}
                       type="button"
                       onClick={() => setBanReason(suggestion)}
-                      className={`px-2.5 py-1 text-[11px] font-medium rounded-lg border transition-colors cursor-pointer ${
+                      className={`px-2.5 py-1 text-[11px] font-medium rounded-lg border cursor-pointer ${
                         banReason === suggestion
                           ? 'bg-red-600 text-white border-red-600'
-                          : 'bg-slate-50 dark:bg-zinc-950 text-slate-700 dark:text-zinc-300 border-slate-200 dark:border-zinc-800 hover:border-red-300 dark:hover:border-red-700'
+                          : 'bg-slate-50 dark:bg-[#090d12] text-slate-700 dark:text-zinc-300 border-slate-200 dark:border-zinc-800'
                       }`}
                     >
                       {suggestion}
@@ -2358,13 +3029,13 @@ Header: x-api-key: ee_live_sua_chave_aqui`}
                   value={banReason}
                   onChange={(e) => setBanReason(e.target.value)}
                   placeholder="Ex: Uso de bot / automação nos jogos"
-                  className="w-full px-3 py-2 text-sm bg-white dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
+                  className="w-full min-h-[42px] px-3 py-2 text-sm bg-white dark:bg-[#090d12] border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-xl"
                 />
               </div>
 
               <div className="space-y-1.5">
                 <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300">
-                  Por quê? (Descrição detalhada obrigatória) <span className="text-red-500">*</span>
+                  Por quê? <span className="text-red-500">*</span>
                 </label>
                 <textarea
                   required
@@ -2373,17 +3044,13 @@ Header: x-api-key: ee_live_sua_chave_aqui`}
                   rows={3}
                   value={banExplanation}
                   onChange={(e) => setBanExplanation(e.target.value)}
-                  placeholder="Descreva detalhadamente o motivo e o porquê do banimento para referência futura..."
-                  className="w-full px-3 py-2 text-sm bg-white dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 resize-none"
+                  placeholder="Descreva detalhadamente o motivo..."
+                  className="w-full px-3 py-2 text-sm bg-white dark:bg-[#090d12] border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-xl resize-none"
                 />
-                <div className="flex items-center justify-between text-[11px] text-slate-500 dark:text-zinc-400">
-                  <span>Salvo no Firestore (perfil e auditoria antifraude) para referência futura.</span>
-                  <span className="font-mono tabular-nums">{banExplanation.length}/400</span>
-                </div>
               </div>
 
               {banError && (
-                <div className="p-3 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 rounded-lg text-xs text-red-700 dark:text-red-300">
+                <div className="p-3 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 rounded-xl text-xs text-red-700 dark:text-red-300">
                   {banError}
                 </div>
               )}
@@ -2393,14 +3060,14 @@ Header: x-api-key: ee_live_sua_chave_aqui`}
                   type="button"
                   onClick={closeBanModal}
                   disabled={banSubmitting}
-                  className="px-4 py-2 text-xs font-semibold border border-slate-300 dark:border-zinc-700 text-slate-700 dark:text-zinc-200 rounded-lg hover:bg-slate-50 dark:hover:bg-zinc-800 cursor-pointer"
+                  className="min-h-[40px] px-4 py-2 text-xs font-semibold border border-slate-300 dark:border-zinc-700 text-slate-700 dark:text-zinc-200 rounded-xl cursor-pointer"
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
                   disabled={banSubmitting || banReason.trim().length < 3 || banExplanation.trim().length < 5}
-                  className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg transition-colors cursor-pointer"
+                  className="min-h-[40px] inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white rounded-xl cursor-pointer"
                 >
                   <Ban className="w-3.5 h-3.5" />
                   {banSubmitting ? 'Banindo...' : 'Confirmar Banimento'}

@@ -1,5 +1,52 @@
 import { PixKeyType } from '../types/earneasy';
 
+let serverClockOffsetMs = 0;
+let lastClockSyncMs = 0;
+let inflightClockSync: Promise<number> | null = null;
+
+export function getServerNowMs(): number {
+  return Date.now() + serverClockOffsetMs;
+}
+
+export async function syncServerUtcClock(force = false): Promise<number> {
+  if (typeof window === 'undefined') return serverClockOffsetMs;
+  const now = Date.now();
+  if (!force && lastClockSyncMs > 0 && now - lastClockSyncMs < 60_000) {
+    return serverClockOffsetMs;
+  }
+  if (inflightClockSync) {
+    return inflightClockSync;
+  }
+
+  inflightClockSync = (async () => {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 2000);
+    try {
+      const started = Date.now();
+      const res = await fetch('/api/time', {
+        cache: 'no-store',
+        signal: controller.signal,
+      });
+      if (!res.ok) return serverClockOffsetMs;
+      const data = (await res.json()) as { nowMs?: number };
+      if (typeof data.nowMs === 'number' && Number.isFinite(data.nowMs)) {
+        const finished = Date.now();
+        const midpoint = started + Math.round((finished - started) / 2);
+        serverClockOffsetMs = data.nowMs - midpoint;
+        lastClockSyncMs = finished;
+      }
+    } catch {
+      // Fallback to local UTC clock if offline or timeout
+    } finally {
+      window.clearTimeout(timeout);
+      inflightClockSync = null;
+    }
+    return serverClockOffsetMs;
+  })();
+
+  return inflightClockSync;
+}
+
 export function formatBRL(cents: number): string {
   const value = (cents || 0) / 100;
   return value.toLocaleString('pt-BR', {
@@ -13,13 +60,39 @@ export function formatPoints(points: number): string {
 }
 
 export function getTodayUtcDate(): string {
-  return new Date().toISOString().slice(0, 10);
+  return new Date(getServerNowMs()).toISOString().slice(0, 10);
 }
 
 export function getUtcDateDaysAgo(daysAgo: number): string {
-  const d = new Date();
+  const d = new Date(getServerNowMs());
   d.setUTCDate(d.getUTCDate() - daysAgo);
   return d.toISOString().slice(0, 10);
+}
+
+export function extractReadableError(err: unknown, fallback: string): string {
+  if (!err) return fallback;
+  const raw = err instanceof Error ? err.message : String(err);
+  if (!raw) return fallback;
+
+  if (raw.startsWith('{') && raw.includes('"error"')) {
+    try {
+      const parsed = JSON.parse(raw) as { error?: string };
+      if (parsed.error) {
+        const inner = parsed.error;
+        if (inner.includes('Missing or insufficient permissions') || inner.includes('permission-denied')) {
+          return 'Permissão recusada na validação do pedido. Confira se sua conta está ativa, recarregue a página ou tente novamente.';
+        }
+        return inner;
+      }
+    } catch {
+      // Ignore JSON parse errors
+    }
+  }
+
+  if (raw.includes('Missing or insufficient permissions') || raw.includes('permission-denied')) {
+    return 'Permissão recusada na validação do pedido. Confira se sua conta está ativa, recarregue a página ou tente novamente.';
+  }
+  return raw;
 }
 
 export function isValidCPF(raw: string): boolean {
@@ -100,7 +173,7 @@ export function timestampToMillis(value: unknown): number {
   return 0;
 }
 
-export function formatScheduleRemaining(targetMs: number, nowMs: number = Date.now()): string {
+export function formatScheduleRemaining(targetMs: number, nowMs: number = getServerNowMs()): string {
   const diffMs = targetMs - nowMs;
   if (diffMs <= 0) return 'Liberado agora';
   const totalSec = Math.ceil(diffMs / 1000);
@@ -119,4 +192,3 @@ export function formatScheduleTime(targetMs: number): string {
     minute: '2-digit',
   });
 }
-

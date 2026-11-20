@@ -148,6 +148,8 @@ export const DashboardSection: React.FC = () => {
       word_search: { points: 0, matches: 0 },
       math_sprint: { points: 0, matches: 0 },
       memory_match: { points: 0, matches: 0 },
+      quick_reflex: { points: 0, matches: 0 },
+      high_low_cards: { points: 0, matches: 0 },
     };
     filteredSessions.forEach((s) => {
       if (counts[s.gameCategory]) {

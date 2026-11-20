@@ -8,18 +8,27 @@
     --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
   }
 
+  html,
+  body {
+    overflow-x: hidden;
+  }
+
   body {
     font-family: var(--font-sans);
-    background-color: #f8fafc;
+    background-color: #f3f6f4;
     color: #0f172a;
   }
 
   html.dark body {
-    background-color: #000000;
+    background-color: #070a0d;
     color: #f4f4f5;
   }
 
-  h1, h2, h3, h4, .font-display {
+  h1,
+  h2,
+  h3,
+  h4,
+  .font-display {
     font-family: var(--font-display);
   }
 
@@ -37,7 +46,9 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
+  *,
+  *::before,
+  *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;

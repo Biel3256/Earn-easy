@@ -1,16 +1,26 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   AlertCircle,
   Award,
+  Check,
   CheckCircle2,
+  Copy,
+  Fingerprint,
   Gamepad2,
   Gift,
+  ImagePlus,
+  Link2,
   Lock,
   RotateCcw,
   UserCheck,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { AVATAR_PRESETS, resolveAvatarSrc } from '../utils/avatars';
+import {
+  AVATAR_PRESETS,
+  isGalleryDataUrl,
+  processGalleryAvatarFile,
+  resolveAvatarSrc,
+} from '../utils/avatars';
 import { calculateGamesXp, calculatePlayerLevel, PLAYER_LEVELS } from '../utils/levels';
 import { formatBRL, formatPoints } from '../utils/pix';
 
@@ -72,10 +82,14 @@ export const PlayerProfile: React.FC = () => {
   const [displayName, setDisplayName] = useState('');
   const [selectedPhoto, setSelectedPhoto] = useState('');
   const [customUrl, setCustomUrl] = useState('');
+  const [processingGallery, setProcessingGallery] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [copiedUid, setCopiedUid] = useState(false);
+  const [copiedInvite, setCopiedInvite] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'ok' | 'err'; msg: string } | null>(null);
   const [claimingLevel, setClaimingLevel] = useState<number | null>(null);
   const [rewardFeedback, setRewardFeedback] = useState<{ type: 'ok' | 'err'; msg: string } | null>(null);
+  const galleryInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     if (userAccount) {
@@ -83,22 +97,23 @@ export const PlayerProfile: React.FC = () => {
       setSelectedPhoto(userAccount.photoURL);
       const isPreset = AVATAR_PRESETS.some((p) => p.persistedPath === userAccount.photoURL);
       const isGoogle = firebaseUser?.photoURL === userAccount.photoURL;
-      setCustomUrl(!isPreset && !isGoogle ? userAccount.photoURL : '');
+      const isGallery = isGalleryDataUrl(userAccount.photoURL);
+      setCustomUrl(!isPreset && !isGoogle && !isGallery ? userAccount.photoURL : '');
     }
   }, [userAccount, firebaseUser]);
 
   if (!firebaseUser || !userAccount) {
     return (
-      <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-10 text-center max-w-xl mx-auto space-y-4">
+      <div className="bg-white/90 dark:bg-zinc-900/90 backdrop-blur-md border border-slate-200 dark:border-zinc-800 rounded-3xl p-10 text-center max-w-xl mx-auto space-y-4">
         <Lock className="w-8 h-8 text-slate-400 dark:text-zinc-500 mx-auto" />
-        <h2 className="text-xl font-bold text-slate-900 dark:text-zinc-50">Perfil do Jogador & Níveis</h2>
+        <h2 className="text-xl font-bold text-slate-900 dark:text-zinc-50">Meu Perfil, Avatar & ID</h2>
         <p className="text-sm text-slate-600 dark:text-zinc-400">
-          Faça login com sua conta Google para personalizar seu avatar, editar seu nome de exibição e acompanhar sua evolução de nível.
+          Faça login com sua conta Google para copiar seu ID de jogador, escolher um avatar ou foto da galeria e acompanhar seu nível.
         </p>
         <button
           type="button"
           onClick={signInWithGoogle}
-          className="px-5 py-2.5 bg-slate-900 dark:bg-emerald-600 text-white text-sm font-semibold rounded-lg hover:bg-slate-800 dark:hover:bg-emerald-500 transition-colors cursor-pointer"
+          className="px-5 py-2.5 bg-emerald-600 text-white text-sm font-semibold rounded-2xl hover:bg-emerald-500 transition-colors cursor-pointer"
         >
           Entrar com Google
         </button>
@@ -113,6 +128,55 @@ export const PlayerProfile: React.FC = () => {
     (t) => t.rewardPoints > 0 && levelInfo.xp >= t.minXp && !claimedLevelsSet.has(t.level)
   );
   const totalRewardableLevels = PLAYER_LEVELS.filter((t) => t.rewardPoints > 0).length;
+
+  const inviteOrigin =
+    typeof window !== 'undefined' ? window.location.origin : 'https://earneasy.app';
+  const inviteLink = `${inviteOrigin}/?ref=${userAccount.uid}`;
+
+  const handleCopyUid = async () => {
+    try {
+      await navigator.clipboard.writeText(userAccount.uid);
+      setCopiedUid(true);
+      setTimeout(() => setCopiedUid(false), 2000);
+    } catch {
+      // Ignore clipboard failures
+    }
+  };
+
+  const handleCopyInviteLink = async () => {
+    try {
+      await navigator.clipboard.writeText(inviteLink);
+      setCopiedInvite(true);
+      setTimeout(() => setCopiedInvite(false), 2000);
+    } catch {
+      // Ignore clipboard failures
+    }
+  };
+
+  const handleGalleryPick = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+
+    setFeedback(null);
+    setProcessingGallery(true);
+    try {
+      const compressedDataUrl = await processGalleryAvatarFile(file);
+      setCustomUrl('');
+      setSelectedPhoto(compressedDataUrl);
+      setFeedback({
+        type: 'ok',
+        msg: 'Foto da galeria carregada na prévia! Clique em "Salvar Perfil e Avatar" para aplicar.',
+      });
+    } catch (err) {
+      setFeedback({
+        type: 'err',
+        msg: err instanceof Error ? err.message : 'Não foi possível carregar a foto da galeria.',
+      });
+    } finally {
+      setProcessingGallery(false);
+    }
+  };
 
   const handleClaimLevel = async (level: number) => {
     setRewardFeedback(null);
@@ -144,18 +208,28 @@ export const PlayerProfile: React.FC = () => {
     }
 
     const finalPhoto = (customUrl.trim() || selectedPhoto).trim();
-    if (finalPhoto.length > 500) {
+    const isGallery = isGalleryDataUrl(finalPhoto);
+
+    if (!isGallery && finalPhoto.length > 500) {
       setFeedback({ type: 'err', msg: 'A URL do avatar deve ter no máximo 500 caracteres.' });
+      return;
+    }
+    if (isGallery && finalPhoto.length > 60000) {
+      setFeedback({ type: 'err', msg: 'A imagem escolhida da galeria ficou muito grande. Tente outra foto.' });
       return;
     }
     if (
       finalPhoto &&
+      !isGallery &&
       !finalPhoto.startsWith('https://') &&
       !finalPhoto.startsWith('http://') &&
       !finalPhoto.startsWith('./') &&
       !finalPhoto.startsWith('/')
     ) {
-      setFeedback({ type: 'err', msg: 'Use uma URL válida iniciada por https:// ou selecione um dos avatares abaixo.' });
+      setFeedback({
+        type: 'err',
+        msg: 'Escolha um avatar, envie uma foto da galeria ou use uma URL iniciada por https://.',
+      });
       return;
     }
 
@@ -164,7 +238,7 @@ export const PlayerProfile: React.FC = () => {
       await updateUserProfile({ displayName: trimmedName, photoURL: finalPhoto });
       setFeedback({
         type: 'ok',
-        msg: 'Perfil e avatar atualizados no Firestore e sincronizados com o Ranking Global.',
+        msg: 'Perfil e foto atualizados e sincronizados em tempo real com o Ranking Global!',
       });
     } catch (err) {
       setFeedback({
@@ -176,15 +250,55 @@ export const PlayerProfile: React.FC = () => {
     }
   };
 
+  const activePreviewPhoto = customUrl.trim() || selectedPhoto;
+  const usingGalleryImage = !customUrl.trim() && isGalleryDataUrl(selectedPhoto);
+
   return (
-    <div className="space-y-8">
+    <div className="space-y-6">
+      {/* Dedicated Player ID Card (Aba para Ver ID) */}
+      <section className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-slate-900 via-slate-900 to-emerald-950 dark:from-zinc-950 dark:via-zinc-900 dark:to-emerald-950/70 border border-slate-800 dark:border-zinc-800 text-white p-6 shadow-lg shadow-slate-900/10">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-5">
+          <div className="space-y-1.5 min-w-0">
+            <div className="inline-flex items-center gap-2 text-xs font-semibold text-emerald-300">
+              <Fingerprint className="w-4 h-4" />
+              Seu ID Exclusivo no Earn Easy
+            </div>
+            <div className="font-mono text-sm sm:text-base font-bold text-white bg-white/10 border border-white/15 rounded-2xl px-4 py-3 break-all select-all">
+              {userAccount.uid}
+            </div>
+            <p className="text-xs text-slate-300">
+              Passe esse ID para outros jogadores encontrarem você na aba Amigos ou na busca do Ranking. Ele também funciona como seu código de convite (+500 moedas).
+            </p>
+          </div>
+
+          <div className="flex flex-wrap sm:flex-nowrap items-center gap-2.5 shrink-0">
+            <button
+              type="button"
+              onClick={handleCopyUid}
+              className="min-h-[44px] inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold rounded-2xl transition-colors whitespace-nowrap cursor-pointer active:scale-[0.98]"
+            >
+              {copiedUid ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+              {copiedUid ? 'ID Copiado!' : 'Copiar Meu ID'}
+            </button>
+            <button
+              type="button"
+              onClick={handleCopyInviteLink}
+              className="min-h-[44px] inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-white/10 hover:bg-white/15 border border-white/15 text-white text-xs font-semibold rounded-2xl transition-colors whitespace-nowrap cursor-pointer active:scale-[0.98]"
+            >
+              {copiedInvite ? <Check className="w-4 h-4 text-emerald-300" /> : <Link2 className="w-4 h-4 text-emerald-300" />}
+              {copiedInvite ? 'Link Copiado!' : 'Copiar Link'}
+            </button>
+          </div>
+        </div>
+      </section>
+
       {/* Profile & Level Header Card */}
-      <section className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-6 sm:p-8 space-y-6">
+      <section className="bg-white/90 dark:bg-zinc-900/90 backdrop-blur-md border border-slate-200/90 dark:border-zinc-800 rounded-3xl p-6 sm:p-8 space-y-6 shadow-sm">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-6">
           <div className="flex items-center gap-4 min-w-0">
             <ProfileAvatar
               name={displayName || userAccount.displayName}
-              photoURL={customUrl.trim() || selectedPhoto}
+              photoURL={activePreviewPhoto}
               sizeClass="w-20 h-20"
             />
             <div className="space-y-1 min-w-0">
@@ -228,7 +342,7 @@ export const PlayerProfile: React.FC = () => {
         </div>
 
         {/* XP Progress Bar & Games Experience Breakdown */}
-        <div className="bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 rounded-lg p-4 sm:p-5 space-y-4">
+        <div className="bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 rounded-2xl p-4 sm:p-5 space-y-4">
           <div className="space-y-2.5">
             <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
               <span className="font-semibold text-slate-800 dark:text-zinc-200 inline-flex items-center gap-1.5">
@@ -266,7 +380,7 @@ export const PlayerProfile: React.FC = () => {
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-3 border-t border-slate-200 dark:border-zinc-800">
-            <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-lg px-3.5 py-2.5">
+            <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl px-3.5 py-2.5">
               <div className="text-[11px] text-slate-500 dark:text-zinc-400 flex items-center gap-1.5">
                 <Gamepad2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
                 Experiência ganha nos jogos
@@ -279,7 +393,7 @@ export const PlayerProfile: React.FC = () => {
               </div>
             </div>
 
-            <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-lg px-3.5 py-2.5">
+            <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl px-3.5 py-2.5">
               <div className="text-[11px] text-slate-500 dark:text-zinc-400">Experiência Total da Conta</div>
               <div className="text-sm font-mono font-bold text-slate-900 dark:text-zinc-50 tabular-nums mt-0.5">
                 {formatPoints(levelInfo.xp)} XP
@@ -289,7 +403,7 @@ export const PlayerProfile: React.FC = () => {
               </div>
             </div>
 
-            <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-lg px-3.5 py-2.5">
+            <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl px-3.5 py-2.5">
               <div className="text-[11px] text-slate-500 dark:text-zinc-400 flex items-center gap-1.5">
                 <Gift className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
                 Recompensas por Nível
@@ -306,7 +420,7 @@ export const PlayerProfile: React.FC = () => {
           </div>
 
           {claimableTiers.length > 0 && (
-            <div className="bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-lg p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div className="text-xs text-emerald-900 dark:text-emerald-200">
                 <span className="font-bold">Recompensa de nível disponível!</span> Você desbloqueou{' '}
                 {claimableTiers.map((t) => `Nível ${t.level} (+${formatPoints(t.rewardPoints)} pts)`).join(', ')}.
@@ -315,7 +429,7 @@ export const PlayerProfile: React.FC = () => {
                 type="button"
                 disabled={claimingLevel !== null}
                 onClick={() => handleClaimLevel(claimableTiers[0].level)}
-                className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-semibold rounded-lg transition-colors whitespace-nowrap cursor-pointer shrink-0"
+                className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-semibold rounded-xl transition-colors whitespace-nowrap cursor-pointer shrink-0"
               >
                 <Gift className="w-3.5 h-3.5" />
                 {claimingLevel === claimableTiers[0].level
@@ -327,7 +441,7 @@ export const PlayerProfile: React.FC = () => {
 
           {rewardFeedback && (
             <div
-              className={`p-3 rounded-lg border text-xs flex items-start gap-2 ${
+              className={`p-3 rounded-xl border text-xs flex items-start gap-2 ${
                 rewardFeedback.type === 'ok'
                   ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300'
                   : 'bg-red-50 dark:bg-red-950/40 border-red-200 dark:border-red-800 text-red-800 dark:text-red-300'
@@ -344,23 +458,61 @@ export const PlayerProfile: React.FC = () => {
         </div>
       </section>
 
-      {/* Edit Avatar & Display Name + Level Roadmap */}
+      {/* Edit Avatar, Gallery Upload & Display Name + Level Roadmap */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        <section className="lg:col-span-7 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-6 space-y-5">
+        <section className="lg:col-span-7 bg-white/90 dark:bg-zinc-900/90 backdrop-blur-md border border-slate-200/90 dark:border-zinc-800 rounded-3xl p-6 space-y-5 shadow-sm">
           <div className="flex items-center justify-between border-b border-slate-100 dark:border-zinc-800 pb-4">
             <div>
-              <h2 className="text-base font-bold text-slate-900 dark:text-zinc-50">Personalizar Perfil e Avatar</h2>
+              <h2 className="text-base font-bold text-slate-900 dark:text-zinc-50">Personalizar Foto e Avatar</h2>
               <p className="text-xs text-slate-500 dark:text-zinc-400 mt-0.5">
-                Escolha um avatar oficial do Earn Easy, use sua foto do Google ou informe uma URL
+                Escolha entre 8 avatares exclusivos ou envie uma foto direto da sua galeria
               </p>
             </div>
             <UserCheck className="w-5 h-5 text-slate-400 dark:text-zinc-500 shrink-0" />
           </div>
 
           <form onSubmit={handleSave} className="space-y-5">
+            {/* Gallery Photo Upload Bar */}
+            <div className="p-4 rounded-2xl bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="flex items-center gap-3.5 min-w-0">
+                <ProfileAvatar
+                  name={displayName || userAccount.displayName}
+                  photoURL={activePreviewPhoto}
+                  sizeClass="w-14 h-14"
+                />
+                <div className="min-w-0">
+                  <div className="text-xs font-bold text-slate-900 dark:text-zinc-100">
+                    {usingGalleryImage ? 'Foto da Galeria Selecionada' : 'Foto de Perfil Personalizada'}
+                  </div>
+                  <p className="text-[11px] text-slate-500 dark:text-zinc-400">
+                    Envie JPG, PNG ou WebP do seu celular ou PC (ajuste automático).
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0">
+                <input
+                  ref={galleryInputRef}
+                  type="file"
+                  accept="image/*"
+                  onChange={handleGalleryPick}
+                  className="hidden"
+                />
+                <button
+                  type="button"
+                  disabled={processingGallery}
+                  onClick={() => galleryInputRef.current?.click()}
+                  className="min-h-[42px] inline-flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-bold rounded-xl transition-colors whitespace-nowrap cursor-pointer"
+                >
+                  <ImagePlus className="w-4 h-4" />
+                  {processingGallery ? 'Ajustando foto...' : 'Escolher da Galeria'}
+                </button>
+              </div>
+            </div>
+
             <div>
-              <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300 mb-2">
-                Avatares Disponíveis
+              <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300 mb-2.5">
+                Avatares Exclusivos ({AVATAR_PRESETS.length})
               </label>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 {AVATAR_PRESETS.map((preset) => {
@@ -373,9 +525,9 @@ export const PlayerProfile: React.FC = () => {
                         setCustomUrl('');
                         setSelectedPhoto(preset.persistedPath);
                       }}
-                      className={`p-3 rounded-xl border text-center space-y-2 transition-colors cursor-pointer ${
+                      className={`p-3 rounded-2xl border text-center space-y-2 transition-all cursor-pointer active:scale-[0.98] ${
                         isActive
-                          ? 'border-emerald-600 bg-emerald-50/60 dark:bg-emerald-950/35'
+                          ? 'border-emerald-600 bg-emerald-50/70 dark:bg-emerald-950/40 ring-1 ring-emerald-500'
                           : 'border-slate-200 dark:border-zinc-800 hover:border-slate-300 dark:hover:border-zinc-700 bg-white dark:bg-zinc-950'
                       }`}
                     >
@@ -384,7 +536,9 @@ export const PlayerProfile: React.FC = () => {
                         alt={`Avatar ${preset.label}`}
                         className="w-16 h-16 rounded-full object-cover mx-auto border border-slate-200 dark:border-zinc-700"
                       />
-                      <div className="text-xs font-semibold text-slate-800 dark:text-zinc-200">{preset.label}</div>
+                      <div className="text-xs font-semibold text-slate-800 dark:text-zinc-200 leading-snug">
+                        {preset.label}
+                      </div>
                     </button>
                   );
                 })}
@@ -417,7 +571,7 @@ export const PlayerProfile: React.FC = () => {
                   maxLength={32}
                   value={displayName}
                   onChange={(e) => setDisplayName(e.target.value)}
-                  className="w-full px-3 py-2 text-sm bg-white dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900 dark:focus:ring-emerald-500"
+                  className="w-full px-3.5 py-2.5 text-sm bg-white dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-600"
                 />
                 <p className="text-[11px] text-amber-700 dark:text-amber-400 mt-1">
                   Sem palavrões ou termos ofensivos — violação gera banimento imediato.
@@ -426,7 +580,7 @@ export const PlayerProfile: React.FC = () => {
 
               <div>
                 <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300 mb-1">
-                  URL de Avatar Personalizado (opcional)
+                  URL de Avatar (opcional)
                 </label>
                 <input
                   type="url"
@@ -434,14 +588,14 @@ export const PlayerProfile: React.FC = () => {
                   value={customUrl}
                   onChange={(e) => setCustomUrl(e.target.value)}
                   placeholder="https://exemplo.com/sua-foto.jpg"
-                  className="w-full px-3 py-2 text-sm font-mono bg-white dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900 dark:focus:ring-emerald-500"
+                  className="w-full px-3.5 py-2.5 text-sm font-mono bg-white dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-600"
                 />
               </div>
             </div>
 
             {feedback && (
               <div
-                className={`p-3 rounded-lg border text-xs flex items-start gap-2 ${
+                className={`p-3 rounded-xl border text-xs flex items-start gap-2 ${
                   feedback.type === 'ok'
                     ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300'
                     : 'bg-red-50 dark:bg-red-950/40 border-red-200 dark:border-red-800 text-red-800 dark:text-red-300'
@@ -458,8 +612,8 @@ export const PlayerProfile: React.FC = () => {
 
             <button
               type="submit"
-              disabled={saving}
-              className="px-5 py-2.5 bg-slate-900 dark:bg-emerald-600 text-white text-sm font-semibold rounded-lg hover:bg-slate-800 dark:hover:bg-emerald-500 transition-colors disabled:opacity-50 cursor-pointer"
+              disabled={saving || processingGallery}
+              className="min-h-[44px] px-5 py-2.5 bg-slate-900 dark:bg-emerald-600 text-white text-sm font-bold rounded-2xl hover:bg-slate-800 dark:hover:bg-emerald-500 transition-colors disabled:opacity-50 cursor-pointer"
             >
               {saving ? 'Salvando perfil...' : 'Salvar Perfil e Avatar'}
             </button>
@@ -467,7 +621,7 @@ export const PlayerProfile: React.FC = () => {
         </section>
 
         {/* Levels Progression & Rewards List */}
-        <section className="lg:col-span-5 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-6 space-y-4">
+        <section className="lg:col-span-5 bg-white/90 dark:bg-zinc-900/90 backdrop-blur-md border border-slate-200/90 dark:border-zinc-800 rounded-3xl p-6 space-y-4 shadow-sm">
           <div className="border-b border-slate-100 dark:border-zinc-800 pb-4">
             <h2 className="text-base font-bold text-slate-900 dark:text-zinc-50">Sistema de Níveis e Recompensas</h2>
             <p className="text-xs text-slate-500 dark:text-zinc-400 mt-0.5">
@@ -485,7 +639,7 @@ export const PlayerProfile: React.FC = () => {
                 <div
                   key={tier.level}
                   className={`py-3.5 flex items-start justify-between gap-3 ${
-                    isCurrent ? 'bg-emerald-50/60 dark:bg-emerald-950/35 -mx-3 px-3 rounded-lg' : ''
+                    isCurrent ? 'bg-emerald-50/70 dark:bg-emerald-950/35 -mx-3 px-3 rounded-xl' : ''
                   }`}
                 >
                   <div className="space-y-1 min-w-0">
@@ -508,7 +662,7 @@ export const PlayerProfile: React.FC = () => {
                         type="button"
                         disabled={claimingLevel !== null}
                         onClick={() => handleClaimLevel(tier.level)}
-                        className="inline-flex items-center gap-1 px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-[11px] font-semibold rounded-md transition-colors cursor-pointer"
+                        className="inline-flex items-center gap-1 px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-[11px] font-semibold rounded-lg transition-colors cursor-pointer"
                       >
                         <Gift className="w-3 h-3" />
                         {claimingLevel === tier.level ? 'Resgatando...' : 'Resgatar'}

@@ -586,7 +586,11 @@ export const DotLinkGame: React.FC<GameProps> = ({ onComplete, onExit }) => {
                                   ? { scale: 1.06 }
                                   : { scale: 1 }
                           }
-                          transition={{ type: 'spring', stiffness: 420, damping: 20 }}
+                          transition={
+                            justCompletedColor === endpoint
+                              ? { duration: 0.35, ease: 'easeOut' }
+                              : { type: 'spring', stiffness: 420, damping: 20 }
+                          }
                           className={`w-8 h-8 rounded-full shadow-sm relative z-20 flex items-center justify-center ${
                             COLOR_META[endpoint].bgClass
                           } ${

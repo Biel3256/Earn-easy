@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
+import { GoogleGenAI } from '@google/genai';
 import { createServer as createViteServer } from 'vite';
 import {
   getSmtpStatus,
@@ -63,6 +64,8 @@ const CATEGORY_BOUNDS: Record<string, { minDurationMs: number; maxScore: number;
   word_search: { minDurationMs: 6000, maxScore: 450, maxPtsPerSec: 35 },
   math_sprint: { minDurationMs: 8000, maxScore: 450, maxPtsPerSec: 30 },
   memory_match: { minDurationMs: 6000, maxScore: 400, maxPtsPerSec: 35 },
+  quick_reflex: { minDurationMs: 5000, maxScore: 400, maxPtsPerSec: 45 },
+  high_low_cards: { minDurationMs: 5000, maxScore: 380, maxPtsPerSec: 40 },
 };
 
 function validateEnterpriseApiKey(req: express.Request): boolean {
@@ -328,6 +331,153 @@ async function startServer() {
         error: err instanceof Error ? err.message : 'Falha de rede ao conectar ao webhook.',
       });
     }
+  });
+
+  // 4. Server UTC Clock Sync (prevents client clock skew on daily check-ins & daily conversions)
+  app.get('/api/time', (_req, res) => {
+    const nowMs = Date.now();
+    const utcDate = new Date(nowMs).toISOString().slice(0, 10);
+    const yesterdayUtcDate = new Date(nowMs - 86_400_000).toISOString().slice(0, 10);
+    res.json({ nowMs, utcDate, yesterdayUtcDate });
+  });
+
+  // 5. Biel AI Support Assistant (Triage + FAQ before Human Specialist Handoff)
+  app.post('/api/support/biel', async (req, res) => {
+    const {
+      messages,
+      selectedTopic,
+      userDisplayName,
+      userStats,
+    } = req.body ?? {};
+
+    const cleanMessages: Array<{ role: 'user' | 'biel'; text: string }> = Array.isArray(messages)
+      ? messages
+          .filter(
+            (m): m is { role: 'user' | 'biel'; text: string } =>
+              Boolean(m) &&
+              (m.role === 'user' || m.role === 'biel') &&
+              typeof m.text === 'string' &&
+              m.text.trim().length > 0
+          )
+          .slice(-12)
+          .map((m) => ({ role: m.role, text: m.text.trim().slice(0, 800) }))
+      : [];
+
+    const lastUserMessage = [...cleanMessages].reverse().find((m) => m.role === 'user')?.text || '';
+    const topicStr = typeof selectedTopic === 'string' ? selectedTopic.trim() : '';
+    const playerName = typeof userDisplayName === 'string' && userDisplayName.trim()
+      ? userDisplayName.trim().slice(0, 60)
+      : 'Jogador';
+
+    const pointsBalance = Number(userStats?.pointsBalance ?? 0);
+    const brlBalanceCents = Number(userStats?.brlBalanceCents ?? 0);
+    const accountStatus = String(userStats?.status || 'active');
+    const firstWithdrawalUsed = Boolean(userStats?.firstWithdrawalUsed);
+    const minPixFirstCents = Number(userStats?.firstWithdrawalMinCents ?? 10);
+    const minPixStandardCents = Number(userStats?.standardWithdrawalMinCents ?? 500);
+    const activeMinCents = firstWithdrawalUsed ? minPixStandardCents : minPixFirstCents;
+
+    const lower = `${topicStr} ${lastUserMessage}`.toLowerCase();
+    const userTurnCount = cleanMessages.filter((m) => m.role === 'user').length;
+    const asksForHuman = /(especialista|humano|atendente|pessoa|suporte real|admin|falar com algu[eé]m)/.test(lower);
+
+    const buildDeterministicReply = (): { reply: string; readyForHuman: boolean } => {
+      if (asksForHuman) {
+        return {
+          reply: `Entendido, ${playerName}! Já organizei seu contexto aqui. Clique em "Falar com Especialista Humano" logo abaixo para enviar sua conversa para a fila do suporte e um atendente vai aceitar seu chamado em tempo real.`,
+          readyForHuman: true,
+        };
+      }
+      if (/(check[- ]?in|chk|sequ[eê]ncia|30 dias)/.test(lower)) {
+        return {
+          reply: `Sobre o Check-in Diário: ele libera 1 coleta por dia pelo horário UTC (vira às 21h no horário de Brasília), dando de 120 a 200 moedas por dia e R$ 10,00 no Pix ao completar 30 dias seguidos. Se apareceu algum erro ao clicar em "Coletar Hoje", me diga qual mensagem apareceu ou clique em "Falar com Especialista Humano" se o erro continuar.`,
+          readyForHuman: userTurnCount >= 2,
+        };
+      }
+      if (/(pix|saque|sacar|dinheiro|reais|cpf|chave)/.test(lower)) {
+        return {
+          reply: `Seu saldo Pix atual é R$ ${(brlBalanceCents / 100).toFixed(2).replace('.', ',')} e o mínimo vigente para você agora é R$ ${(activeMinCents / 100).toFixed(2).replace('.', ',')}. Saques ficam pendentes até análise antifraude e liquidação no painel admin. Você está com dúvida sobre um saque específico ou erro na chave Pix?`,
+          readyForHuman: userTurnCount >= 2,
+        };
+      }
+      if (/(convite|c[oó]digo|amig|indica|promo|correio)/.test(lower)) {
+        return {
+          reply: `No menu Convites & Códigos você copia seu link/código de indicação (+500 moedas no cadastro do amigo + 12% sobre pontos que ele ganhar) e resgata códigos promocionais da Caixa de Correio. E na aba Amigos você pode buscar jogadores pelo nome ou ID e conversar no privado! Ficou alguma dúvida ou quer falar com um especialista?`,
+          readyForHuman: userTurnCount >= 2,
+        };
+      }
+      if (/(jogo|ponto|moeda|convers|converter|velha|dot|matem|mem[oó]ria|ca[cç]a)/.test(lower)) {
+        return {
+          reply: `Você tem ${pointsBalance.toLocaleString('pt-BR')} moedas acumuladas. Cada 1.000 moedas valem R$ 0,10 na Carteira Pix (1 conversão por dia UTC). Se alguma partida não creditou ou foi sinalizada pelo antifraude, me conta qual jogo foi para eu encaminhar ao especialista.`,
+          readyForHuman: userTurnCount >= 2,
+        };
+      }
+      if (/(conta|ban|suspens|revis[aã]o|bloque)/.test(lower)) {
+        return {
+          reply: `O status atual da sua conta é "${accountStatus}". Se houver qualquer revisão antifraude, bloqueio de saque ou erro técnico que você precise analisar manualmente, recomendo clicar em "Falar com Especialista Humano" abaixo para nossa equipe verificar sua conta diretamente.`,
+          readyForHuman: true,
+        };
+      }
+      return {
+        reply: `Oi, ${playerName}! Sou o Biel, assistente virtual do Earn Easy. Para agilizar antes de te passar para um especialista humano: seu caso envolve Check-in Diário, Saque Pix, Convites/Códigos ou Pontos nos Jogos? Me conte em poucas palavras o que aconteceu.`,
+        readyForHuman: userTurnCount >= 2,
+      };
+    };
+
+    const geminiApiKey = (process.env.GEMINI_API_KEY || '').trim();
+    if (geminiApiKey) {
+      try {
+        const ai = new GoogleGenAI({ apiKey: geminiApiKey });
+        const conversationLines = cleanMessages
+          .map((m) => `${m.role === 'user' ? playerName : 'Biel'}: ${m.text}`)
+          .join('\n');
+
+        const promptText = [
+          topicStr ? `Tópico selecionado pelo usuário: ${topicStr}` : '',
+          `Resumo da conta do usuário (${playerName}): ${pointsBalance} moedas, saldo Pix R$ ${(brlBalanceCents / 100).toFixed(2)}, status=${accountStatus}, primeiroSaqueUsado=${firstWithdrawalUsed}, mínimoSaqueAtual=R$ ${(activeMinCents / 100).toFixed(2)}.`,
+          conversationLines ? `Histórico recente:\n${conversationLines}` : 'O usuário acabou de abrir o chat de suporte.',
+        ]
+          .filter(Boolean)
+          .join('\n\n');
+
+        const response = await ai.models.generateContent({
+          model: 'gemini-4-hydrogen',
+          contents: promptText,
+          config: {
+            systemInstruction:
+              'Você é Biel, o assistente virtual de suporte do aplicativo Earn Easy em português do Brasil (pt-BR). ' +
+              'Seja simpático, claro, direto e conciso (máximo 3 frases curtas). ' +
+              'Regras reais do Earn Easy: 1.000 pontos = R$ 0,10; limite de 1 conversão diária (horário UTC); ' +
+              'Check-in Diário dá 120 a 200 pontos por dia (1x por dia UTC) e R$ 10,00 de bônus aos 30 dias seguidos; ' +
+              '1º saque Pix tem mínimo configurado pelo admin (padrão R$ 0,10) e demais saques conforme mínimo configurado; ' +
+              'Convites dão +500 pontos + 12% de comissão; há aba Amigos para adicionar jogadores e conversar. ' +
+              'Faça perguntas objetivas de triagem para entender o problema ou responda à dúvida. ' +
+              'Quando o usuário já tiver explicado o problema (após 2 mensagens ou quando pedir atendente/especialista ou envolver erro técnico/ban/saque pendente), ' +
+              'oriente-o claramente a clicar no botão "Falar com Especialista Humano" para entrar na fila do painel administrativo. ' +
+              'Nunca invente pagamentos já feitos nem prometa prazos exatos de Pix.',
+          },
+        });
+
+        const text = response.text?.trim();
+        if (text) {
+          res.json({
+            reply: text.slice(0, 800),
+            readyForHuman: userTurnCount >= 2 || asksForHuman || /(erro|bug|pendente|ban|suspens|não caiu|nao caiu)/.test(lower),
+            poweredBy: 'gemini',
+          });
+          return;
+        }
+      } catch (err) {
+        console.warn('Gemini Biel fallback activated:', err instanceof Error ? err.message : err);
+      }
+    }
+
+    const fallback = buildDeterministicReply();
+    res.json({
+      reply: fallback.reply,
+      readyForHuman: fallback.readyForHuman,
+      poweredBy: 'assistant',
+    });
   });
 
   if (process.env.NODE_ENV !== 'production') {

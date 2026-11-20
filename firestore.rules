@@ -21,6 +21,13 @@ service cloud.firestore {
       return code is string && code.size() >= 3 && code.size() <= 40 && code.matches('^[A-Z0-9_\\-]+$');
     }
 
+    function isValidPhotoUrl(url) {
+      return url is string && (
+        (url.size() <= 500 && !url.matches('^data:.*')) ||
+        (url.size() <= 60000 && url.matches('^data:image/(jpeg|jpg|png|webp);base64,[A-Za-z0-9+/=]+$'))
+      );
+    }
+
     function incoming() {
       return request.resource.data;
     }
@@ -95,7 +102,7 @@ service cloud.firestore {
     }
 
     function isPromoPublished(promoData) {
-      return !('publishAt' in promoData) || promoData.publishAt <= request.time;
+      return !('publishAt' in promoData) || promoData.publishAt == null || promoData.publishAt <= request.time;
     }
 
     function withdrawalSettingsExists() {
@@ -125,34 +132,106 @@ service cloud.firestore {
         : activeStandardMinCents();
     }
 
+    function validateReferralCommissionPair(comm, referrerUid, refBefore, refAfter, invitedBefore, invitedAfter) {
+      return refBefore != null &&
+        refAfter != null &&
+        invitedBefore != null &&
+        invitedAfter != null &&
+        comm >= 1 &&
+        comm <= 60 &&
+        refBefore.data.referrerUid == referrerUid &&
+        (refAfter.data.totalCommissionPointsEarned - refBefore.data.totalCommissionPointsEarned) == comm &&
+        (invitedAfter.data.lifetimePoints - invitedBefore.data.lifetimePoints) > 0 &&
+        (comm * 100) <= ((invitedAfter.data.lifetimePoints - invitedBefore.data.lifetimePoints) * 12) &&
+        ((comm + 1) * 100) > ((invitedAfter.data.lifetimePoints - invitedBefore.data.lifetimePoints) * 12);
+    }
+
     function isValidReferralCommission(comm, referrerUid, invitedUid) {
       return comm >= 1 &&
         comm <= 60 &&
-        exists(/databases/$(database)/documents/referrals/$(invitedUid)) &&
-        existsAfter(/databases/$(database)/documents/referrals/$(invitedUid)) &&
-        get(/databases/$(database)/documents/referrals/$(invitedUid)).data.referrerUid == referrerUid &&
-        (
-          getAfter(/databases/$(database)/documents/referrals/$(invitedUid)).data.totalCommissionPointsEarned -
-          get(/databases/$(database)/documents/referrals/$(invitedUid)).data.totalCommissionPointsEarned
-        ) == comm &&
-        exists(/databases/$(database)/documents/users/$(invitedUid)) &&
-        existsAfter(/databases/$(database)/documents/users/$(invitedUid)) &&
-        (
-          getAfter(/databases/$(database)/documents/users/$(invitedUid)).data.lifetimePoints -
-          get(/databases/$(database)/documents/users/$(invitedUid)).data.lifetimePoints
-        ) > 0 &&
-        (comm * 100) <= (
-          (
-            getAfter(/databases/$(database)/documents/users/$(invitedUid)).data.lifetimePoints -
-            get(/databases/$(database)/documents/users/$(invitedUid)).data.lifetimePoints
-          ) * 12
-        ) &&
-        ((comm + 1) * 100) > (
-          (
-            getAfter(/databases/$(database)/documents/users/$(invitedUid)).data.lifetimePoints -
-            get(/databases/$(database)/documents/users/$(invitedUid)).data.lifetimePoints
-          ) * 12
+        validateReferralCommissionPair(
+          comm,
+          referrerUid,
+          get(/databases/$(database)/documents/referrals/$(invitedUid)),
+          getAfter(/databases/$(database)/documents/referrals/$(invitedUid)),
+          get(/databases/$(database)/documents/users/$(invitedUid)),
+          getAfter(/databases/$(database)/documents/users/$(invitedUid))
         );
+    }
+
+    function validateUserCheckinAction(checkinAfterData, ptsDelta, brlDelta) {
+      return checkinAfterData.pointsAwarded == ptsDelta &&
+        checkinAfterData.brlBonusCents == brlDelta &&
+        (brlDelta == 0 || (brlDelta == 1000 && checkinAfterData.streakDay == 30));
+    }
+
+    function validateUserPromoAction(promoData, redemptionAfterData, ptsDelta) {
+      return promoData.active == true &&
+        isPromoPublished(promoData) &&
+        promoData.redemptionCount < promoData.maxRedemptions &&
+        ptsDelta == promoData.pointsValue &&
+        redemptionAfterData.pointsAwarded == ptsDelta;
+    }
+
+    function validateYesterdayStreak(yData, incomingStreak) {
+      return (
+        !yData.keys().hasAll(['streakDay']) &&
+        incomingStreak == 2
+      ) || (
+        yData.keys().hasAll(['streakDay']) &&
+        yData.streakDay >= 30 &&
+        incomingStreak == 1
+      ) || (
+        yData.keys().hasAll(['streakDay']) &&
+        yData.streakDay >= 1 &&
+        yData.streakDay < 30 &&
+        incomingStreak == yData.streakDay + 1
+      );
+    }
+
+    function matchesUserLeaderboard(userId, userAfterData, lbData) {
+      return userAfterData.uid == userId &&
+        userAfterData.status == lbData.status &&
+        userAfterData.displayName == lbData.displayName &&
+        userAfterData.photoURL == lbData.photoURL &&
+        userAfterData.brlBalanceCents == lbData.brlBalanceCents &&
+        userAfterData.pointsBalance == lbData.pointsBalance &&
+        (!('lifetimePoints' in lbData) || userAfterData.lifetimePoints == lbData.lifetimePoints) &&
+        userAfterData.gamesPlayed == lbData.gamesPlayed;
+    }
+
+    function validatePromoRedemptionCreate(promoData, userBeforeData, userAfterData, reqData) {
+      return userBeforeData.status == 'active' &&
+        promoData.active == true &&
+        isPromoPublished(promoData) &&
+        promoData.redemptionCount < promoData.maxRedemptions &&
+        reqData.pointsAwarded == promoData.pointsValue &&
+        userAfterData.pointsBalance == userBeforeData.pointsBalance + reqData.pointsAwarded;
+    }
+
+    function validateWithdrawalCreateUser(userBeforeData, userAfterData, reqData) {
+      return userBeforeData.status == 'active' &&
+        reqData.amountCents >= requiredWithdrawalMinCents(userBeforeData) &&
+        userAfterData.brlBalanceCents == userBeforeData.brlBalanceCents - reqData.amountCents &&
+        userAfterData.firstWithdrawalUsed == true;
+    }
+
+    function validateLevelRewardClaim(userBeforeData, userAfterData, reqData) {
+      return userBeforeData.status == 'active' &&
+        reqData.xpAtClaim == userXp(userBeforeData) &&
+        userAfterData.pointsBalance == userBeforeData.pointsBalance + reqData.rewardPoints && (
+          (reqData.level == 2 && reqData.xpAtClaim >= 1000) ||
+          (reqData.level == 3 && reqData.xpAtClaim >= 3000) ||
+          (reqData.level == 4 && reqData.xpAtClaim >= 7000) ||
+          (reqData.level == 5 && reqData.xpAtClaim >= 15000) ||
+          (reqData.level == 6 && reqData.xpAtClaim >= 30000)
+        );
+    }
+
+    function canCreateUserSupportMessage(ticketData, msgData) {
+      return ticketData.userId == request.auth.uid &&
+        ticketData.status != 'closed' &&
+        msgData.senderRole in ['user', 'biel'];
     }
 
     // --- Validation Blueprints ---
@@ -170,7 +249,7 @@ service cloud.firestore {
       ]) &&
       isValidId(data.uid) &&
       data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80 &&
-      data.photoURL is string && data.photoURL.size() <= 500 &&
+      isValidPhotoUrl(data.photoURL) &&
       data.pointsBalance is number && data.pointsBalance >= 0 &&
       data.lifetimePoints is number && data.lifetimePoints >= 0 &&
       data.brlBalanceCents is number && data.brlBalanceCents >= 0 &&
@@ -225,7 +304,7 @@ service cloud.firestore {
       ]) &&
       isValidId(data.sessionId) &&
       isValidId(data.userId) &&
-      data.gameCategory in ['tic_tac_toe', 'dot_link', 'word_search', 'math_sprint', 'memory_match'] &&
+      data.gameCategory in ['tic_tac_toe', 'dot_link', 'word_search', 'math_sprint', 'memory_match', 'quick_reflex', 'high_low_cards'] &&
       data.scoreEarned is number && data.scoreEarned >= 0 && data.scoreEarned <= 500 &&
       data.durationMs is number && data.durationMs >= 3000 &&
       data.movesCount is number && data.movesCount >= 1 &&
@@ -350,13 +429,14 @@ service cloud.firestore {
       ]) &&
       data.keys().hasOnly([
         'uid', 'displayName', 'photoURL', 'brlBalanceCents',
-        'pointsBalance', 'gamesPlayed', 'status', 'updatedAt'
+        'pointsBalance', 'lifetimePoints', 'gamesPlayed', 'status', 'updatedAt'
       ]) &&
       isValidId(data.uid) &&
       data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80 &&
-      data.photoURL is string && data.photoURL.size() <= 500 &&
+      isValidPhotoUrl(data.photoURL) &&
       data.brlBalanceCents is number && data.brlBalanceCents >= 0 &&
       data.pointsBalance is number && data.pointsBalance >= 0 &&
+      (!('lifetimePoints' in data) || (data.lifetimePoints is number && data.lifetimePoints >= 0)) &&
       data.gamesPlayed is number && data.gamesPlayed >= 0 &&
       data.status in ['active', 'suspended', 'flagged'] &&
       data.updatedAt is timestamp;
@@ -538,6 +618,117 @@ service cloud.firestore {
       data.createdAt is timestamp;
     }
 
+    function sortedPairId(a, b) {
+      return a < b ? a + '__' + b : b + '__' + a;
+    }
+
+    function isValidFriendRequest(data) {
+      return data.keys().hasAll([
+        'senderUid', 'recipientUid', 'senderName', 'recipientName',
+        'participantUids', 'status', 'createdAt'
+      ]) &&
+      data.keys().hasOnly([
+        'senderUid', 'recipientUid', 'senderName', 'recipientName',
+        'participantUids', 'status', 'createdAt', 'respondedAt'
+      ]) &&
+      isValidId(data.senderUid) &&
+      isValidId(data.recipientUid) &&
+      data.senderUid != data.recipientUid &&
+      data.senderName is string && data.senderName.size() >= 1 && data.senderName.size() <= 80 &&
+      data.recipientName is string && data.recipientName.size() >= 1 && data.recipientName.size() <= 80 &&
+      data.participantUids is list && data.participantUids.size() == 2 &&
+      data.senderUid in data.participantUids &&
+      data.recipientUid in data.participantUids &&
+      data.status in ['pending', 'accepted', 'rejected'] &&
+      data.createdAt is timestamp &&
+      (!('respondedAt' in data) || data.respondedAt == null || data.respondedAt is timestamp);
+    }
+
+    function isValidFriendship(data) {
+      return data.keys().hasAll(['memberUids', 'createdAt']) &&
+      data.keys().hasOnly(['memberUids', 'createdAt']) &&
+      data.memberUids is list &&
+      data.memberUids.size() == 2 &&
+      isValidId(data.memberUids[0]) &&
+      isValidId(data.memberUids[1]) &&
+      data.memberUids[0] != data.memberUids[1] &&
+      data.createdAt is timestamp;
+    }
+
+    function isValidSocialMessage(data) {
+      return data.keys().hasAll(['senderUid', 'senderName', 'text', 'createdAt']) &&
+      data.keys().hasOnly(['senderUid', 'senderName', 'text', 'createdAt']) &&
+      isValidId(data.senderUid) &&
+      data.senderName is string && data.senderName.size() >= 1 && data.senderName.size() <= 80 &&
+      data.text is string && data.text.size() >= 1 && data.text.size() <= 500 &&
+      data.createdAt is timestamp;
+    }
+
+    function isValidSupportTicket(data) {
+      return data.keys().hasAll([
+        'ticketId', 'userId', 'userDisplayName', 'topic', 'subject',
+        'bielSummary', 'status', 'assignedAdminUid', 'assignedAdminName',
+        'createdAt', 'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'ticketId', 'userId', 'userDisplayName', 'topic', 'subject',
+        'bielSummary', 'status', 'assignedAdminUid', 'assignedAdminName',
+        'createdAt', 'updatedAt'
+      ]) &&
+      isValidId(data.ticketId) &&
+      isValidId(data.userId) &&
+      data.userDisplayName is string && data.userDisplayName.size() >= 1 && data.userDisplayName.size() <= 80 &&
+      data.topic in ['checkin', 'pix', 'invites', 'games', 'account', 'other'] &&
+      data.subject is string && data.subject.size() >= 3 && data.subject.size() <= 140 &&
+      data.bielSummary is string && data.bielSummary.size() >= 3 && data.bielSummary.size() <= 800 &&
+      data.status in ['waiting_human', 'active_human', 'closed'] &&
+      data.assignedAdminUid is string && data.assignedAdminUid.size() <= 128 &&
+      data.assignedAdminName is string && data.assignedAdminName.size() <= 80 &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidSupportMessage(data) {
+      return data.keys().hasAll([
+        'messageId', 'ticketId', 'senderUid', 'senderName',
+        'senderRole', 'text', 'createdAt'
+      ]) &&
+      data.keys().hasOnly([
+        'messageId', 'ticketId', 'senderUid', 'senderName',
+        'senderRole', 'text', 'createdAt'
+      ]) &&
+      isValidId(data.messageId) &&
+      isValidId(data.ticketId) &&
+      isValidId(data.senderUid) &&
+      data.senderName is string && data.senderName.size() >= 1 && data.senderName.size() <= 80 &&
+      data.senderRole in ['user', 'biel', 'admin'] &&
+      data.text is string && data.text.size() >= 1 && data.text.size() <= 800 &&
+      data.createdAt is timestamp;
+    }
+
+    function isValidMaintenanceSettings(data) {
+      return data.keys().hasAll([
+        'settingId', 'enabled', 'title', 'message', 'estimatedReturn', 'updatedBy', 'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'settingId', 'enabled', 'title', 'message', 'estimatedReturn', 'updatedBy', 'updatedAt'
+      ]) &&
+      data.settingId == 'maintenance' &&
+      data.enabled is bool &&
+      data.title is string && data.title.size() >= 3 && data.title.size() <= 120 &&
+      data.message is string && data.message.size() >= 3 && data.message.size() <= 500 &&
+      data.estimatedReturn is string && data.estimatedReturn.size() <= 120 &&
+      data.updatedBy is string && data.updatedBy.size() >= 1 && data.updatedBy.size() <= 160 &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidDeletedMailboxEntry(data) {
+      return data.keys().hasAll(['messageId', 'deletedAt']) &&
+      data.keys().hasOnly(['messageId', 'deletedAt']) &&
+      isValidId(data.messageId) &&
+      data.deletedAt is timestamp;
+    }
+
     // --- Collection Rules ---
 
     // 1. Users Collection
@@ -572,7 +763,7 @@ service cloud.firestore {
         incoming().uid == existing().uid &&
         incoming().createdAt == existing().createdAt &&
         incoming().updatedAt == request.time && (
-          isAdmin() || (
+          (
             isOwner(userId) &&
             existing().status == 'active' &&
             incoming().totalWithdrawnCents == existing().totalWithdrawnCents && (
@@ -618,20 +809,16 @@ service cloud.firestore {
                 incoming().status == existing().status &&
                 incoming().riskScore == existing().riskScore &&
                 incoming().diff(existing()).affectedKeys().hasOnly(['pointsBalance', 'lifetimePoints', 'brlBalanceCents', 'updatedAt']) &&
-                !exists(/databases/$(database)/documents/dailyCheckins/$(checkinDocId(userId))) &&
-                existsAfter(/databases/$(database)/documents/dailyCheckins/$(checkinDocId(userId))) &&
-                getAfter(/databases/$(database)/documents/dailyCheckins/$(checkinDocId(userId))).data.pointsAwarded == (incoming().pointsBalance - existing().pointsBalance) &&
-                getAfter(/databases/$(database)/documents/dailyCheckins/$(checkinDocId(userId))).data.brlBonusCents == (incoming().brlBalanceCents - existing().brlBalanceCents) &&
                 (incoming().pointsBalance - existing().pointsBalance) >= 120 &&
                 (incoming().pointsBalance - existing().pointsBalance) <= 200 &&
-                (
-                  incoming().brlBalanceCents == existing().brlBalanceCents ||
-                  (
-                    incoming().brlBalanceCents == existing().brlBalanceCents + 1000 &&
-                    getAfter(/databases/$(database)/documents/dailyCheckins/$(checkinDocId(userId))).data.streakDay == 30
-                  )
-                ) &&
-                incoming().lifetimePoints == existing().lifetimePoints + (incoming().pointsBalance - existing().pointsBalance)
+                incoming().lifetimePoints == existing().lifetimePoints + (incoming().pointsBalance - existing().pointsBalance) &&
+                !exists(/databases/$(database)/documents/dailyCheckins/$(checkinDocId(userId))) &&
+                existsAfter(/databases/$(database)/documents/dailyCheckins/$(checkinDocId(userId))) &&
+                validateUserCheckinAction(
+                  getAfter(/databases/$(database)/documents/dailyCheckins/$(checkinDocId(userId))).data,
+                  incoming().pointsBalance - existing().pointsBalance,
+                  incoming().brlBalanceCents - existing().brlBalanceCents
+                )
               ) ||
               // Action F: Immediate Self-Suspension on Anti-Profanity Violation
               (
@@ -687,11 +874,11 @@ service cloud.firestore {
                 !exists(/databases/$(database)/documents/promoRedemptions/$(promoRedemptionDocId(userId, incoming().lastPromoCode))) &&
                 existsAfter(/databases/$(database)/documents/promoRedemptions/$(promoRedemptionDocId(userId, incoming().lastPromoCode))) &&
                 exists(/databases/$(database)/documents/promoCodes/$(incoming().lastPromoCode)) &&
-                get(/databases/$(database)/documents/promoCodes/$(incoming().lastPromoCode)).data.active == true &&
-                isPromoPublished(get(/databases/$(database)/documents/promoCodes/$(incoming().lastPromoCode)).data) &&
-                get(/databases/$(database)/documents/promoCodes/$(incoming().lastPromoCode)).data.redemptionCount < get(/databases/$(database)/documents/promoCodes/$(incoming().lastPromoCode)).data.maxRedemptions &&
-                (incoming().pointsBalance - existing().pointsBalance) == get(/databases/$(database)/documents/promoCodes/$(incoming().lastPromoCode)).data.pointsValue &&
-                getAfter(/databases/$(database)/documents/promoRedemptions/$(promoRedemptionDocId(userId, incoming().lastPromoCode))).data.pointsAwarded == (incoming().pointsBalance - existing().pointsBalance)
+                validateUserPromoAction(
+                  get(/databases/$(database)/documents/promoCodes/$(incoming().lastPromoCode)).data,
+                  getAfter(/databases/$(database)/documents/promoRedemptions/$(promoRedemptionDocId(userId, incoming().lastPromoCode))).data,
+                  incoming().pointsBalance - existing().pointsBalance
+                )
               )
             )
           ) || (
@@ -718,7 +905,7 @@ service cloud.firestore {
                 request.auth.uid
               )
             )
-          )
+          ) || isAdmin()
         );
 
       allow delete: if isValidId(userId) && isAdmin();
@@ -739,14 +926,26 @@ service cloud.firestore {
           isValidUserPrivateInfo(incoming()) &&
           incoming().uid == existing().uid &&
           incoming().updatedAt == request.time && (
-            isAdmin() || (
+            (
               isOwner(userId) &&
               incoming().diff(existing()).affectedKeys().hasOnly([
                 'defaultPixKeyType', 'defaultPixKey', 'deviceFingerprint', 'updatedAt'
               ])
-            )
+            ) || isAdmin()
           );
         allow delete: if isValidId(userId) && isValidId(docId) && isAdmin();
+      }
+
+      // Per-user deleted/dismissed Caixa de Correio message markers
+      match /deletedMailbox/{messageId} {
+        allow get, list: if isValidId(userId) && isOwner(userId);
+        allow create, update: if isValidId(userId) &&
+          isValidId(messageId) &&
+          isOwner(userId) &&
+          isValidDeletedMailboxEntry(incoming()) &&
+          incoming().messageId == messageId &&
+          incoming().deletedAt == request.time;
+        allow delete: if isValidId(userId) && isValidId(messageId) && (isOwner(userId) || isAdmin());
       }
     }
 
@@ -760,7 +959,7 @@ service cloud.firestore {
 
     // 3. Game Sessions
     match /gameSessions/{sessionId} {
-      allow get: if isValidId(sessionId) && (isAdmin() || (isSignedIn() && existing().userId == request.auth.uid));
+      allow get: if isValidId(sessionId) && (isAdmin() || (isSignedIn() && (resource == null || existing().userId == request.auth.uid)));
       allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
       allow create: if isValidId(sessionId) &&
         isSignedIn() &&
@@ -780,7 +979,7 @@ service cloud.firestore {
 
     // 4. Daily Point Conversions
     match /conversions/{conversionId} {
-      allow get: if isValidId(conversionId) && (isAdmin() || (isSignedIn() && existing().userId == request.auth.uid));
+      allow get: if isValidId(conversionId) && (isAdmin() || (isSignedIn() && (resource == null || existing().userId == request.auth.uid)));
       allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
       allow create: if isValidId(conversionId) &&
         isSignedIn() &&
@@ -795,7 +994,7 @@ service cloud.firestore {
 
     // 5. Pix Withdrawals
     match /withdrawals/{withdrawalId} {
-      allow get: if isValidId(withdrawalId) && (isAdmin() || (isSignedIn() && existing().userId == request.auth.uid));
+      allow get: if isValidId(withdrawalId) && (isAdmin() || (isSignedIn() && (resource == null || existing().userId == request.auth.uid)));
       allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
       allow create: if isValidId(withdrawalId) &&
         isSignedIn() &&
@@ -807,11 +1006,12 @@ service cloud.firestore {
         incoming().pixTransactionId == '' &&
         incoming().createdAt == request.time &&
         incoming().updatedAt == request.time &&
-        isActiveUser(request.auth.uid) &&
-        incoming().amountCents >= requiredWithdrawalMinCents(get(/databases/$(database)/documents/users/$(request.auth.uid)).data) &&
-        getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.brlBalanceCents ==
-          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.brlBalanceCents - incoming().amountCents &&
-        getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.firstWithdrawalUsed == true;
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        validateWithdrawalCreateUser(
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data,
+          getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data,
+          incoming()
+        );
       allow update: if isValidId(withdrawalId) &&
         isAdmin() &&
         isValidWithdrawal(incoming()) &&
@@ -825,7 +1025,7 @@ service cloud.firestore {
 
     // 6. Anti-Fraud Logs
     match /fraudLogs/{logId} {
-      allow get: if isValidId(logId) && (isAdmin() || (isSignedIn() && existing().userId == request.auth.uid));
+      allow get: if isValidId(logId) && (isAdmin() || (isSignedIn() && (resource == null || existing().userId == request.auth.uid)));
       allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
       allow create: if isValidId(logId) &&
         isSignedIn() &&
@@ -845,7 +1045,7 @@ service cloud.firestore {
 
     // 7. Email Notifications Log
     match /emailNotifications/{notificationId} {
-      allow get: if isValidId(notificationId) && (isAdmin() || (isSignedIn() && existing().userId == request.auth.uid));
+      allow get: if isValidId(notificationId) && (isAdmin() || (isSignedIn() && (resource == null || existing().userId == request.auth.uid)));
       allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
       allow create: if isValidId(notificationId) &&
         isSignedIn() &&
@@ -853,7 +1053,10 @@ service cloud.firestore {
         incoming().notificationId == notificationId &&
         (isAdmin() || incoming().userId == request.auth.uid) &&
         incoming().createdAt == request.time;
-      allow update, delete: if isValidId(notificationId) && isAdmin();
+      allow update: if isValidId(notificationId) && isAdmin();
+      allow delete: if isValidId(notificationId) && (
+        isAdmin() || (isSignedIn() && existing().userId == request.auth.uid)
+      );
     }
 
     // 8. Enterprise Financial Integrations
@@ -878,25 +1081,23 @@ service cloud.firestore {
 
     // 9. Global Leaderboard Projection (Zero PII, synced atomically with /users/{userId})
     match /leaderboard/{userId} {
-      allow get: if isValidId(userId) && isSignedIn() && (existing().status == 'active' || isOwner(userId) || isAdmin());
-      allow list: if isSignedIn() && resource.data.brlBalanceCents >= 0;
+      allow get: if isValidId(userId) && isSignedIn() && (resource == null || existing().status == 'active' || isOwner(userId) || isAdmin());
+      allow list: if isSignedIn() && (resource.data.brlBalanceCents >= 0 || resource.data.status == 'active' || isAdmin());
 
       allow create, update: if isValidId(userId) &&
         isSignedIn() &&
         isValidLeaderboardEntry(incoming()) &&
         incoming().uid == userId &&
         incoming().updatedAt == request.time && (
-          isAdmin() || (
+          (
             isOwner(userId) &&
             incoming().status in ['active', 'suspended'] &&
-            getAfter(/databases/$(database)/documents/users/$(userId)).data.uid == userId &&
-            getAfter(/databases/$(database)/documents/users/$(userId)).data.status == incoming().status &&
-            getAfter(/databases/$(database)/documents/users/$(userId)).data.displayName == incoming().displayName &&
-            getAfter(/databases/$(database)/documents/users/$(userId)).data.photoURL == incoming().photoURL &&
-            getAfter(/databases/$(database)/documents/users/$(userId)).data.brlBalanceCents == incoming().brlBalanceCents &&
-            getAfter(/databases/$(database)/documents/users/$(userId)).data.pointsBalance == incoming().pointsBalance &&
-            getAfter(/databases/$(database)/documents/users/$(userId)).data.gamesPlayed == incoming().gamesPlayed
-          )
+            matchesUserLeaderboard(
+              userId,
+              getAfter(/databases/$(database)/documents/users/$(userId)).data,
+              incoming()
+            )
+          ) || isAdmin()
         );
 
       allow delete: if isValidId(userId) && isAdmin();
@@ -904,7 +1105,14 @@ service cloud.firestore {
 
     // 10. Daily Random Check-ins (1 claim per server UTC date, ~1,000-1,200 pts/week, R$10 at 30-day consecutive streak)
     match /dailyCheckins/{checkinId} {
-      allow get: if isValidId(checkinId) && (isAdmin() || (isSignedIn() && existing().userId == request.auth.uid));
+      allow get: if isValidId(checkinId) && (
+        isAdmin() || (
+          isSignedIn() && (
+            checkinId.matches('^chk_' + request.auth.uid + '_.*') ||
+            (resource != null && existing().userId == request.auth.uid)
+          )
+        )
+      );
       allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
       allow create: if isValidId(checkinId) &&
         isSignedIn() &&
@@ -919,20 +1127,10 @@ service cloud.firestore {
             !exists(/databases/$(database)/documents/dailyCheckins/$(yesterdayCheckinDocId(request.auth.uid))) &&
             incoming().streakDay == 1
           ) || (
-            exists(/databases/$(database)/documents/dailyCheckins/$(yesterdayCheckinDocId(request.auth.uid))) && (
-              (
-                !get(/databases/$(database)/documents/dailyCheckins/$(yesterdayCheckinDocId(request.auth.uid))).data.keys().hasAll(['streakDay']) &&
-                incoming().streakDay == 2
-              ) || (
-                get(/databases/$(database)/documents/dailyCheckins/$(yesterdayCheckinDocId(request.auth.uid))).data.keys().hasAll(['streakDay']) &&
-                get(/databases/$(database)/documents/dailyCheckins/$(yesterdayCheckinDocId(request.auth.uid))).data.streakDay >= 30 &&
-                incoming().streakDay == 1
-              ) || (
-                get(/databases/$(database)/documents/dailyCheckins/$(yesterdayCheckinDocId(request.auth.uid))).data.keys().hasAll(['streakDay']) &&
-                get(/databases/$(database)/documents/dailyCheckins/$(yesterdayCheckinDocId(request.auth.uid))).data.streakDay >= 1 &&
-                get(/databases/$(database)/documents/dailyCheckins/$(yesterdayCheckinDocId(request.auth.uid))).data.streakDay < 30 &&
-                incoming().streakDay == get(/databases/$(database)/documents/dailyCheckins/$(yesterdayCheckinDocId(request.auth.uid))).data.streakDay + 1
-              )
+            exists(/databases/$(database)/documents/dailyCheckins/$(yesterdayCheckinDocId(request.auth.uid))) &&
+            validateYesterdayStreak(
+              get(/databases/$(database)/documents/dailyCheckins/$(yesterdayCheckinDocId(request.auth.uid))).data,
+              incoming().streakDay
             )
           )
         );
@@ -941,7 +1139,14 @@ service cloud.firestore {
 
     // 11. Level-Up Rewards (Deterministic 1-time claim per level 2..6: lvl_{uid}_{level})
     match /levelRewards/{rewardId} {
-      allow get: if isValidId(rewardId) && (isAdmin() || (isSignedIn() && existing().userId == request.auth.uid));
+      allow get: if isValidId(rewardId) && (
+        isAdmin() || (
+          isSignedIn() && (
+            rewardId.matches('^lvl_' + request.auth.uid + '_.*') ||
+            (resource != null && existing().userId == request.auth.uid)
+          )
+        )
+      );
       allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
       allow create: if isValidId(rewardId) &&
         isSignedIn() &&
@@ -950,15 +1155,11 @@ service cloud.firestore {
         incoming().userId == request.auth.uid &&
         rewardId == levelRewardDocId(request.auth.uid, incoming().level) &&
         incoming().createdAt == request.time &&
-        isActiveUser(request.auth.uid) &&
-        incoming().xpAtClaim == userXp(get(/databases/$(database)/documents/users/$(request.auth.uid)).data) &&
-        getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.pointsBalance ==
-          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.pointsBalance + incoming().rewardPoints && (
-          (incoming().level == 2 && incoming().xpAtClaim >= 1000) ||
-          (incoming().level == 3 && incoming().xpAtClaim >= 3000) ||
-          (incoming().level == 4 && incoming().xpAtClaim >= 7000) ||
-          (incoming().level == 5 && incoming().xpAtClaim >= 15000) ||
-          (incoming().level == 6 && incoming().xpAtClaim >= 30000)
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        validateLevelRewardClaim(
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data,
+          getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data,
+          incoming()
         );
       allow update, delete: if isValidId(rewardId) && isAdmin();
     }
@@ -966,7 +1167,7 @@ service cloud.firestore {
     // 12. Referral Program (500 immediate signup pts + 12% ongoing earnings commission)
     match /referrals/{invitedUid} {
       allow get: if isValidId(invitedUid) && isSignedIn() && (
-        isAdmin() || isOwner(invitedUid) || existing().referrerUid == request.auth.uid
+        isAdmin() || isOwner(invitedUid) || (resource != null && existing().referrerUid == request.auth.uid)
       );
       allow list: if isAdmin() || (isSignedIn() && resource.data.referrerUid == request.auth.uid);
 
@@ -1037,16 +1238,16 @@ service cloud.firestore {
         incoming().createdBy == existing().createdBy &&
         incoming().createdAt == existing().createdAt &&
         incoming().updatedAt == request.time && (
-          isAdmin() || (
-            isActiveUser(request.auth.uid) &&
+          (
             existing().active == true &&
             isPromoPublished(existing()) &&
             existing().redemptionCount < existing().maxRedemptions &&
             incoming().diff(existing()).affectedKeys().hasOnly(['redemptionCount', 'updatedAt']) &&
             incoming().redemptionCount == existing().redemptionCount + 1 &&
+            isActiveUser(request.auth.uid) &&
             !exists(/databases/$(database)/documents/promoRedemptions/$(promoRedemptionDocId(request.auth.uid, code))) &&
             existsAfter(/databases/$(database)/documents/promoRedemptions/$(promoRedemptionDocId(request.auth.uid, code)))
-          )
+          ) || isAdmin()
         );
 
       allow delete: if isValidPromoCodeId(code) && isAdmin();
@@ -1054,7 +1255,14 @@ service cloud.firestore {
 
     // 14. Promo Code Redemptions (Deterministic one-time per user: prm_{uid}_{code})
     match /promoRedemptions/{redemptionId} {
-      allow get: if isValidId(redemptionId) && (isAdmin() || (isSignedIn() && existing().userId == request.auth.uid));
+      allow get: if isValidId(redemptionId) && (
+        isAdmin() || (
+          isSignedIn() && (
+            redemptionId.matches('^prm_' + request.auth.uid + '_.*') ||
+            (resource != null && existing().userId == request.auth.uid)
+          )
+        )
+      );
       allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
 
       allow create: if isValidId(redemptionId) &&
@@ -1064,22 +1272,22 @@ service cloud.firestore {
         incoming().userId == request.auth.uid &&
         redemptionId == promoRedemptionDocId(request.auth.uid, incoming().code) &&
         incoming().createdAt == request.time &&
-        isActiveUser(request.auth.uid) &&
         exists(/databases/$(database)/documents/promoCodes/$(incoming().code)) &&
-        get(/databases/$(database)/documents/promoCodes/$(incoming().code)).data.active == true &&
-        isPromoPublished(get(/databases/$(database)/documents/promoCodes/$(incoming().code)).data) &&
-        get(/databases/$(database)/documents/promoCodes/$(incoming().code)).data.redemptionCount < get(/databases/$(database)/documents/promoCodes/$(incoming().code)).data.maxRedemptions &&
-        incoming().pointsAwarded == get(/databases/$(database)/documents/promoCodes/$(incoming().code)).data.pointsValue &&
-        getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.pointsBalance ==
-          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.pointsBalance + incoming().pointsAwarded;
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        validatePromoRedemptionCreate(
+          get(/databases/$(database)/documents/promoCodes/$(incoming().code)).data,
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data,
+          getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data,
+          incoming()
+        );
 
       allow update, delete: if isValidId(redemptionId) && isAdmin();
     }
 
     // 15. Caixa de Correio Broadcast Messages (sent when admin creates promo code events)
     match /mailboxMessages/{messageId} {
-      allow get: if isValidId(messageId) && (isAdmin() || (isSignedIn() && existing().active == true));
-      allow list: if isAdmin() || (isSignedIn() && resource.data.active == true);
+      allow get: if isValidId(messageId) && ((isSignedIn() && (resource == null || existing().active == true)) || isAdmin());
+      allow list: if (isSignedIn() && resource.data.active == true) || isAdmin();
 
       allow create: if isValidId(messageId) &&
         isAdmin() &&
@@ -1096,31 +1304,36 @@ service cloud.firestore {
       allow delete: if isValidId(messageId) && isAdmin();
     }
 
-    // 16. Platform App Settings (configurable Pix withdrawal minimums from 1 to 2000 cents)
+    // 16. Platform App Settings (withdrawal minimums 1..2000 cents + maintenance mode)
     match /appSettings/{settingId} {
-      allow get: if isValidId(settingId) && settingId == 'withdrawal' && isSignedIn();
+      allow get: if isValidId(settingId) && (
+        settingId == 'maintenance' ||
+        (settingId == 'withdrawal' && isSignedIn())
+      );
       allow list: if isAdmin();
 
       allow create: if isValidId(settingId) &&
-        settingId == 'withdrawal' &&
         isAdmin() &&
-        isValidWithdrawalSettings(incoming()) &&
         incoming().settingId == settingId &&
-        incoming().updatedAt == request.time;
+        incoming().updatedAt == request.time && (
+          (settingId == 'withdrawal' && isValidWithdrawalSettings(incoming())) ||
+          (settingId == 'maintenance' && isValidMaintenanceSettings(incoming()))
+        );
 
       allow update: if isValidId(settingId) &&
-        settingId == 'withdrawal' &&
         isAdmin() &&
-        isValidWithdrawalSettings(incoming()) &&
         incoming().settingId == existing().settingId &&
-        incoming().updatedAt == request.time;
+        incoming().updatedAt == request.time && (
+          (settingId == 'withdrawal' && isValidWithdrawalSettings(incoming())) ||
+          (settingId == 'maintenance' && isValidMaintenanceSettings(incoming()))
+        );
 
       allow delete: if isValidId(settingId) && isAdmin();
     }
 
     // 17. Pix Withdrawal Attempt Audit Logs (immutable append-only trail for anti-fraud)
     match /withdrawalAttempts/{attemptId} {
-      allow get: if isValidId(attemptId) && (isAdmin() || (isSignedIn() && existing().userId == request.auth.uid));
+      allow get: if isValidId(attemptId) && (isAdmin() || (isSignedIn() && (resource == null || existing().userId == request.auth.uid)));
       allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
 
       allow create: if isValidId(attemptId) &&
@@ -1147,6 +1360,202 @@ service cloud.firestore {
 
       allow update: if false;
       allow delete: if isValidId(attemptId) && isAdmin();
+    }
+
+    // 18. Social Presence Heartbeats (online status in Friends tab)
+    match /socialPresence/{userId} {
+      allow get: if isValidId(userId) && isSignedIn();
+      allow list: if isSignedIn();
+      allow create, update: if isValidId(userId) &&
+        isOwner(userId) &&
+        incoming().keys().hasAll(['uid', 'lastSeen']) &&
+        incoming().keys().hasOnly(['uid', 'lastSeen']) &&
+        incoming().uid == userId &&
+        incoming().lastSeen == request.time;
+      allow delete: if isValidId(userId) && isAdmin();
+    }
+
+    // 19. Friend Requests (send, accept, reject, resend)
+    match /friendRequests/{requestId} {
+      allow get: if isValidId(requestId) && isSignedIn() && (
+        isAdmin() ||
+        (resource == null && (requestId.matches('^' + request.auth.uid + '__.*') || requestId.matches('.*__' + request.auth.uid + '$'))) ||
+        (resource != null && request.auth.uid in existing().participantUids)
+      );
+      allow list: if isSignedIn() && (
+        isAdmin() || request.auth.uid in resource.data.participantUids
+      );
+      allow create: if isValidId(requestId) &&
+        isSignedIn() &&
+        isActiveUser(request.auth.uid) &&
+        isValidFriendRequest(incoming()) &&
+        incoming().senderUid == request.auth.uid &&
+        requestId == sortedPairId(incoming().senderUid, incoming().recipientUid) &&
+        incoming().status == 'pending' &&
+        incoming().createdAt == request.time &&
+        !('respondedAt' in incoming());
+      allow update: if isValidId(requestId) &&
+        isSignedIn() &&
+        isValidFriendRequest(incoming()) &&
+        incoming().senderUid == existing().senderUid &&
+        incoming().recipientUid == existing().recipientUid &&
+        incoming().participantUids == existing().participantUids &&
+        incoming().senderName == existing().senderName &&
+        incoming().recipientName == existing().recipientName && (
+          isAdmin() || (
+            request.auth.uid == existing().recipientUid &&
+            existing().status == 'pending' &&
+            incoming().status in ['accepted', 'rejected'] &&
+            incoming().createdAt == existing().createdAt &&
+            incoming().respondedAt == request.time &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'respondedAt'])
+          ) || (
+            request.auth.uid == existing().senderUid &&
+            existing().status == 'rejected' &&
+            incoming().status == 'pending' &&
+            incoming().createdAt == request.time &&
+            (!('respondedAt' in incoming()) || incoming().respondedAt == null) &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'createdAt', 'respondedAt'])
+          )
+        );
+      allow delete: if isValidId(requestId) && (
+        isAdmin() || (isSignedIn() && request.auth.uid in existing().participantUids)
+      );
+    }
+
+    // 20. Confirmed Friendships & Private 1-on-1 Messages
+    match /friendships/{chatId} {
+      allow get: if isValidId(chatId) && isSignedIn() && (
+        isAdmin() ||
+        (resource == null && (chatId.matches('^' + request.auth.uid + '__.*') || chatId.matches('.*__' + request.auth.uid + '$'))) ||
+        (resource != null && request.auth.uid in existing().memberUids)
+      );
+      allow list: if isSignedIn() && (
+        isAdmin() || request.auth.uid in resource.data.memberUids
+      );
+      allow create: if isValidId(chatId) &&
+        isSignedIn() &&
+        isValidFriendship(incoming()) &&
+        request.auth.uid in incoming().memberUids &&
+        chatId == sortedPairId(incoming().memberUids[0], incoming().memberUids[1]) &&
+        incoming().createdAt == request.time &&
+        exists(/databases/$(database)/documents/friendRequests/$(chatId)) &&
+        getAfter(/databases/$(database)/documents/friendRequests/$(chatId)).data.status == 'accepted';
+      allow update: if false;
+      allow delete: if isValidId(chatId) && (
+        isAdmin() || (isSignedIn() && request.auth.uid in existing().memberUids)
+      );
+
+      match /messages/{messageId} {
+        allow get: if isValidId(chatId) && isValidId(messageId) && isSignedIn() && (
+          isAdmin() ||
+          request.auth.uid in get(/databases/$(database)/documents/friendships/$(chatId)).data.memberUids
+        );
+        allow list: if isValidId(chatId) && isSignedIn() && (
+          isAdmin() ||
+          request.auth.uid in get(/databases/$(database)/documents/friendships/$(chatId)).data.memberUids
+        );
+        allow create: if isValidId(chatId) &&
+          isValidId(messageId) &&
+          isSignedIn() &&
+          isActiveUser(request.auth.uid) &&
+          request.auth.uid in get(/databases/$(database)/documents/friendships/$(chatId)).data.memberUids &&
+          isValidSocialMessage(incoming()) &&
+          incoming().senderUid == request.auth.uid &&
+          incoming().createdAt == request.time;
+        allow update: if false;
+        allow delete: if isValidId(chatId) && isValidId(messageId) && isAdmin();
+      }
+    }
+
+    // 21. Global Community Chat
+    match /globalMessages/{messageId} {
+      allow get: if isValidId(messageId) && isSignedIn();
+      allow list: if isSignedIn();
+      allow create: if isValidId(messageId) &&
+        isSignedIn() &&
+        isActiveUser(request.auth.uid) &&
+        isValidSocialMessage(incoming()) &&
+        incoming().senderUid == request.auth.uid &&
+        incoming().createdAt == request.time;
+      allow update: if false;
+      allow delete: if isValidId(messageId) && isAdmin();
+    }
+
+    // 22. Support Tickets (AI Biel Triage -> Human Specialist Admin Queue)
+    match /supportTickets/{ticketId} {
+      allow get: if isValidId(ticketId) && (
+        isAdmin() || (isSignedIn() && (resource == null || existing().userId == request.auth.uid))
+      );
+      allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+
+      allow create: if isValidId(ticketId) &&
+        isSignedIn() &&
+        isValidSupportTicket(incoming()) &&
+        incoming().ticketId == ticketId &&
+        incoming().userId == request.auth.uid &&
+        incoming().status == 'waiting_human' &&
+        incoming().assignedAdminUid == '' &&
+        incoming().assignedAdminName == '' &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+
+      allow update: if isValidId(ticketId) &&
+        isSignedIn() &&
+        isValidSupportTicket(incoming()) &&
+        incoming().ticketId == existing().ticketId &&
+        incoming().userId == existing().userId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          isAdmin() || (
+            isOwner(existing().userId) &&
+            existing().status != 'closed' && (
+              (
+                incoming().status == 'closed' &&
+                incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+              ) || (
+                incoming().diff(existing()).affectedKeys().hasOnly(['updatedAt'])
+              )
+            )
+          )
+        );
+
+      allow delete: if isValidId(ticketId) && isAdmin();
+
+      match /messages/{messageId} {
+        allow get: if isValidId(ticketId) && isValidId(messageId) && (
+          isAdmin() || (
+            isSignedIn() &&
+            get(/databases/$(database)/documents/supportTickets/$(ticketId)).data.userId == request.auth.uid
+          )
+        );
+        allow list: if isValidId(ticketId) && (
+          isAdmin() || (
+            isSignedIn() &&
+            get(/databases/$(database)/documents/supportTickets/$(ticketId)).data.userId == request.auth.uid
+          )
+        );
+        allow create: if isValidId(ticketId) &&
+          isValidId(messageId) &&
+          isSignedIn() &&
+          isValidSupportMessage(incoming()) &&
+          incoming().messageId == messageId &&
+          incoming().ticketId == ticketId &&
+          incoming().senderUid == request.auth.uid &&
+          incoming().createdAt == request.time && (
+            (
+              existsAfter(/databases/$(database)/documents/supportTickets/$(ticketId)) &&
+              canCreateUserSupportMessage(
+                getAfter(/databases/$(database)/documents/supportTickets/$(ticketId)).data,
+                incoming()
+              )
+            ) || (
+              incoming().senderRole == 'admin' &&
+              isAdmin()
+            )
+          );
+        allow update, delete: if false;
+      }
     }
   }
 }

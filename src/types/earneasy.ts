@@ -3,7 +3,9 @@ export type GameCategory =
   | 'dot_link'
   | 'word_search'
   | 'math_sprint'
-  | 'memory_match';
+  | 'memory_match'
+  | 'quick_reflex'
+  | 'high_low_cards';
 
 export type AccountStatus = 'active' | 'suspended' | 'flagged';
 export type PixKeyType = 'cpf' | 'email' | 'phone' | 'random';
@@ -139,6 +141,7 @@ export interface LeaderboardEntry {
   photoURL: string;
   brlBalanceCents: number;
   pointsBalance: number;
+  lifetimePoints?: number;
   gamesPlayed: number;
   status: AccountStatus;
   updatedAt: unknown;
@@ -253,8 +256,65 @@ export const GAME_LABELS: Record<GameCategory, string> = {
   dot_link: 'Dot Link',
   word_search: 'Caça-Palavras',
   math_sprint: 'Desafio Matemático',
-  memory_match: 'Memória Premiada',
+  memory_match: 'Memória de Cartas',
+  quick_reflex: 'Reflexo Rápido',
+  high_low_cards: 'Maior ou Menor',
 };
+
+export interface MaintenanceSettings {
+  settingId: 'maintenance';
+  enabled: boolean;
+  title: string;
+  message: string;
+  estimatedReturn: string;
+  updatedBy: string;
+  updatedAt: unknown;
+}
+
+export const DEFAULT_MAINTENANCE_SETTINGS: MaintenanceSettings = {
+  settingId: 'maintenance',
+  enabled: false,
+  title: 'Plataforma em Manutenção Programada',
+  message:
+    'Estamos atualizando nossos servidores, jogos e sistema de recompensas Pix para deixar sua experiência ainda mais rápida e segura.',
+  estimatedReturn: 'Voltamos em alguns instantes',
+  updatedBy: 'system',
+  updatedAt: null,
+};
+
+export type SupportTicketStatus = 'waiting_human' | 'active_human' | 'closed';
+
+export type SupportTopic =
+  | 'checkin'
+  | 'pix'
+  | 'invites'
+  | 'games'
+  | 'account'
+  | 'other';
+
+export interface SupportTicket {
+  ticketId: string;
+  userId: string;
+  userDisplayName: string;
+  topic: SupportTopic;
+  subject: string;
+  bielSummary: string;
+  status: SupportTicketStatus;
+  assignedAdminUid: string;
+  assignedAdminName: string;
+  createdAt: unknown;
+  updatedAt: unknown;
+}
+
+export interface SupportMessage {
+  messageId: string;
+  ticketId: string;
+  senderUid: string;
+  senderName: string;
+  senderRole: 'user' | 'biel' | 'admin';
+  text: string;
+  createdAt: unknown;
+}
 
 export const ADMIN_BOOTSTRAP_EMAIL = 'anthonysamuel61500@gmail.com';
 export const POINTS_PER_TEN_CENTS = 1000;
@@ -277,3 +337,4 @@ export const STREAK_REWARD_CENTS = 1000;
 export const REFERRAL_SIGNUP_BONUS_POINTS = 500;
 export const REFERRAL_COMMISSION_RATE = 0.12;
 export const MAX_PROMO_CODE_POINTS = 100000;
+

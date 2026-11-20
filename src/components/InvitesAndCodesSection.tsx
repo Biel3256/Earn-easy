@@ -15,6 +15,7 @@ import {
 import { useAuth } from '../context/AuthContext';
 import { REFERRAL_SIGNUP_BONUS_POINTS } from '../types/earneasy';
 import {
+  extractReadableError,
   formatPoints,
   formatScheduleRemaining,
   formatScheduleTime,
@@ -105,7 +106,7 @@ export const InvitesAndCodesSection: React.FC = () => {
     } catch (err) {
       setRedeemFeedback({
         type: 'error',
-        text: err instanceof Error ? err.message : 'Não foi possível resgatar este código.',
+        text: extractReadableError(err, 'Não foi possível resgatar este código.'),
       });
     } finally {
       setRedeeming(false);
@@ -482,10 +483,10 @@ export const InvitesAndCodesSection: React.FC = () => {
                       <div className="flex items-center gap-2.5 min-w-0">
                         <Clock className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
                         <div className="min-w-0">
-                          <div className="text-xs font-bold text-slate-900 dark:text-zinc-100 truncate">
+                          <div className="text-xs font-bold text-slate-900 dark:text-zinc-100 leading-snug break-words">
                             Programado: {ev.title}
                           </div>
-                          <div className="text-[11px] text-amber-800 dark:text-amber-300">
+                          <div className="text-[11px] text-amber-800 dark:text-amber-300 leading-snug">
                             Liberação às {formatScheduleTime(publishMs)} (falta{' '}
                             {formatScheduleRemaining(publishMs, nowMs)})
                           </div>

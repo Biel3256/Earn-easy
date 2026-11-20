@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   AlertCircle,
   AlertTriangle,
@@ -9,7 +9,14 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { STREAK_REWARD_CENTS, STREAK_TARGET_DAYS } from '../types/earneasy';
-import { formatBRL, formatPoints, getTodayUtcDate, getUtcDateDaysAgo } from '../utils/pix';
+import {
+  extractReadableError,
+  formatBRL,
+  formatPoints,
+  getTodayUtcDate,
+  getUtcDateDaysAgo,
+  syncServerUtcClock,
+} from '../utils/pix';
 
 function formatDayShort(dateStr: string): string {
   const [, m, d] = dateStr.split('-');
@@ -19,10 +26,21 @@ function formatDayShort(dateStr: string): string {
 export const DailyCheckinCard: React.FC = () => {
   const { firebaseUser, userAccount, myCheckins, signInWithGoogle, claimDailyCheckin } = useAuth();
   const [claiming, setClaiming] = useState(false);
+  const [clockTick, setClockTick] = useState(0);
   const [feedback, setFeedback] = useState<{ type: 'ok' | 'err' | 'warn'; msg: string } | null>(null);
 
-  const today = getTodayUtcDate();
-  const yesterday = getUtcDateDaysAgo(1);
+  useEffect(() => {
+    let mounted = true;
+    syncServerUtcClock().then(() => {
+      if (mounted) setClockTick((v) => v + 1);
+    });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const today = useMemo(() => getTodayUtcDate(), [clockTick]);
+  const yesterday = useMemo(() => getUtcDateDaysAgo(1), [clockTick]);
 
   const byDate = useMemo(
     () => new Map(myCheckins.map((c) => [c.checkinDate, c])),
@@ -41,7 +59,7 @@ export const DailyCheckinCard: React.FC = () => {
         record,
       };
     });
-  }, [byDate]);
+  }, [byDate, clockTick]);
 
   const todayClaim = byDate.get(today) || null;
   const yesterdayClaim = byDate.get(yesterday) || null;
@@ -120,6 +138,7 @@ export const DailyCheckinCard: React.FC = () => {
     Math.round((streakStatus.activeStreak / STREAK_TARGET_DAYS) * 100)
   );
   const daysRemaining = Math.max(0, STREAK_TARGET_DAYS - streakStatus.activeStreak);
+  const accountRestricted = Boolean(firebaseUser && userAccount && userAccount.status !== 'active');
 
   const handleClaim = async () => {
     if (!firebaseUser) {
@@ -130,6 +149,7 @@ export const DailyCheckinCard: React.FC = () => {
     setClaiming(true);
     try {
       const res = await claimDailyCheckin();
+      setClockTick((v) => v + 1);
       if (res.brlBonusCents > 0) {
         setFeedback({
           type: 'ok',
@@ -149,7 +169,7 @@ export const DailyCheckinCard: React.FC = () => {
     } catch (err) {
       setFeedback({
         type: 'err',
-        msg: err instanceof Error ? err.message : 'Não foi possível coletar o check-in diário.',
+        msg: extractReadableError(err, 'Não foi possível coletar o check-in diário.'),
       });
     } finally {
       setClaiming(false);
@@ -157,7 +177,7 @@ export const DailyCheckinCard: React.FC = () => {
   };
 
   return (
-    <section className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl p-6 space-y-5 h-full flex flex-col justify-between">
+    <section className="bg-white dark:bg-zinc-900 border border-slate-200/90 dark:border-zinc-800 rounded-3xl p-6 space-y-5 h-full flex flex-col justify-between shadow-sm shadow-slate-900/5">
       <div className="space-y-5">
         {/* Header + Claim Button */}
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -174,17 +194,21 @@ export const DailyCheckinCard: React.FC = () => {
           <button
             type="button"
             onClick={handleClaim}
-            disabled={claiming || Boolean(firebaseUser && (todayClaim || userAccount?.status !== 'active'))}
+            disabled={claiming || Boolean(firebaseUser && (!userAccount || todayClaim || accountRestricted))}
             className="inline-flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-xl transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <Dices className="w-3.5 h-3.5" />
             {!firebaseUser
               ? 'Entrar e Coletar'
-              : claiming
-                ? 'Sorteando...'
-                : todayClaim
-                  ? `Coletado (+${todayClaim.pointsAwarded})`
-                  : 'Coletar Hoje'}
+              : !userAccount
+                ? 'Carregando...'
+                : claiming
+                  ? 'Sorteando...'
+                  : todayClaim
+                    ? `Coletado (+${todayClaim.pointsAwarded})`
+                    : accountRestricted
+                      ? 'Conta em revisão'
+                      : 'Coletar Hoje'}
           </button>
         </div>
 
@@ -228,7 +252,7 @@ export const DailyCheckinCard: React.FC = () => {
           })}
         </div>
 
-        {/* Clean 30-Day Streak Progress (No 30-cell clutter) */}
+        {/* Clean 30-Day Streak Progress */}
         <div className="pt-4 border-t border-slate-100 dark:border-zinc-800 space-y-2.5">
           <div className="flex items-center justify-between gap-2">
             <div className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-900 dark:text-zinc-100">
@@ -248,11 +272,13 @@ export const DailyCheckinCard: React.FC = () => {
           </div>
 
           <p className="text-[11px] text-slate-500 dark:text-zinc-400 leading-relaxed">
-            {streakStatus.completedToday
-              ? `Meta concluída hoje! ${formatBRL(STREAK_REWARD_CENTS)} adicionados ao seu saldo Pix.`
-              : firebaseUser && streakStatus.lostStreak
-                ? 'Sequência reiniciada por falta de check-in ontem. Colete hoje para começar do Dia 1.'
-                : `Colete diariamente sem falhar (faltam ${daysRemaining} ${daysRemaining === 1 ? 'dia' : 'dias'} para ganhar ${formatBRL(STREAK_REWARD_CENTS)}).`}
+            {accountRestricted
+              ? 'Check-in pausado temporariamente enquanto sua conta está em revisão antifraude.'
+              : streakStatus.completedToday
+                ? `Meta concluída hoje! ${formatBRL(STREAK_REWARD_CENTS)} adicionados ao seu saldo Pix.`
+                : firebaseUser && streakStatus.lostStreak
+                  ? 'Sequência reiniciada por falta de check-in ontem. Colete hoje para começar do Dia 1.'
+                  : `Colete diariamente sem falhar (faltam ${daysRemaining} ${daysRemaining === 1 ? 'dia' : 'dias'} para ganhar ${formatBRL(STREAK_REWARD_CENTS)}).`}
           </p>
         </div>
       </div>

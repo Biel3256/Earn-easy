@@ -1,39 +1,56 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   ArrowRight,
-  Calculator,
+  Brain,
   Check,
   CheckCircle2,
   Clock,
+  Coins,
   Copy,
-  Grid3X3,
+  Gamepad2,
+  Inbox,
   Layers,
   Link2,
-  Mail,
+  Play,
   Search,
-  Share2,
+  Sparkles,
+  Star,
+  Target,
   Ticket,
+  Trophy,
   Users,
+  Wallet,
+  Zap,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { GAME_LABELS, GameCategory } from '../types/earneasy';
+import { GAME_LABELS, GameCategory, LeaderboardEntry } from '../types/earneasy';
+import { GAME_THUMBNAILS, heroGamingBannerImg } from '../utils/gameArt';
 import { calculatePlayerLevel } from '../utils/levels';
 import {
+  extractReadableError,
   formatBRL,
   formatPoints,
   formatScheduleRemaining,
   formatScheduleTime,
-  getTodayUtcDate,
   timestampToMillis,
 } from '../utils/pix';
 import { DailyCheckinCard } from './DailyCheckinCard';
 import { HomeRankingCard } from './HomeRankingCard';
-import { ProfileAvatar } from './PlayerProfile';
-import { TicTacToeGame } from './games/TicTacToeGame';
 import { DotLinkGame } from './games/DotLinkGame';
-import { WordSearchGame } from './games/WordSearchGame';
+import { HighLowCardsGame } from './games/HighLowCardsGame';
 import { MathSprintGame } from './games/MathSprintGame';
 import { MemoryMatchGame } from './games/MemoryMatchGame';
+import { QuickReflexGame } from './games/QuickReflexGame';
+import { TicTacToeGame } from './games/TicTacToeGame';
+import { WordSearchGame } from './games/WordSearchGame';
+
+type FilterGroupId =
+  | 'all'
+  | 'raciocinio'
+  | 'reflexo'
+  | 'cartas'
+  | 'palavras'
+  | 'estrategia';
 
 interface GameCatalogItem {
   id: GameCategory;
@@ -41,80 +58,121 @@ interface GameCatalogItem {
   subtitle: string;
   rewardRange: string;
   avgTime: string;
-  Icon: React.FC<{ className?: string }>;
+  groups: FilterGroupId[];
 }
+
+const FILTER_TABS: Array<{
+  id: FilterGroupId;
+  label: string;
+  Icon: React.FC<{ className?: string }>;
+}> = [
+  { id: 'all', label: 'Todos', Icon: Sparkles },
+  { id: 'raciocinio', label: 'Raciocínio', Icon: Brain },
+  { id: 'reflexo', label: 'Reflexo', Icon: Zap },
+  { id: 'cartas', label: 'Cartas', Icon: Layers },
+  { id: 'palavras', label: 'Palavras', Icon: Search },
+  { id: 'estrategia', label: 'Estratégia', Icon: Target },
+];
 
 const GAME_CATALOG: GameCatalogItem[] = [
   {
     id: 'tic_tac_toe',
     title: GAME_LABELS.tic_tac_toe,
-    subtitle: 'Desafie a IA Minimax em partidas rápidas de estratégia.',
-    rewardRange: 'Até 240 moedas',
+    subtitle: 'Enfrente a IA Minimax em duelos rápidos e avance pelas fases.',
+    rewardRange: 'Até 240 pts',
     avgTime: '1 min',
-    Icon: Grid3X3,
-  },
-  {
-    id: 'dot_link',
-    title: GAME_LABELS.dot_link,
-    subtitle: 'Ligue todos os pontos coloridos sem cruzar os fluxos.',
-    rewardRange: 'Até 400 moedas',
-    avgTime: '2 min',
-    Icon: Share2,
+    groups: ['estrategia', 'raciocinio'],
   },
   {
     id: 'word_search',
     title: GAME_LABELS.word_search,
-    subtitle: 'Encontre todas as palavras ocultas na grade 10×10.',
-    rewardRange: 'Até 450 moedas',
+    subtitle: 'Encontre todas as palavras escondidas no tabuleiro 10×10.',
+    rewardRange: 'Até 450 pts',
     avgTime: '2 min',
-    Icon: Search,
+    groups: ['palavras', 'raciocinio'],
   },
   {
-    id: 'math_sprint',
-    title: GAME_LABELS.math_sprint,
-    subtitle: 'Resolva contas em 40s com combo multiplicador de até 3x.',
-    rewardRange: 'Até 450 moedas',
-    avgTime: '40 seg',
-    Icon: Calculator,
+    id: 'dot_link',
+    title: GAME_LABELS.dot_link,
+    subtitle: 'Conecte os pontos da mesma cor sem cruzar caminhos.',
+    rewardRange: 'Até 400 pts',
+    avgTime: '2 min',
+    groups: ['raciocinio', 'estrategia'],
   },
   {
     id: 'memory_match',
     title: GAME_LABELS.memory_match,
-    subtitle: 'Combine os 8 pares com o mínimo de tentativas possível.',
-    rewardRange: 'Até 380 moedas',
+    subtitle: 'Encontre os 8 pares com poucos erros e treine sua memória!',
+    rewardRange: 'Até 380 pts',
     avgTime: '1 min',
-    Icon: Layers,
+    groups: ['cartas', 'raciocinio'],
+  },
+  {
+    id: 'high_low_cards',
+    title: GAME_LABELS.high_low_cards,
+    subtitle: 'Adivinhe se a próxima carta será maior ou menor em 8 rodadas.',
+    rewardRange: 'Até 380 pts',
+    avgTime: '1 min',
+    groups: ['cartas', 'estrategia'],
+  },
+  {
+    id: 'math_sprint',
+    title: GAME_LABELS.math_sprint,
+    subtitle: 'Resolva contas contra o tempo com combo multiplicador de até 3x.',
+    rewardRange: 'Até 450 pts',
+    avgTime: '40 seg',
+    groups: ['raciocinio', 'reflexo'],
+  },
+  {
+    id: 'quick_reflex',
+    title: GAME_LABELS.quick_reflex,
+    subtitle: 'Toque no alvo luminoso o mais rápido possível em 12 rodadas.',
+    rewardRange: 'Até 400 pts',
+    avgTime: '30 seg',
+    groups: ['reflexo'],
   },
 ];
 
 interface GamesHubProps {
+  searchQuery?: string;
+  onSearchQueryChange?: (value: string) => void;
   onNavigateWallet: () => void;
   onNavigateProfile?: () => void;
   onNavigateInvites?: () => void;
   onNavigateMailbox?: () => void;
   onNavigateRanking?: () => void;
+  onNavigateFriends?: () => void;
+  onInspectPlayer?: (player: LeaderboardEntry, rank: number) => void;
 }
 
 export const GamesHub: React.FC<GamesHubProps> = ({
+  searchQuery = '',
+  onSearchQueryChange,
   onNavigateWallet,
-  onNavigateProfile,
   onNavigateInvites,
   onNavigateMailbox,
   onNavigateRanking,
+  onNavigateFriends,
+  onInspectPlayer,
 }) => {
   const {
     firebaseUser,
     userAccount,
+    mySessions,
     myInvitedReferrals,
     publicPromoEvents,
     myPromoRedemptions,
     unreadMailboxCount,
+    withdrawalSettings,
+    activeMinWithdrawalCents,
+    isFirstWithdrawalEligible,
     signInWithGoogle,
     recordGameReward,
     redeemPromoCode,
   } = useAuth();
 
   const [activeGame, setActiveGame] = useState<GameCategory | null>(null);
+  const [selectedGroup, setSelectedGroup] = useState<FilterGroupId>('all');
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [copiedLink, setCopiedLink] = useState(false);
   const [copiedCode, setCopiedCode] = useState(false);
@@ -129,12 +187,40 @@ export const GamesHub: React.FC<GamesHubProps> = ({
     return () => window.clearInterval(timer);
   }, []);
 
+  const phaseByCategory = useMemo(() => {
+    const map: Record<GameCategory, number> = {
+      tic_tac_toe: 1,
+      word_search: 1,
+      dot_link: 1,
+      math_sprint: 1,
+      memory_match: 1,
+      quick_reflex: 1,
+      high_low_cards: 1,
+    };
+    mySessions.forEach((s) => {
+      if (s.verificationStatus === 'verified' && map[s.gameCategory] !== undefined) {
+        map[s.gameCategory] += 1;
+      }
+    });
+    return map;
+  }, [mySessions]);
+
+  const filteredGames = useMemo(() => {
+    const term = searchQuery.trim().toLowerCase();
+    return GAME_CATALOG.filter((game) => {
+      const matchesGroup = selectedGroup === 'all' || game.groups.includes(selectedGroup);
+      if (!matchesGroup) return false;
+      if (!term) return true;
+      return (
+        game.title.toLowerCase().includes(term) ||
+        game.subtitle.toLowerCase().includes(term)
+      );
+    });
+  }, [selectedGroup, searchQuery]);
+
   const levelInfo = userAccount
     ? calculatePlayerLevel(userAccount.lifetimePoints, userAccount.gamesPlayed)
     : null;
-
-  const today = getTodayUtcDate();
-  const canConvertToday = userAccount ? userAccount.lastConversionDate !== today : false;
 
   const inviteOrigin =
     typeof window !== 'undefined' ? window.location.origin : 'https://earn-easy-z6eg.onrender.com';
@@ -152,6 +238,12 @@ export const GamesHub: React.FC<GamesHubProps> = ({
     (sum, r) => sum + (r.totalCommissionPointsEarned || 0),
     0
   );
+
+  const brlCents = userAccount?.brlBalanceCents ?? 0;
+  const ptsBalance = userAccount?.pointsBalance ?? 0;
+  const minTargetCents = Math.max(1, activeMinWithdrawalCents);
+  const remainingForPixCents = Math.max(0, minTargetCents - brlCents);
+  const pixProgressPct = Math.min(100, Math.round((brlCents / minTargetCents) * 100));
 
   const handleCopyInvite = async (value: string, kind: 'link' | 'code') => {
     try {
@@ -180,7 +272,7 @@ export const GamesHub: React.FC<GamesHubProps> = ({
     } catch (err) {
       setHighlightFeedback({
         type: 'error',
-        text: err instanceof Error ? err.message : 'Não foi possível resgatar o código.',
+        text: extractReadableError(err, 'Não foi possível resgatar o código.'),
       });
     } finally {
       setRedeemingCode(null);
@@ -242,196 +334,353 @@ export const GamesHub: React.FC<GamesHubProps> = ({
             onExit={() => setActiveGame(null)}
           />
         )}
+        {activeGame === 'quick_reflex' && (
+          <QuickReflexGame
+            onComplete={(s, d, m) => handleGameComplete('quick_reflex', s, d, m)}
+            onExit={() => setActiveGame(null)}
+          />
+        )}
+        {activeGame === 'high_low_cards' && (
+          <HighLowCardsGame
+            onComplete={(s, d, m) => handleGameComplete('high_low_cards', s, d, m)}
+            onExit={() => setActiveGame(null)}
+          />
+        )}
       </div>
     );
   }
 
   return (
-    <div className="space-y-8">
-      {/* 1. TOPO ORGANIZADO: RESUMO DO JOGADOR + RANKING TOP 5 LOGO NO INÍCIO */}
+    <div className="space-y-7">
+      {/* 1. HERO GAMING BANNER + MINHA CARTEIRA SPLIT */}
       <section className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-stretch">
-        {/* Esquerda: Resumo Limpo + Ações Principais */}
-        <div className="lg:col-span-7 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl p-6 flex flex-col justify-between gap-6">
-          {firebaseUser && userAccount && levelInfo ? (
-            <>
-              <div className="space-y-4">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-3.5 min-w-0">
-                    <ProfileAvatar
-                      name={userAccount.displayName}
-                      photoURL={userAccount.photoURL}
-                      sizeClass="w-12 h-12"
-                    />
-                    <div className="min-w-0">
-                      <h1 className="text-xl sm:text-2xl font-extrabold text-slate-900 dark:text-zinc-50 tracking-tight truncate">
-                        Olá, {userAccount.displayName}
-                      </h1>
-                      <p className="text-xs font-medium text-emerald-700 dark:text-emerald-400">
-                        Nível {levelInfo.level} · {levelInfo.title} · {formatPoints(levelInfo.xp)} XP
-                      </p>
-                    </div>
-                  </div>
+        {/* Left: Obsidian Hero Gaming Banner */}
+        <div className="lg:col-span-7 xl:col-span-8 relative overflow-hidden rounded-3xl border border-lime-500/35 dark:border-lime-400/35 bg-[#080d0b] min-h-[210px] sm:min-h-[230px] flex flex-col justify-between p-5 sm:p-7 shadow-xl shadow-black/25">
+          <img
+            src={heroGamingBannerImg}
+            alt="Controle gamer 3D e moedas Earn Easy"
+            className="absolute inset-0 w-full h-full object-cover object-right opacity-85"
+          />
+          <div
+            className="absolute inset-0 bg-gradient-to-r from-[#070b0a]/95 via-[#070b0a]/82 to-[#070b0a]/25"
+            aria-hidden="true"
+          />
 
-                  {onNavigateProfile && (
-                    <button
-                      type="button"
-                      onClick={onNavigateProfile}
-                      className="px-3 py-1.5 text-xs font-semibold text-slate-700 dark:text-zinc-200 bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 rounded-lg transition-colors shrink-0 cursor-pointer"
-                    >
-                      Perfil
-                    </button>
-                  )}
-                </div>
-
-                <div className="w-full h-2 bg-slate-100 dark:bg-zinc-800 rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-emerald-600 dark:bg-emerald-500 transition-all duration-300 rounded-full"
-                    style={{ width: `${levelInfo.progressPct}%` }}
-                  />
-                </div>
+          <div className="relative z-10 max-w-lg space-y-3">
+            {levelInfo && (
+              <div className="inline-flex items-center gap-2 text-xs font-semibold text-lime-300">
+                <Gamepad2 className="w-4 h-4 shrink-0" />
+                <span>
+                  Olá, {userAccount?.displayName} · Nível {levelInfo.level} ({levelInfo.title})
+                </span>
               </div>
+            )}
 
-              {/* 3 Métricas Limpas com Divisória (sem caixinhas poluídas) */}
-              <div className="grid grid-cols-3 divide-x divide-slate-200 dark:divide-zinc-800 py-3 border-y border-slate-100 dark:border-zinc-800">
-                <div className="pr-3">
-                  <div className="text-[11px] text-slate-500 dark:text-zinc-400">Moedas</div>
-                  <div className="text-lg sm:text-xl font-mono font-bold text-slate-900 dark:text-zinc-50 tabular-nums mt-0.5">
-                    {formatPoints(userAccount.pointsBalance)}
-                  </div>
-                </div>
-                <div className="px-4">
-                  <div className="text-[11px] text-slate-500 dark:text-zinc-400">Saldo Pix</div>
-                  <div className="text-lg sm:text-xl font-mono font-bold text-emerald-600 dark:text-emerald-400 tabular-nums mt-0.5">
-                    {formatBRL(userAccount.brlBalanceCents)}
-                  </div>
-                </div>
-                <div className="pl-4">
-                  <div className="text-[11px] text-slate-500 dark:text-zinc-400">Conversão Hoje</div>
-                  <div className="text-sm sm:text-base font-semibold text-slate-900 dark:text-zinc-100 mt-1">
-                    {canConvertToday ? 'Liberada' : 'Já feita'}
-                  </div>
-                </div>
-              </div>
+            <h1 className="text-2xl sm:text-3xl font-display font-extrabold text-white tracking-tight leading-tight">
+              Jogue, complete <span className="italic text-lime-300">fases</span> e ganhe{' '}
+              <span className="text-lime-400">pontos!</span>
+            </h1>
 
-              <div className="flex flex-wrap items-center gap-2.5">
-                <button
-                  type="button"
-                  onClick={() => setActiveGame('dot_link')}
-                  className="inline-flex items-center gap-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold rounded-xl transition-colors cursor-pointer"
-                >
-                  Jogar Agora
-                  <ArrowRight className="w-4 h-4" />
-                </button>
-                <button
-                  type="button"
-                  onClick={onNavigateWallet}
-                  className="px-4 py-2.5 bg-white dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-slate-800 dark:text-zinc-200 text-xs sm:text-sm font-semibold rounded-xl hover:bg-slate-50 dark:hover:bg-zinc-800 transition-colors cursor-pointer"
-                >
-                  Carteira Pix
-                </button>
-                {onNavigateMailbox && (
-                  <button
-                    type="button"
-                    onClick={onNavigateMailbox}
-                    className="inline-flex items-center gap-1.5 px-3.5 py-2.5 bg-slate-100 dark:bg-zinc-800 text-slate-800 dark:text-zinc-100 text-xs font-semibold rounded-xl hover:bg-slate-200 dark:hover:bg-zinc-700 transition-colors cursor-pointer"
-                  >
-                    <Mail className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-                    Correio{unreadMailboxCount > 0 ? ` (${unreadMailboxCount})` : ''}
-                  </button>
-                )}
-              </div>
-            </>
-          ) : (
-            <div className="space-y-4 py-4">
-              <div className="text-xs font-semibold text-emerald-700 dark:text-emerald-400">
-                1.000 moedas = R$ 0,10 · Saque Pix mínimo R$ 5,00
-              </div>
-              <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 dark:text-zinc-50 tracking-tight">
-                Jogue desafios de lógica e saque via Pix.
-              </h1>
-              <p className="text-sm text-slate-600 dark:text-zinc-400 leading-relaxed max-w-lg">
-                Acumule moedas jogando, convide amigos e resgate códigos promocionais enviados na sua Caixa de Correio.
-              </p>
-              <button
-                type="button"
-                onClick={signInWithGoogle}
-                className="inline-flex items-center gap-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold rounded-xl transition-colors cursor-pointer"
-              >
-                Entrar com Google
-                <ArrowRight className="w-4 h-4" />
-              </button>
-            </div>
-          )}
-        </div>
-
-        {/* Direita: Ranking Top 5 no Início */}
-        <div className="lg:col-span-5">
-          <HomeRankingCard onViewFullRanking={onNavigateRanking || onNavigateWallet} />
-        </div>
-      </section>
-
-      {/* 2. CATÁLOGO DE JOGOS EM DESTAQUE CENTRAL */}
-      <section className="space-y-4">
-        <div className="flex items-end justify-between gap-2">
-          <div>
-            <h2 className="text-lg sm:text-xl font-bold text-slate-900 dark:text-zinc-50">
-              Jogos Disponíveis
-            </h2>
-            <p className="text-xs sm:text-sm text-slate-500 dark:text-zinc-400">
-              Escolha um desafio para ganhar moedas na hora.
+            <p className="text-xs sm:text-sm text-zinc-200/90 leading-relaxed max-w-md">
+              7 jogos gratuitos, fases infinitas e recompensas reais com saque direto via Pix!
             </p>
+          </div>
+
+          <div className="relative z-10 pt-4 flex flex-wrap items-center gap-2.5">
+            <button
+              type="button"
+              onClick={() => handlePlayClick('dot_link')}
+              className="inline-flex items-center gap-2 min-h-[44px] px-5 py-2.5 rounded-xl bg-lime-400 hover:bg-lime-300 text-slate-950 text-xs sm:text-sm font-extrabold shadow-lg shadow-lime-500/20 transition-colors cursor-pointer"
+            >
+              <Play className="w-4 h-4 fill-current" />
+              {firebaseUser ? 'Jogar Agora' : 'Entrar e Jogar'}
+            </button>
+            <button
+              type="button"
+              onClick={onNavigateInvites}
+              className="inline-flex items-center gap-1.5 min-h-[44px] px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/15 border border-white/15 text-white text-xs sm:text-sm font-semibold transition-colors cursor-pointer backdrop-blur-sm"
+            >
+              <Ticket className="w-4 h-4 text-lime-300" />
+              Resgatar Código
+            </button>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {GAME_CATALOG.map((game) => {
-            const { Icon } = game;
-            return (
-              <div
-                key={game.id}
-                className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl p-5 flex flex-col justify-between gap-4 hover:border-emerald-300 dark:hover:border-emerald-800 transition-colors"
-              >
-                <div className="space-y-2.5">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="w-9 h-9 rounded-xl bg-slate-100 dark:bg-zinc-800 text-slate-800 dark:text-zinc-200 flex items-center justify-center shrink-0">
-                      <Icon className="w-4 h-4" />
-                    </div>
-                    <span className="text-xs font-mono text-slate-500 dark:text-zinc-400 tabular-nums">
-                      {game.rewardRange} · {game.avgTime}
-                    </span>
-                  </div>
-
-                  <div>
-                    <h3 className="text-base font-bold text-slate-900 dark:text-zinc-50">
-                      {game.title}
-                    </h3>
-                    <p className="text-xs text-slate-600 dark:text-zinc-400 leading-relaxed mt-1">
-                      {game.subtitle}
-                    </p>
-                  </div>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => handlePlayClick(game.id)}
-                  className="w-full inline-flex items-center justify-center gap-1.5 px-4 py-2.5 bg-slate-900 dark:bg-emerald-600 text-white text-xs font-semibold rounded-xl hover:bg-slate-800 dark:hover:bg-emerald-500 transition-colors cursor-pointer"
-                >
-                  {firebaseUser ? 'Jogar' : 'Entrar e Jogar'}
-                  <ArrowRight className="w-3.5 h-3.5" />
-                </button>
+        {/* Right: Minha Carteira Card */}
+        <div className="lg:col-span-5 xl:col-span-4 rounded-3xl border border-slate-200 dark:border-lime-500/25 bg-white/95 dark:bg-[#0e1319]/95 backdrop-blur-xl p-5 sm:p-6 flex flex-col justify-between gap-4 shadow-lg shadow-slate-900/5 dark:shadow-black/40">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-xl bg-emerald-50 dark:bg-lime-400/15 border border-emerald-200 dark:border-lime-400/30 text-emerald-700 dark:text-lime-400 flex items-center justify-center shrink-0">
+                <Wallet className="w-4 h-4" />
               </div>
-            );
-          })}
+              <h2 className="text-base font-display font-bold text-slate-900 dark:text-white">
+                Minha Carteira
+              </h2>
+            </div>
+            <span className="text-[11px] font-mono text-slate-500 dark:text-zinc-400">
+              {isFirstWithdrawalEligible ? '1º Saque Promo' : 'Saque Padrão'}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div className="rounded-2xl border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-[#131922] p-3.5 space-y-1">
+              <div className="text-[11px] font-medium text-slate-500 dark:text-zinc-400">
+                Seus Pontos
+              </div>
+              <div className="flex items-center gap-1.5 text-base sm:text-lg font-mono font-extrabold text-slate-900 dark:text-white tabular-nums">
+                <Star className="w-4 h-4 text-amber-400 fill-amber-400 shrink-0" />
+                <span>{formatPoints(ptsBalance)}</span>
+                <span className="text-xs font-semibold text-slate-500 dark:text-zinc-400">pts</span>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-[#131922] p-3.5 space-y-1">
+              <div className="text-[11px] font-medium text-slate-500 dark:text-zinc-400">
+                Saldo Convertido
+              </div>
+              <div className="flex items-center gap-1.5 text-base sm:text-lg font-mono font-extrabold text-emerald-700 dark:text-lime-300 tabular-nums">
+                <Coins className="w-4 h-4 text-amber-400 shrink-0" />
+                <span>{formatBRL(brlCents)}</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-3 pt-1">
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between gap-2 text-xs">
+                <span className="text-slate-600 dark:text-zinc-300 font-medium leading-snug">
+                  {remainingForPixCents === 0
+                    ? 'Saque Pix liberado!'
+                    : `Faltam ${formatBRL(remainingForPixCents)} para liberar o saque`}
+                </span>
+                <span className="font-mono font-bold text-emerald-700 dark:text-lime-400 tabular-nums shrink-0">
+                  {pixProgressPct}%
+                </span>
+              </div>
+              <div className="w-full h-2.5 bg-slate-100 dark:bg-zinc-800 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-gradient-to-r from-emerald-500 to-lime-400 rounded-full transition-all duration-300"
+                  style={{ width: `${pixProgressPct}%` }}
+                />
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={onNavigateWallet}
+              className="w-full min-h-[46px] px-4 py-2.5 rounded-xl bg-lime-400 hover:bg-lime-300 text-slate-950 text-sm font-extrabold flex items-center justify-center gap-2 shadow-md shadow-lime-500/15 transition-colors cursor-pointer"
+            >
+              <Wallet className="w-4 h-4" />
+              Sacar via Pix
+            </button>
+          </div>
         </div>
       </section>
 
-      {/* 3. LINHA ORGANIZADA: DESTAQUES (CONVITES + EVENTOS) + CHECK-IN DIÁRIO */}
-      <section className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-stretch">
-        {/* Esquerda: Destaques Compactos (Link/Código de Convite + Códigos Ativos) */}
-        <div className="lg:col-span-6 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl p-6 flex flex-col justify-between gap-5">
+      {/* Mobile Live Game Search Bar */}
+      {onSearchQueryChange && (
+        <div className="md:hidden">
+          <div className="relative">
+            <Search className="w-4 h-4 text-slate-400 dark:text-zinc-500 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+            <input
+              type="search"
+              value={searchQuery}
+              onChange={(e) => onSearchQueryChange(e.target.value)}
+              placeholder="Buscar jogos pelo nome..."
+              className="w-full min-h-[44px] pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-[#0e1319] text-sm text-slate-900 dark:text-zinc-100 placeholder:text-slate-400 dark:placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-lime-400"
+            />
+          </div>
+        </div>
+      )}
+
+      {/* 2. CATÁLOGO DE JOGOS & FASES */}
+      <section id="games-catalog" className="space-y-4">
+        <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5">
+            <Gamepad2 className="w-6 h-6 text-emerald-600 dark:text-lime-400 shrink-0" />
+            <div>
+              <h2 className="text-lg sm:text-xl font-display font-extrabold text-slate-900 dark:text-white tracking-tight">
+                Escolha um Jogo e Avance nas Fases
+              </h2>
+              <p className="text-xs text-slate-500 dark:text-zinc-400">
+                Cada partida verificada avança 1 fase no jogo e soma pontos na sua conta.
+              </p>
+            </div>
+          </div>
+
+          {/* 6 Filter Tabs matching Reference Screenshot */}
+          <div className="flex flex-wrap items-center gap-1.5">
+            {FILTER_TABS.map(({ id, label, Icon }) => {
+              const active = selectedGroup === id;
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => setSelectedGroup(id)}
+                  className={`inline-flex items-center gap-1.5 min-h-[38px] px-3 py-1.5 rounded-xl text-xs font-bold border transition-colors cursor-pointer ${
+                    active
+                      ? 'bg-lime-400 border-lime-300 text-slate-950 shadow-sm shadow-lime-500/20'
+                      : 'bg-white dark:bg-[#0e1319] border-slate-200 dark:border-zinc-800 text-slate-700 dark:text-zinc-300 hover:border-lime-400/60'
+                  }`}
+                >
+                  <Icon className="w-3.5 h-3.5 shrink-0" />
+                  <span>{label}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {filteredGames.length === 0 ? (
+          <div className="rounded-3xl border border-slate-200 dark:border-zinc-800 bg-white/95 dark:bg-[#0e1319]/95 p-8 text-center space-y-3">
+            <p className="text-sm font-semibold text-slate-700 dark:text-zinc-300">
+              Nenhum jogo encontrado para essa busca ou categoria.
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                setSelectedGroup('all');
+                onSearchQueryChange?.('');
+              }}
+              className="min-h-[42px] px-4 py-2 rounded-xl bg-lime-400 hover:bg-lime-300 text-slate-950 text-xs font-bold cursor-pointer"
+            >
+              Mostrar Todos os 7 Jogos
+            </button>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+            {filteredGames.map((game) => {
+              const phase = phaseByCategory[game.id] || 1;
+              return (
+                <article
+                  key={game.id}
+                  className="group rounded-3xl border border-slate-200 dark:border-lime-500/20 bg-white/95 dark:bg-[#0e1319]/95 backdrop-blur-md overflow-hidden flex flex-col justify-between hover:border-emerald-400 dark:hover:border-lime-400/70 transition-all duration-150 hover:-translate-y-0.5 shadow-sm shadow-slate-900/5 dark:shadow-black/50"
+                >
+                  <div>
+                    {/* Game Visual Header with Clear Unclipped Phase Label */}
+                    <div className="relative h-36 sm:h-40 w-full bg-[#090d12] overflow-hidden">
+                      <img
+                        src={GAME_THUMBNAILS[game.id]}
+                        alt={game.title}
+                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                      />
+                      <div
+                        className="absolute inset-0 bg-gradient-to-t from-[#0e1319] via-[#0e1319]/20 to-transparent opacity-90"
+                        aria-hidden="true"
+                      />
+                      <span className="absolute top-3 right-3 px-2.5 py-1 rounded-lg bg-black/75 border border-lime-400/50 text-lime-300 text-xs font-mono font-bold whitespace-nowrap shadow-sm">
+                        Fase {phase}
+                      </span>
+                    </div>
+
+                    {/* Card Details — Never Truncated */}
+                    <div className="px-4 pt-3 pb-2 space-y-1.5">
+                      <h3 className="text-base font-display font-extrabold text-slate-900 dark:text-white leading-snug">
+                        {game.title}
+                      </h3>
+                      <p className="text-xs text-slate-600 dark:text-zinc-300 leading-relaxed">
+                        {game.subtitle}
+                      </p>
+                      <div className="pt-1 text-[11px] font-mono text-emerald-700 dark:text-lime-400 font-semibold tabular-nums">
+                        {game.rewardRange} · {game.avgTime}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="p-4 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => handlePlayClick(game.id)}
+                      className="w-full min-h-[44px] inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-lime-400 hover:bg-lime-300 text-slate-950 text-xs sm:text-sm font-extrabold rounded-xl transition-colors shadow-sm shadow-lime-500/15 cursor-pointer"
+                    >
+                      <Play className="w-3.5 h-3.5 fill-current" />
+                      {firebaseUser ? 'Jogar' : 'Entrar e Jogar'}
+                    </button>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
+      {/* 3. ATALHOS RÁPIDOS DO APLICATIVO (SEM TEXTO CORTADO) */}
+      <section className="grid grid-cols-2 lg:grid-cols-4 gap-3.5">
+        <button
+          type="button"
+          onClick={onNavigateRanking || onNavigateWallet}
+          className="text-left min-h-[68px] bg-white/95 dark:bg-[#0e1319]/95 backdrop-blur-md border border-slate-200 dark:border-zinc-800 hover:border-lime-400 rounded-2xl p-4 flex items-center justify-between gap-3 transition-transform duration-150 hover:-translate-y-0.5 cursor-pointer shadow-sm"
+        >
+          <div className="min-w-0 space-y-0.5">
+            <div className="text-xs font-bold text-slate-900 dark:text-white leading-snug">
+              Ranking Global
+            </div>
+            <div className="text-[11px] text-slate-500 dark:text-zinc-400 leading-snug">
+              Veja os líderes e inspecione perfis
+            </div>
+          </div>
+          <Trophy className="w-5 h-5 text-amber-400 shrink-0" />
+        </button>
+
+        <button
+          type="button"
+          onClick={onNavigateFriends}
+          className="text-left min-h-[68px] bg-white/95 dark:bg-[#0e1319]/95 backdrop-blur-md border border-slate-200 dark:border-zinc-800 hover:border-lime-400 rounded-2xl p-4 flex items-center justify-between gap-3 transition-transform duration-150 hover:-translate-y-0.5 cursor-pointer shadow-sm"
+        >
+          <div className="min-w-0 space-y-0.5">
+            <div className="text-xs font-bold text-slate-900 dark:text-white leading-snug">
+              Amigos & Chat
+            </div>
+            <div className="text-[11px] text-slate-500 dark:text-zinc-400 leading-snug">
+              Adicione jogadores e converse
+            </div>
+          </div>
+          <Users className="w-5 h-5 text-sky-500 dark:text-sky-400 shrink-0" />
+        </button>
+
+        <button
+          type="button"
+          onClick={onNavigateInvites}
+          className="text-left min-h-[68px] bg-white/95 dark:bg-[#0e1319]/95 backdrop-blur-md border border-slate-200 dark:border-zinc-800 hover:border-lime-400 rounded-2xl p-4 flex items-center justify-between gap-3 transition-transform duration-150 hover:-translate-y-0.5 cursor-pointer shadow-sm"
+        >
+          <div className="min-w-0 space-y-0.5">
+            <div className="text-xs font-bold text-slate-900 dark:text-white leading-snug">
+              Resgatar Códigos
+            </div>
+            <div className="text-[11px] text-slate-500 dark:text-zinc-400 leading-snug">
+              +500 pts · {publishedEvents.length} código(s) ativo(s)
+            </div>
+          </div>
+          <Ticket className="w-5 h-5 text-emerald-600 dark:text-lime-400 shrink-0" />
+        </button>
+
+        <button
+          type="button"
+          onClick={onNavigateMailbox}
+          className="text-left min-h-[68px] bg-white/95 dark:bg-[#0e1319]/95 backdrop-blur-md border border-slate-200 dark:border-zinc-800 hover:border-lime-400 rounded-2xl p-4 flex items-center justify-between gap-3 transition-transform duration-150 hover:-translate-y-0.5 cursor-pointer shadow-sm"
+        >
+          <div className="min-w-0 space-y-0.5">
+            <div className="text-xs font-bold text-slate-900 dark:text-white leading-snug">
+              Caixa de Correio{unreadMailboxCount > 0 ? ` (${unreadMailboxCount})` : ''}
+            </div>
+            <div className="text-[11px] text-slate-500 dark:text-zinc-400 leading-snug">
+              Avisos e mensagens do ADM
+            </div>
+          </div>
+          <Inbox className="w-5 h-5 text-emerald-600 dark:text-lime-400 shrink-0" />
+        </button>
+      </section>
+
+      {/* 4. MISSÕES DIÁRIAS (CHECK-IN), CONVITES & RANKING TOP 5 */}
+      <section id="checkin-section" className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-stretch">
+        <div className="lg:col-span-6">
+          <DailyCheckinCard />
+        </div>
+
+        <div className="lg:col-span-6 bg-white/95 dark:bg-[#0e1319]/95 backdrop-blur-md border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 sm:p-6 flex flex-col justify-between gap-5 shadow-sm">
           <div className="space-y-4">
-            <div className="flex items-center justify-between gap-3">
-              <div className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-700 dark:text-emerald-400">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700 dark:text-lime-400">
                 <Users className="w-4 h-4" />
                 Destaques · Convites & Códigos
               </div>
@@ -439,7 +688,7 @@ export const GamesHub: React.FC<GamesHubProps> = ({
                 <button
                   type="button"
                   onClick={onNavigateInvites}
-                  className="text-xs font-semibold text-slate-600 dark:text-zinc-300 hover:text-emerald-700 dark:hover:text-emerald-400 underline underline-offset-4 cursor-pointer"
+                  className="text-xs font-bold text-slate-700 dark:text-lime-300 hover:underline underline-offset-4 cursor-pointer"
                 >
                   Digitar código
                 </button>
@@ -447,16 +696,16 @@ export const GamesHub: React.FC<GamesHubProps> = ({
             </div>
 
             <div>
-              <h3 className="text-base font-bold text-slate-900 dark:text-zinc-50">
-                Convide e ganhe +500 moedas + 12% sempre
+              <h3 className="text-base font-display font-bold text-slate-900 dark:text-white">
+                Convide amigos e ganhe +500 moedas + 12% sempre
               </h3>
-              <p className="text-xs text-slate-500 dark:text-zinc-400 mt-0.5">
+              <p className="text-xs text-slate-500 dark:text-zinc-400 mt-0.5 tabular-nums">
                 {myInvitedReferrals.length} amigo(s) · +{formatPoints(totalInviteCommissionPts)} moedas em comissões
               </p>
             </div>
 
             {userAccount && (
-              <div className="space-y-2 bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 rounded-xl p-3">
+              <div className="space-y-2.5 bg-slate-50 dark:bg-[#090d12] border border-slate-200 dark:border-zinc-800 rounded-2xl p-3.5">
                 <div className="flex items-center gap-2">
                   <Link2 className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                   <input
@@ -464,20 +713,20 @@ export const GamesHub: React.FC<GamesHubProps> = ({
                     readOnly
                     value={inviteLink}
                     onClick={(e) => e.currentTarget.select()}
-                    className="flex-1 text-xs font-mono text-slate-800 dark:text-zinc-200 bg-transparent focus:outline-none truncate"
+                    className="flex-1 text-xs font-mono text-slate-800 dark:text-zinc-200 bg-transparent focus:outline-none min-w-0"
                   />
                   <button
                     type="button"
                     onClick={() => handleCopyInvite(inviteLink, 'link')}
-                    className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-semibold rounded-lg shrink-0 cursor-pointer"
+                    className="inline-flex items-center gap-1 min-h-[36px] px-3 py-1.5 bg-lime-400 hover:bg-lime-300 text-slate-950 text-[11px] font-bold rounded-lg shrink-0 cursor-pointer"
                   >
                     {copiedLink ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
                     {copiedLink ? 'Copiado' : 'Link'}
                   </button>
                 </div>
 
-                <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-200/70 dark:border-zinc-800 text-[11px]">
-                  <span className="text-slate-500 dark:text-zinc-400 truncate">
+                <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-200/70 dark:border-zinc-800 text-[11px]">
+                  <span className="text-slate-500 dark:text-zinc-400 break-all">
                     Código:{' '}
                     <code className="font-mono font-semibold text-slate-900 dark:text-zinc-100">
                       {userAccount.uid}
@@ -486,30 +735,29 @@ export const GamesHub: React.FC<GamesHubProps> = ({
                   <button
                     type="button"
                     onClick={() => handleCopyInvite(userAccount.uid, 'code')}
-                    className="inline-flex items-center gap-1 font-semibold text-emerald-700 dark:text-emerald-400 hover:underline cursor-pointer shrink-0"
+                    className="inline-flex items-center gap-1 font-bold text-emerald-700 dark:text-lime-400 hover:underline cursor-pointer shrink-0"
                   >
                     {copiedCode ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-                    {copiedCode ? 'Copiado' : 'Copiar'}
+                    {copiedCode ? 'Copiado' : 'Copiar ID'}
                   </button>
                 </div>
               </div>
             )}
 
-            {/* Eventos de Código Publicados ou Próximo Programado */}
             <div className="space-y-2 pt-1">
               <div className="flex items-center justify-between text-xs font-semibold text-slate-700 dark:text-zinc-300">
                 <span className="inline-flex items-center gap-1.5">
-                  <Ticket className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+                  <Ticket className="w-3.5 h-3.5 text-amber-500" />
                   Eventos de Código
                 </span>
-                <span className="text-[11px] font-mono text-slate-400">
+                <span className="text-[11px] font-mono text-slate-400 tabular-nums">
                   {publishedEvents.length} ativo(s)
                 </span>
               </div>
 
               {highlightFeedback && (
                 <div
-                  className={`p-2.5 rounded-xl border text-xs ${
+                  className={`p-2.5 rounded-xl border text-xs leading-relaxed ${
                     highlightFeedback.type === 'success'
                       ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300'
                       : 'bg-red-50 dark:bg-red-950/40 border-red-200 dark:border-red-800 text-red-700 dark:text-red-300'
@@ -520,7 +768,7 @@ export const GamesHub: React.FC<GamesHubProps> = ({
               )}
 
               {publishedEvents.length === 0 && upcomingEvents.length === 0 ? (
-                <p className="text-xs text-slate-500 dark:text-zinc-400 py-2">
+                <p className="text-xs text-slate-500 dark:text-zinc-400 py-2 leading-relaxed">
                   Sem códigos públicos no momento. Novos códigos aparecem aqui e na Caixa de Correio.
                 </p>
               ) : (
@@ -531,18 +779,18 @@ export const GamesHub: React.FC<GamesHubProps> = ({
                     return (
                       <div
                         key={ev.code}
-                        className="p-3 rounded-xl bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 flex items-center justify-between gap-3"
+                        className="p-3 rounded-2xl bg-slate-50 dark:bg-[#090d12] border border-slate-200 dark:border-zinc-800 flex items-center justify-between gap-3"
                       >
                         <div className="min-w-0">
-                          <div className="text-xs font-bold text-slate-900 dark:text-zinc-100 truncate">
+                          <div className="text-xs font-bold text-slate-900 dark:text-zinc-100 leading-snug break-words">
                             {ev.title}
                           </div>
-                          <div className="text-[11px] font-mono text-emerald-700 dark:text-emerald-400">
+                          <div className="text-[11px] font-mono text-emerald-700 dark:text-lime-400">
                             {ev.code} · +{formatPoints(ev.pointsValue)} moedas
                           </div>
                         </div>
                         {redeemed ? (
-                          <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-700 dark:text-emerald-400 shrink-0">
+                          <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-700 dark:text-lime-400 shrink-0">
                             <CheckCircle2 className="w-3.5 h-3.5" />
                             Resgatado
                           </span>
@@ -551,7 +799,7 @@ export const GamesHub: React.FC<GamesHubProps> = ({
                             type="button"
                             disabled={soldOut || redeemingCode === ev.code}
                             onClick={() => handleQuickRedeem(ev.code)}
-                            className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-semibold rounded-lg shrink-0 cursor-pointer"
+                            className="min-h-[38px] px-3 py-1.5 bg-lime-400 hover:bg-lime-300 disabled:opacity-50 text-slate-950 text-xs font-bold rounded-lg shrink-0 cursor-pointer"
                           >
                             {soldOut
                               ? 'Esgotado'
@@ -569,10 +817,10 @@ export const GamesHub: React.FC<GamesHubProps> = ({
                     return (
                       <div
                         key={ev.code}
-                        className="p-2.5 rounded-xl bg-amber-50/70 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/60 flex items-center gap-2 text-xs text-amber-800 dark:text-amber-300"
+                        className="p-3 rounded-2xl bg-amber-50/70 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/60 flex items-center gap-2 text-xs text-amber-800 dark:text-amber-300"
                       >
                         <Clock className="w-3.5 h-3.5 shrink-0" />
-                        <span className="truncate">
+                        <span className="leading-snug">
                           Em breve: <strong>+{formatPoints(ev.pointsValue)} moedas</strong> às{' '}
                           {formatScheduleTime(publishMs)} ({formatScheduleRemaining(publishMs, nowMs)})
                         </span>
@@ -584,11 +832,14 @@ export const GamesHub: React.FC<GamesHubProps> = ({
             </div>
           </div>
         </div>
+      </section>
 
-        {/* Direita: Check-in Diário Compacto */}
-        <div className="lg:col-span-6">
-          <DailyCheckinCard />
-        </div>
+      {/* 5. RANKING TOP 5 AO VIVO */}
+      <section>
+        <HomeRankingCard
+          onViewFullRanking={onNavigateRanking || onNavigateWallet}
+          onInspectPlayer={onInspectPlayer}
+        />
       </section>
     </div>
   );

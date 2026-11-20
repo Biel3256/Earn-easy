@@ -1,30 +1,53 @@
-import React, { Suspense, lazy, useEffect, useRef, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useState } from 'react';
 import {
   BarChart3,
+  CalendarCheck2,
+  Check,
+  Copy,
+  Fingerprint,
+  Gamepad2,
+  Gift,
+  Headset,
   HelpCircle,
+  Home,
   Inbox,
   LogOut,
-  Menu,
-  MoreVertical,
+  Moon,
+  MoreHorizontal,
+  Search,
   Settings,
   ShieldAlert,
+  ShieldCheck,
+  Sun,
   Ticket,
+  Trophy,
   User,
+  Users,
   Wallet,
+  Wrench,
   X,
 } from 'lucide-react';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { AuthGateScreen } from './components/AuthGateScreen';
+import { BrandLogo } from './components/BrandLogo';
+import { FloatingSupportWidget } from './components/FloatingSupportWidget';
 import { GamesHub } from './components/GamesHub';
 import { GlobalRanking } from './components/GlobalRanking';
 import { InvitesAndCodesSection } from './components/InvitesAndCodesSection';
+import { MaintenanceScreen } from './components/MaintenanceScreen';
+import { ParticleBackdrop } from './components/ParticleBackdrop';
+import { PlayerInspectorModal } from './components/PlayerInspectorModal';
 import { PlayerProfile, ProfileAvatar } from './components/PlayerProfile';
 import { WalletSection } from './components/WalletSection';
 import { DashboardSection } from './components/DashboardSection';
 import { NotificationsSection } from './components/NotificationsSection';
+import { SocialPresence, SocialSection } from './components/SocialSection';
+import { SupportChatSection } from './components/SupportChatSection';
 import { AppTheme, SettingsSection } from './components/SettingsSection';
 import { WelcomeTutorialModal } from './components/WelcomeTutorialModal';
+import { LeaderboardEntry } from './types/earneasy';
+import { calculatePlayerLevel } from './utils/levels';
 import { formatBRL } from './utils/pix';
 
 const AdminPanel = lazy(() =>
@@ -33,22 +56,25 @@ const AdminPanel = lazy(() =>
 
 type NavTab =
   | 'games'
-  | 'invites'
   | 'ranking'
+  | 'friends'
+  | 'invites'
   | 'wallet'
+  | 'support'
   | 'dashboard'
   | 'notifications'
   | 'profile'
   | 'settings';
 
 const THEME_STORAGE_KEY = 'earneasy_theme';
+const TUTORIAL_STORAGE_PREFIX = 'earneasy_tutorial_seen_';
 
 function getInitialTheme(): AppTheme {
-  if (typeof window === 'undefined') return 'light';
+  if (typeof window === 'undefined') return 'dark';
   try {
-    return window.localStorage.getItem(THEME_STORAGE_KEY) === 'dark' ? 'dark' : 'light';
+    return window.localStorage.getItem(THEME_STORAGE_KEY) === 'light' ? 'light' : 'dark';
   } catch {
-    return 'light';
+    return 'dark';
   }
 }
 
@@ -60,7 +86,18 @@ function isPrivateBackofficeUrl(): boolean {
   );
 }
 
-const TUTORIAL_STORAGE_PREFIX = 'earneasy_tutorial_seen_';
+const TAB_TITLES: Record<NavTab, string> = {
+  games: 'Início & Jogos',
+  ranking: 'Ranking Global',
+  friends: 'Amigos & Comunidade',
+  invites: 'Convites & Códigos',
+  wallet: 'Carteira & Saque Pix',
+  profile: 'Meu Perfil & ID',
+  notifications: 'Caixa de Correio',
+  dashboard: 'Resumo Financeiro',
+  settings: 'Configurações',
+  support: 'Suporte (Biel & ADM)',
+};
 
 function MainShell() {
   const {
@@ -69,38 +106,26 @@ function MainShell() {
     userAccount,
     isAdmin,
     unreadMailboxCount,
+    maintenanceSettings,
     needsOnboarding,
     authError,
     signInWithGoogle,
     logout,
   } = useAuth();
+
   const [activeTab, setActiveTab] = useState<NavTab>('games');
   const [theme, setTheme] = useState<AppTheme>(() => getInitialTheme());
   const [isBackofficeRoute, setIsBackofficeRoute] = useState<boolean>(() => isPrivateBackofficeUrl());
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const [gameSearchQuery, setGameSearchQuery] = useState('');
+  const [moreSheetOpen, setMoreSheetOpen] = useState(false);
   const [tutorialOpen, setTutorialOpen] = useState(false);
-  const menuContainerRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (!accountMenuOpen) return;
-    const handlePointerDown = (event: MouseEvent) => {
-      if (menuContainerRef.current && !menuContainerRef.current.contains(event.target as Node)) {
-        setAccountMenuOpen(false);
-      }
-    };
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setAccountMenuOpen(false);
-      }
-    };
-    window.addEventListener('mousedown', handlePointerDown);
-    window.addEventListener('keydown', handleKeyDown);
-    return () => {
-      window.removeEventListener('mousedown', handlePointerDown);
-      window.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [accountMenuOpen]);
+  const [supportOpenSignal, setSupportOpenSignal] = useState(0);
+  const [copiedSidebarId, setCopiedSidebarId] = useState(false);
+  const [inspectedPlayer, setInspectedPlayer] = useState<{
+    player: LeaderboardEntry;
+    rank: number | null;
+  } | null>(null);
+  const [friendChatTargetUid, setFriendChatTargetUid] = useState<string | null>(null);
 
   useEffect(() => {
     try {
@@ -134,28 +159,15 @@ function MainShell() {
     }
   }, [theme]);
 
-  const exitBackoffice = () => {
-    window.history.pushState({}, '', '/');
-    setIsBackofficeRoute(false);
-    setActiveTab('games');
-  };
-
-  const navItems: { id: NavTab; label: string }[] = [
-    { id: 'games', label: 'Início' },
-    { id: 'ranking', label: 'Ranking' },
-    { id: 'invites', label: 'Convites & Códigos' },
-    { id: 'wallet', label: 'Carteira Pix' },
-    {
-      id: 'notifications',
-      label: unreadMailboxCount > 0 ? `Caixa de Correio (${unreadMailboxCount})` : 'Caixa de Correio',
-    },
-  ];
-
-  const isBlackTheme = theme === 'dark';
-  const isDarkView = isBlackTheme;
-
   useEffect(() => {
-    if (!authReady || !firebaseUser || !userAccount || userAccount.status === 'suspended' || isBackofficeRoute) {
+    if (
+      !authReady ||
+      !firebaseUser ||
+      !userAccount ||
+      userAccount.status === 'suspended' ||
+      maintenanceSettings.enabled ||
+      isBackofficeRoute
+    ) {
       return;
     }
     try {
@@ -166,7 +178,19 @@ function MainShell() {
     } catch {
       // Ignore storage errors
     }
-  }, [authReady, firebaseUser, userAccount, isBackofficeRoute]);
+  }, [authReady, firebaseUser, userAccount, maintenanceSettings.enabled, isBackofficeRoute]);
+
+  const enterBackoffice = () => {
+    window.history.pushState({}, '', '/backoffice');
+    setIsBackofficeRoute(true);
+    setMoreSheetOpen(false);
+  };
+
+  const exitBackoffice = () => {
+    window.history.pushState({}, '', '/');
+    setIsBackofficeRoute(false);
+    setActiveTab('games');
+  };
 
   const handleCloseTutorial = () => {
     setTutorialOpen(false);
@@ -185,12 +209,58 @@ function MainShell() {
       setIsBackofficeRoute(false);
     }
     setActiveTab(tab);
-    setMobileMenuOpen(false);
-    setAccountMenuOpen(false);
+    setMoreSheetOpen(false);
   };
 
-  // Access gate: users can only enter the app after Google login + creating an active account
-  if (!isBackofficeRoute && (!authReady || !firebaseUser || needsOnboarding || userAccount?.status === 'suspended')) {
+  const handleGoToMissions = () => {
+    handleSelectTab('games');
+    window.setTimeout(() => {
+      document.getElementById('checkin-section')?.scrollIntoView({ behavior: 'smooth' });
+    }, 80);
+  };
+
+  const handleGoToCatalog = () => {
+    handleSelectTab('games');
+    window.setTimeout(() => {
+      document.getElementById('games-catalog')?.scrollIntoView({ behavior: 'smooth' });
+    }, 80);
+  };
+
+  const handleCopyOwnId = async () => {
+    const uid = userAccount?.uid || firebaseUser?.uid;
+    if (!uid) return;
+    try {
+      await navigator.clipboard.writeText(uid);
+      setCopiedSidebarId(true);
+      setTimeout(() => setCopiedSidebarId(false), 2000);
+    } catch {
+      // Ignore clipboard failures
+    }
+  };
+
+  const isBlackTheme = theme === 'dark';
+
+  // Gate 1: Maintenance Screen (allows Admin to enter /backoffice anytime)
+  if (!isBackofficeRoute && maintenanceSettings.enabled) {
+    return (
+      <MaintenanceScreen
+        settings={maintenanceSettings}
+        theme={theme}
+        isAdmin={isAdmin}
+        isSignedIn={Boolean(firebaseUser)}
+        onGoBackoffice={enterBackoffice}
+        onRefresh={() => window.location.reload()}
+        onLogout={firebaseUser ? logout : undefined}
+        onSignInAdmin={!firebaseUser ? signInWithGoogle : undefined}
+      />
+    );
+  }
+
+  // Gate 2: Login / Onboarding / Banned screen
+  if (
+    !isBackofficeRoute &&
+    (!authReady || !firebaseUser || needsOnboarding || userAccount?.status === 'suspended')
+  ) {
     return (
       <AuthGateScreen
         theme={theme}
@@ -200,75 +270,255 @@ function MainShell() {
     );
   }
 
+  const sidebarItems: Array<{
+    id: NavTab;
+    label: string;
+    Icon: React.FC<{ className?: string }>;
+    badge?: number;
+    onClickOverride?: () => void;
+  }> = [
+    { id: 'games', label: 'Início', Icon: Home },
+    { id: 'games', label: 'Jogos', Icon: Gamepad2, onClickOverride: handleGoToCatalog },
+    { id: 'ranking', label: 'Ranking', Icon: Trophy },
+    { id: 'invites', label: 'Missões & Check-in', Icon: CalendarCheck2, onClickOverride: handleGoToMissions },
+    { id: 'wallet', label: 'Carteira & Pix', Icon: Wallet },
+    { id: 'friends', label: 'Amigos & Chat', Icon: Users },
+    { id: 'invites', label: 'Convidar & Códigos', Icon: Ticket },
+    { id: 'notifications', label: 'Correio', Icon: Inbox, badge: unreadMailboxCount },
+    { id: 'support', label: 'Suporte (Biel)', Icon: Headset },
+    { id: 'dashboard', label: 'Resumo Financeiro', Icon: BarChart3 },
+    { id: 'profile', label: 'Meu Perfil & ID', Icon: Fingerprint },
+    { id: 'settings', label: 'Configurações', Icon: Settings },
+  ];
+
+  const isSecondaryMobileTabActive = [
+    'invites',
+    'notifications',
+    'dashboard',
+    'settings',
+    'support',
+    'profile',
+  ].includes(activeTab);
+
+  const levelInfo = userAccount
+    ? calculatePlayerLevel(userAccount.lifetimePoints, userAccount.gamesPlayed)
+    : null;
+
   return (
     <div
-      className={`min-h-screen flex flex-col transition-colors ${
-        isBlackTheme
-          ? 'dark bg-black text-zinc-100'
-          : 'bg-slate-50 text-slate-900'
+      className={`relative min-h-screen flex transition-colors ${
+        isBlackTheme ? 'dark bg-[#070a0d] text-zinc-100' : 'bg-[#f3f6f4] text-slate-900'
       }`}
     >
-      {/* Strict 3-Zone Top Bar Contract */}
-      <header
-        className={`sticky top-0 z-30 backdrop-blur border-b transition-colors ${
+      <ParticleBackdrop theme={theme} />
+
+      {/* Desktop Left App Rail (md+) */}
+      <aside
+        aria-label="Navegação do Aplicativo"
+        className={`hidden md:flex md:w-64 lg:w-[260px] shrink-0 flex-col justify-between sticky top-0 h-screen z-30 border-r backdrop-blur-xl transition-colors ${
           isBlackTheme
-            ? 'bg-black/95 border-zinc-800'
-            : 'bg-white/95 border-slate-200'
+            ? 'bg-[#090d12]/95 border-zinc-800/80'
+            : 'bg-white/90 border-slate-200/90'
         }`}
       >
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-8">
-          {/* Zone 1: Single text element wordmark */}
-          <button
-            type="button"
-            onClick={() => handleSelectTab('games')}
-            className={`text-lg font-display font-extrabold tracking-tight whitespace-nowrap shrink-0 cursor-pointer ${
-              isDarkView ? 'text-zinc-50' : 'text-slate-900'
-            }`}
-          >
-            Earn Easy
-          </button>
+        <div className="flex flex-col flex-1 min-h-0">
+          {/* App Brand Header */}
+          <div className="h-16 px-5 flex items-center justify-center border-b border-slate-200/80 dark:border-zinc-800/80 shrink-0">
+            <button
+              type="button"
+              onClick={() => handleSelectTab('games')}
+              className="cursor-pointer"
+            >
+              <BrandLogo />
+            </button>
+          </div>
 
-          {/* Zone 2: 5 clean single-line text nav links (no public Admin link) */}
-          <nav
-            className={`hidden md:flex items-center gap-6 text-sm font-medium ${
-              isDarkView ? 'text-zinc-400' : 'text-slate-600'
-            }`}
-          >
-            {navItems.map((item) => (
+          {/* Vertical Navigation */}
+          <nav className="flex-1 overflow-y-auto px-3 py-3 space-y-1">
+            {sidebarItems.map((item, idx) => {
+              const Icon = item.Icon;
+              const isDuplicateShortcut = Boolean(item.onClickOverride);
+              const active = !isBackofficeRoute && !isDuplicateShortcut && activeTab === item.id;
+              return (
+                <button
+                  key={`${item.id}_${idx}`}
+                  type="button"
+                  onClick={() => (item.onClickOverride ? item.onClickOverride() : handleSelectTab(item.id))}
+                  className={`w-full min-h-[40px] flex items-center justify-between gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                    active
+                      ? 'bg-gradient-to-r from-lime-500/25 via-emerald-500/15 to-transparent border border-lime-400/40 text-emerald-800 dark:text-lime-300 shadow-sm'
+                      : isBlackTheme
+                        ? 'text-zinc-300 hover:bg-zinc-900 hover:text-white border border-transparent'
+                        : 'text-slate-700 hover:bg-slate-100 hover:text-slate-950 border border-transparent'
+                  }`}
+                >
+                  <span className="flex items-center gap-3 min-w-0">
+                    <Icon
+                      className={`w-4 h-4 shrink-0 ${
+                        active ? 'text-emerald-700 dark:text-lime-400' : 'text-slate-400 dark:text-zinc-400'
+                      }`}
+                    />
+                    <span>{item.label}</span>
+                  </span>
+                  {typeof item.badge === 'number' && item.badge > 0 && (
+                    <span className="px-1.5 py-0.5 rounded-full text-[10px] font-mono font-bold tabular-nums bg-lime-400 text-slate-950">
+                      {item.badge}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+
+            {isAdmin && (
               <button
-                key={item.id}
                 type="button"
-                onClick={() => handleSelectTab(item.id)}
-                className={`py-1 whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
-                  !isBackofficeRoute && activeTab === item.id
-                    ? isDarkView
-                      ? 'text-zinc-50 font-semibold border-b-2 border-emerald-500'
-                      : 'text-slate-900 font-semibold border-b-2 border-emerald-600'
-                    : isDarkView
-                      ? 'hover:text-zinc-100'
-                      : 'hover:text-slate-900'
+                onClick={enterBackoffice}
+                className={`w-full min-h-[42px] flex items-center gap-3 px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer mt-2 ${
+                  isBackofficeRoute
+                    ? 'bg-lime-400 text-slate-950 shadow-sm'
+                    : 'text-emerald-700 dark:text-lime-400 border border-emerald-200 dark:border-lime-500/30 bg-emerald-50/70 dark:bg-lime-500/10 hover:bg-emerald-100 dark:hover:bg-lime-500/20'
                 }`}
               >
-                {item.label}
+                <ShieldCheck className="w-4 h-4 shrink-0" />
+                <span>Painel Admin</span>
               </button>
-            ))}
+            )}
           </nav>
 
-          {/* Zone 3: Balance shortcut + Avatar bubble + 3-dots settings menu */}
-          <div className="flex items-center gap-2 sm:gap-2.5 shrink-0 relative">
-            {!authReady ? (
-              <span className="text-xs text-slate-400 whitespace-nowrap">Carregando...</span>
-            ) : firebaseUser ? (
-              <div ref={menuContainerRef} className="relative flex items-center gap-2">
+          {/* Bottom-Left Gift Invite Promo Card matching Screenshot */}
+          <div className="px-3 pb-3 pt-1 shrink-0 space-y-2">
+            <div className="rounded-2xl border border-emerald-200 dark:border-lime-500/30 bg-gradient-to-b from-emerald-50 via-white to-emerald-50/70 dark:from-[#122014] dark:via-[#0d1410] dark:to-[#090d12] p-3.5 text-center space-y-2.5 shadow-sm">
+              <div className="w-10 h-10 rounded-xl bg-emerald-600/15 dark:bg-lime-400/20 border border-emerald-500/30 dark:border-lime-400/40 text-emerald-700 dark:text-lime-300 flex items-center justify-center mx-auto">
+                <Gift className="w-5 h-5" />
+              </div>
+              <p className="text-xs font-bold text-slate-900 dark:text-zinc-100 leading-snug">
+                Convide amigos e ganhe pontos extras!
+              </p>
+              <button
+                type="button"
+                onClick={() => handleSelectTab('invites')}
+                className="w-full min-h-[40px] px-3 py-2 rounded-xl bg-lime-400 hover:bg-lime-300 text-slate-950 text-xs font-extrabold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+              >
+                <Users className="w-3.5 h-3.5" />
+                Convidar
+              </button>
+            </div>
+
+            <div className="grid grid-cols-3 gap-1">
+              <button
+                type="button"
+                onClick={() => setTheme(isBlackTheme ? 'light' : 'dark')}
+                title={isBlackTheme ? 'Mudar para Tema Claro' : 'Mudar para Tema Escuro'}
+                className="min-h-[36px] flex items-center justify-center gap-1 px-2 py-1.5 rounded-xl border border-slate-200 dark:border-zinc-800 text-[11px] font-semibold text-slate-700 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-900 cursor-pointer"
+              >
+                {isBlackTheme ? <Sun className="w-3.5 h-3.5 text-amber-400" /> : <Moon className="w-3.5 h-3.5" />}
+                <span>{isBlackTheme ? 'Claro' : 'Escuro'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setTutorialOpen(true)}
+                className="min-h-[36px] flex items-center justify-center gap-1 px-2 py-1.5 rounded-xl border border-slate-200 dark:border-zinc-800 text-[11px] font-semibold text-slate-700 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-900 cursor-pointer"
+              >
+                <HelpCircle className="w-3.5 h-3.5" />
+                <span>Guia</span>
+              </button>
+              {firebaseUser && (
+                <button
+                  type="button"
+                  onClick={logout}
+                  className="min-h-[36px] flex items-center justify-center gap-1 px-2 py-1.5 rounded-xl border border-red-200/80 dark:border-red-900/50 text-[11px] font-semibold text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 cursor-pointer"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                  <span>Sair</span>
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      {/* Main Content Area */}
+      <div className="relative z-10 flex-1 flex flex-col min-w-0">
+        {/* Top Bar with Live Search, Bell, Gift & Level Progress Profile Chip */}
+        <header
+          className={`sticky top-0 z-30 h-14 md:h-16 px-3.5 sm:px-6 border-b backdrop-blur-xl flex items-center justify-between gap-3 transition-colors ${
+            isBlackTheme
+              ? 'bg-[#070a0d]/85 border-zinc-800/80'
+              : 'bg-white/85 border-slate-200/80'
+          }`}
+        >
+          {/* Mobile Brand / Desktop Live Game Search */}
+          <div className="flex items-center gap-3 min-w-0 flex-1">
+            <button
+              type="button"
+              onClick={() => handleSelectTab('games')}
+              className="md:hidden cursor-pointer shrink-0"
+            >
+              <BrandLogo size="sm" />
+            </button>
+
+            <div className="hidden md:flex items-center gap-3 flex-1 max-w-md">
+              <div className="relative w-full">
+                <Search className="w-4 h-4 text-slate-400 dark:text-zinc-500 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type="search"
+                  value={gameSearchQuery}
+                  onChange={(e) => {
+                    setGameSearchQuery(e.target.value);
+                    if (!isBackofficeRoute && activeTab !== 'games') {
+                      setActiveTab('games');
+                    }
+                  }}
+                  placeholder="Buscar jogos..."
+                  className="w-full h-10 pl-10 pr-4 rounded-xl border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-[#0e1319] text-xs sm:text-sm text-slate-900 dark:text-zinc-100 placeholder:text-slate-400 dark:placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-lime-400"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Right Quick Actions matching Reference Screenshot */}
+          <div className="flex items-center gap-2 shrink-0">
+            {firebaseUser ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => handleSelectTab('notifications')}
+                  aria-label="Abrir Caixa de Correio"
+                  className={`relative min-w-[40px] min-h-[40px] p-2 rounded-full border flex items-center justify-center transition-colors cursor-pointer ${
+                    !isBackofficeRoute && activeTab === 'notifications'
+                      ? 'bg-emerald-50 dark:bg-lime-500/15 border-emerald-400 dark:border-lime-400 text-emerald-700 dark:text-lime-300'
+                      : isBlackTheme
+                        ? 'border-zinc-800 bg-[#0e1319] text-zinc-200 hover:border-lime-400/50'
+                        : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                  }`}
+                >
+                  <Inbox className="w-4 h-4" />
+                  {unreadMailboxCount > 0 && (
+                    <span className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-mono font-bold flex items-center justify-center tabular-nums">
+                      {unreadMailboxCount}
+                    </span>
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleSelectTab('invites')}
+                  aria-label="Abrir Convites e Códigos"
+                  className={`min-w-[40px] min-h-[40px] p-2 rounded-full border flex items-center justify-center transition-colors cursor-pointer ${
+                    !isBackofficeRoute && activeTab === 'invites'
+                      ? 'bg-emerald-50 dark:bg-lime-500/15 border-emerald-400 dark:border-lime-400 text-emerald-700 dark:text-lime-300'
+                      : isBlackTheme
+                        ? 'border-zinc-800 bg-[#0e1319] text-zinc-200 hover:border-lime-400/50'
+                        : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                  }`}
+                >
+                  <Gift className="w-4 h-4" />
+                </button>
+
                 <button
                   type="button"
                   onClick={() => handleSelectTab('wallet')}
-                  title="Ir para Carteira Pix"
-                  className={`px-3 sm:px-3.5 py-1.5 text-xs font-mono font-semibold text-white rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer tabular-nums ${
-                    isDarkView
-                      ? 'bg-emerald-600 hover:bg-emerald-500'
-                      : 'bg-slate-900 hover:bg-slate-800'
-                  }`}
+                  className="md:hidden min-h-[40px] px-2.5 py-1.5 rounded-xl bg-lime-400 hover:bg-lime-300 text-slate-950 text-xs font-mono font-extrabold tabular-nums transition-colors whitespace-nowrap cursor-pointer"
                 >
                   {formatBRL(userAccount?.brlBalanceCents || 0)}
                 </button>
@@ -276,416 +526,412 @@ function MainShell() {
                 <button
                   type="button"
                   onClick={() => handleSelectTab('profile')}
-                  title="Meu Perfil & Níveis"
-                  aria-label="Abrir Meu Perfil"
-                  className={`rounded-full p-0.5 transition-all cursor-pointer shrink-0 ${
-                    !isBackofficeRoute && activeTab === 'profile'
-                      ? 'ring-2 ring-emerald-500'
-                      : isDarkView
-                        ? 'hover:ring-2 hover:ring-zinc-600'
-                        : 'hover:ring-2 hover:ring-slate-300'
-                  }`}
+                  aria-label="Abrir Perfil e ID"
+                  className="hidden sm:inline-flex items-center gap-2.5 pl-1.5 pr-3 py-1 rounded-full border border-slate-200 dark:border-zinc-800 bg-white dark:bg-[#0e1319] hover:border-lime-400/60 transition-colors cursor-pointer"
                 >
                   <ProfileAvatar
                     name={userAccount?.displayName || firebaseUser.displayName || 'Jogador'}
                     photoURL={userAccount?.photoURL || firebaseUser.photoURL || ''}
-                    sizeClass="w-8 h-8 sm:w-9 sm:h-9"
-                    textSizeClass="text-xs"
+                    sizeClass="w-8 h-8"
+                    textSizeClass="text-[11px]"
                   />
+                  <div className="text-left min-w-0">
+                    <div className="text-xs font-bold text-slate-900 dark:text-white leading-tight max-w-[120px] truncate">
+                      {userAccount?.displayName || 'Perfil'}
+                    </div>
+                    {levelInfo && (
+                      <div className="flex items-center gap-1.5 mt-0.5">
+                        <span className="text-[10px] font-semibold text-slate-500 dark:text-zinc-400 whitespace-nowrap">
+                          Nível {levelInfo.level}
+                        </span>
+                        <span className="w-12 h-1.5 rounded-full bg-slate-200 dark:bg-zinc-800 overflow-hidden">
+                          <span
+                            className="block h-full bg-lime-400 rounded-full"
+                            style={{ width: `${levelInfo.progressPct}%` }}
+                          />
+                        </span>
+                      </div>
+                    )}
+                  </div>
                 </button>
 
                 <button
                   type="button"
-                  onClick={() => setAccountMenuOpen((o) => !o)}
-                  aria-label="Configurações e opções"
-                  aria-expanded={accountMenuOpen}
-                  title="Configurações e opções"
-                  className={`p-2 rounded-lg border transition-colors cursor-pointer shrink-0 ${
-                    accountMenuOpen
-                      ? isDarkView
-                        ? 'bg-zinc-800 border-zinc-700 text-zinc-50'
-                        : 'bg-slate-100 border-slate-300 text-slate-900'
-                      : isDarkView
-                        ? 'border-zinc-800 text-zinc-300 hover:bg-zinc-900 hover:text-zinc-50'
-                        : 'border-slate-200 text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+                  onClick={() => setMoreSheetOpen(true)}
+                  aria-label="Mais opções do app"
+                  className={`md:hidden min-w-[40px] min-h-[40px] p-2 rounded-xl border flex items-center justify-center cursor-pointer ${
+                    isBlackTheme
+                      ? 'border-zinc-800 bg-[#0e1319] text-zinc-200'
+                      : 'border-slate-200 bg-white text-slate-700'
                   }`}
                 >
-                  <MoreVertical className="w-4 h-4" />
+                  <MoreHorizontal className="w-4 h-4" />
                 </button>
-
-                {accountMenuOpen && (
-                  <div
-                    className={`absolute right-0 top-full mt-2 w-64 rounded-xl shadow-lg py-2 z-50 border ${
-                      isBlackTheme
-                        ? 'bg-zinc-900 border-zinc-800 text-zinc-100'
-                        : 'bg-white border-slate-200 text-slate-900'
-                    }`}
-                  >
-                    <div
-                      className={`px-4 py-2.5 border-b flex items-center gap-3 ${
-                        isBlackTheme ? 'border-zinc-800' : 'border-slate-100'
-                      }`}
-                    >
-                      <ProfileAvatar
-                        name={userAccount?.displayName || firebaseUser.displayName || 'Jogador'}
-                        photoURL={userAccount?.photoURL || firebaseUser.photoURL || ''}
-                        sizeClass="w-9 h-9"
-                        textSizeClass="text-xs"
-                      />
-                      <div className="min-w-0">
-                        <div className="text-xs font-semibold truncate">
-                          {userAccount?.displayName || firebaseUser.displayName}
-                        </div>
-                        <div className="text-[11px] font-mono text-slate-400 truncate">
-                          {firebaseUser.email}
-                        </div>
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => handleSelectTab('profile')}
-                      className={`w-full text-left px-4 py-2 text-xs font-medium flex items-center gap-2 cursor-pointer ${
-                        isDarkView
-                          ? 'text-zinc-200 hover:bg-zinc-800'
-                          : 'text-slate-700 hover:bg-slate-50'
-                      }`}
-                    >
-                      <User className="w-3.5 h-3.5" />
-                      Meu Perfil & Níveis
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleSelectTab('wallet')}
-                      className={`w-full text-left px-4 py-2 text-xs font-medium flex items-center gap-2 cursor-pointer ${
-                        isDarkView
-                          ? 'text-zinc-200 hover:bg-zinc-800'
-                          : 'text-slate-700 hover:bg-slate-50'
-                      }`}
-                    >
-                      <Wallet className="w-3.5 h-3.5" />
-                      Carteira & Saque Pix
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleSelectTab('invites')}
-                      className={`w-full text-left px-4 py-2 text-xs font-medium flex items-center gap-2 cursor-pointer ${
-                        isDarkView
-                          ? 'text-zinc-200 hover:bg-zinc-800'
-                          : 'text-slate-700 hover:bg-slate-50'
-                      }`}
-                    >
-                      <Ticket className="w-3.5 h-3.5" />
-                      Convites & Códigos
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleSelectTab('notifications')}
-                      className={`w-full text-left px-4 py-2 text-xs font-medium flex items-center justify-between cursor-pointer ${
-                        isDarkView
-                          ? 'text-zinc-200 hover:bg-zinc-800'
-                          : 'text-slate-700 hover:bg-slate-50'
-                      }`}
-                    >
-                      <span className="inline-flex items-center gap-2">
-                        <Inbox className="w-3.5 h-3.5" />
-                        Caixa de Correio
-                      </span>
-                      {unreadMailboxCount > 0 && (
-                        <span className="text-[11px] font-mono font-bold text-emerald-600 dark:text-emerald-400">
-                          {unreadMailboxCount}
-                        </span>
-                      )}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleSelectTab('dashboard')}
-                      className={`w-full text-left px-4 py-2 text-xs font-medium flex items-center gap-2 cursor-pointer ${
-                        isDarkView
-                          ? 'text-zinc-200 hover:bg-zinc-800'
-                          : 'text-slate-700 hover:bg-slate-50'
-                      }`}
-                    >
-                      <BarChart3 className="w-3.5 h-3.5" />
-                      Resumo Financeiro
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleSelectTab('settings')}
-                      className={`w-full text-left px-4 py-2 text-xs font-medium flex items-center justify-between cursor-pointer ${
-                        isDarkView
-                          ? 'text-zinc-200 hover:bg-zinc-800'
-                          : 'text-slate-700 hover:bg-slate-50'
-                      }`}
-                    >
-                      <span className="inline-flex items-center gap-2">
-                        <Settings className="w-3.5 h-3.5" />
-                        Configurações
-                      </span>
-                      <span className="text-[10px] text-slate-400">
-                        {isBlackTheme ? 'Preto' : 'Claro'}
-                      </span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setAccountMenuOpen(false);
-                        setTutorialOpen(true);
-                      }}
-                      className={`w-full text-left px-4 py-2 text-xs font-medium flex items-center gap-2 cursor-pointer ${
-                        isDarkView
-                          ? 'text-zinc-200 hover:bg-zinc-800'
-                          : 'text-slate-700 hover:bg-slate-50'
-                      }`}
-                    >
-                      <HelpCircle className="w-3.5 h-3.5" />
-                      Tutorial de Boas-vindas
-                    </button>
-                    <div
-                      className={`my-1 border-t ${
-                        isBlackTheme ? 'border-zinc-800' : 'border-slate-100'
-                      }`}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setAccountMenuOpen(false);
-                        logout();
-                      }}
-                      className={`w-full text-left px-4 py-2 text-xs font-medium text-red-500 flex items-center gap-2 cursor-pointer ${
-                        isDarkView ? 'hover:bg-red-950/40' : 'hover:bg-red-50'
-                      }`}
-                    >
-                      <LogOut className="w-3.5 h-3.5" />
-                      Sair da conta
-                    </button>
-                  </div>
-                )}
-              </div>
+              </>
             ) : (
               <button
                 type="button"
                 onClick={signInWithGoogle}
-                className={`px-4 py-2 text-xs font-semibold text-white rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                  isDarkView
-                    ? 'bg-emerald-600 hover:bg-emerald-500'
-                    : 'bg-slate-900 hover:bg-slate-800'
-                }`}
+                className="min-h-[40px] px-4 py-2 text-xs font-extrabold bg-lime-400 hover:bg-lime-300 text-slate-950 rounded-xl transition-colors cursor-pointer"
               >
                 Entrar com Google
               </button>
             )}
-
-            <button
-              type="button"
-              onClick={() => setMobileMenuOpen((v) => !v)}
-              aria-label="Abrir menu"
-              className={`md:hidden p-2 rounded-lg border cursor-pointer ${
-                isDarkView
-                  ? 'border-zinc-800 text-zinc-200 hover:bg-zinc-900'
-                  : 'border-slate-200 text-slate-700 hover:bg-slate-50'
-              }`}
-            >
-              {mobileMenuOpen ? <X className="w-4 h-4" /> : <Menu className="w-4 h-4" />}
-            </button>
           </div>
-        </div>
+        </header>
 
-        {mobileMenuOpen && (
-          <div
-            className={`md:hidden border-t px-4 py-3 flex flex-wrap gap-2 ${
-              isBlackTheme
-                ? 'border-zinc-800 bg-black'
-                : 'border-slate-200 bg-white'
-            }`}
-          >
-            {navItems.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => handleSelectTab(item.id)}
-                className={`px-3 py-2 text-xs font-semibold rounded-lg whitespace-nowrap ${
-                  !isBackofficeRoute && activeTab === item.id
-                    ? isDarkView
-                      ? 'bg-emerald-600 text-white'
-                      : 'bg-slate-900 text-white'
-                    : isDarkView
-                      ? 'bg-zinc-900 text-zinc-300 border border-zinc-800'
-                      : 'bg-slate-100 text-slate-700'
-                }`}
-              >
-                {item.label}
-              </button>
-            ))}
-            <button
-              type="button"
-              onClick={() => handleSelectTab('dashboard')}
-              className={`px-3 py-2 text-xs font-semibold rounded-lg whitespace-nowrap ${
-                !isBackofficeRoute && activeTab === 'dashboard'
-                  ? isDarkView
-                    ? 'bg-emerald-600 text-white'
-                    : 'bg-slate-900 text-white'
-                  : isDarkView
-                    ? 'bg-zinc-900 text-zinc-300 border border-zinc-800'
-                    : 'bg-slate-100 text-slate-700'
-              }`}
-            >
-              Resumo
-            </button>
-            <button
-              type="button"
-              onClick={() => handleSelectTab('settings')}
-              className={`px-3 py-2 text-xs font-semibold rounded-lg whitespace-nowrap ${
-                !isBackofficeRoute && activeTab === 'settings'
-                  ? isDarkView
-                    ? 'bg-emerald-600 text-white'
-                    : 'bg-slate-900 text-white'
-                  : isDarkView
-                    ? 'bg-zinc-900 text-zinc-300 border border-zinc-800'
-                    : 'bg-slate-100 text-slate-700'
-              }`}
-            >
-              Configurações
-            </button>
-          </div>
-        )}
-      </header>
+        <SocialPresence />
 
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-8">
-        {authError && (
-          <div className="mb-6 p-4 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 rounded-xl text-xs text-red-800 dark:text-red-300">
-            {authError}
+        {/* Admin Notice Strip if viewing Backoffice while Maintenance is active */}
+        {isBackofficeRoute && maintenanceSettings.enabled && (
+          <div className="bg-amber-500/15 border-b border-amber-500/30 px-4 py-2.5 text-xs font-semibold text-amber-800 dark:text-amber-200 flex flex-wrap items-center justify-center gap-2 text-center">
+            <Wrench className="w-4 h-4 shrink-0" />
+            <span>
+              Modo Manutenção está ATIVO para jogadores. Você está acessando o Painel Administrativo normalmente.
+            </span>
           </div>
         )}
 
-        {isBackofficeRoute ? (
-          !authReady ? (
-            <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-10 text-center text-sm text-slate-500 dark:text-zinc-400">
-              Verificando credenciais...
+        {/* Main Scroll View */}
+        <main className="flex-1 max-w-[1360px] w-full mx-auto px-3.5 sm:px-6 pt-5 pb-24 md:py-7">
+          {authError && (
+            <div className="mb-5 p-4 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 rounded-2xl text-xs text-red-800 dark:text-red-300">
+              {authError}
             </div>
-          ) : !firebaseUser ? (
-            <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-10 text-center max-w-md mx-auto space-y-4">
-              <ShieldAlert className="w-8 h-8 text-slate-700 dark:text-zinc-300 mx-auto" />
-              <h2 className="text-lg font-bold text-slate-900 dark:text-zinc-50">
-                Portal Restrito de Operações
-              </h2>
-              <p className="text-xs text-slate-600 dark:text-zinc-400">
-                Autentique-se com a conta administradora autorizada para acessar esta área.
-              </p>
-              <div className="flex justify-center gap-2">
-                <button
-                  type="button"
-                  onClick={signInWithGoogle}
-                  className="px-4 py-2 text-xs font-semibold bg-slate-900 dark:bg-emerald-600 text-white rounded-lg hover:bg-slate-800 dark:hover:bg-emerald-500 cursor-pointer"
-                >
-                  Entrar com Google
-                </button>
+          )}
+
+          {isBackofficeRoute ? (
+            !authReady ? (
+              <div className="bg-white/95 dark:bg-[#0e1319]/95 backdrop-blur-md border border-slate-200 dark:border-zinc-800 rounded-3xl p-10 text-center text-sm text-slate-500 dark:text-zinc-400">
+                Verificando credenciais...
+              </div>
+            ) : !firebaseUser ? (
+              <div className="bg-white/95 dark:bg-[#0e1319]/95 backdrop-blur-md border border-slate-200 dark:border-zinc-800 rounded-3xl p-8 sm:p-10 text-center max-w-md mx-auto space-y-4">
+                <ShieldAlert className="w-8 h-8 text-slate-700 dark:text-zinc-300 mx-auto" />
+                <h2 className="text-lg font-bold text-slate-900 dark:text-zinc-50">
+                  Portal Restrito de Operações
+                </h2>
+                <p className="text-xs text-slate-600 dark:text-zinc-400">
+                  Autentique-se com a conta administradora autorizada para acessar esta área.
+                </p>
+                <div className="flex justify-center gap-2">
+                  <button
+                    type="button"
+                    onClick={signInWithGoogle}
+                    className="min-h-[44px] px-4 py-2 text-xs font-bold bg-lime-400 text-slate-950 rounded-xl hover:bg-lime-300 cursor-pointer"
+                  >
+                    Entrar com Google
+                  </button>
+                  <button
+                    type="button"
+                    onClick={exitBackoffice}
+                    className="min-h-[44px] px-4 py-2 text-xs font-semibold border border-slate-300 dark:border-zinc-700 text-slate-700 dark:text-zinc-200 rounded-xl hover:bg-slate-50 dark:hover:bg-zinc-800 cursor-pointer"
+                  >
+                    Voltar ao App
+                  </button>
+                </div>
+              </div>
+            ) : !isAdmin ? (
+              <div className="bg-white/95 dark:bg-[#0e1319]/95 backdrop-blur-md border border-slate-200 dark:border-zinc-800 rounded-3xl p-8 sm:p-10 text-center max-w-md mx-auto space-y-4">
+                <ShieldAlert className="w-8 h-8 text-red-600 dark:text-red-400 mx-auto" />
+                <h2 className="text-lg font-bold text-slate-900 dark:text-zinc-50">Acesso Negado</h2>
+                <p className="text-xs text-slate-600 dark:text-zinc-400">
+                  Esta conta não possui permissão administrativa.
+                </p>
                 <button
                   type="button"
                   onClick={exitBackoffice}
-                  className="px-4 py-2 text-xs font-semibold border border-slate-300 dark:border-zinc-700 text-slate-700 dark:text-zinc-200 rounded-lg hover:bg-slate-50 dark:hover:bg-zinc-800 cursor-pointer"
+                  className="min-h-[44px] px-4 py-2 text-xs font-bold bg-lime-400 text-slate-950 rounded-xl hover:bg-lime-300 cursor-pointer"
                 >
-                  Voltar ao App
+                  Voltar para Jogos
                 </button>
               </div>
-            </div>
-          ) : !isAdmin ? (
-            <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-10 text-center max-w-md mx-auto space-y-4">
-              <ShieldAlert className="w-8 h-8 text-red-600 dark:text-red-400 mx-auto" />
-              <h2 className="text-lg font-bold text-slate-900 dark:text-zinc-50">Acesso Negado</h2>
-              <p className="text-xs text-slate-600 dark:text-zinc-400">
-                Esta conta não possui permissão administrativa.
-              </p>
-              <button
-                type="button"
-                onClick={exitBackoffice}
-                className="px-4 py-2 text-xs font-semibold bg-slate-900 dark:bg-emerald-600 text-white rounded-lg hover:bg-slate-800 dark:hover:bg-emerald-500 cursor-pointer"
+            ) : (
+              <Suspense
+                fallback={
+                  <div className="bg-white/95 dark:bg-[#0e1319]/95 backdrop-blur-md border border-slate-200 dark:border-zinc-800 rounded-3xl p-10 text-center text-sm text-slate-500 dark:text-zinc-400">
+                    Carregando painel administrativo...
+                  </div>
+                }
               >
-                Voltar para Jogos
-              </button>
-            </div>
-          ) : (
-            <Suspense
-              fallback={
-                <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-10 text-center text-sm text-slate-500 dark:text-zinc-400">
-                  Carregando painel administrativo...
+                <div className="space-y-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <button
+                      type="button"
+                      onClick={exitBackoffice}
+                      className="inline-flex items-center gap-1.5 min-h-[42px] px-3.5 py-2 rounded-xl bg-white/95 dark:bg-[#0e1319]/95 border border-slate-200 dark:border-zinc-800 text-xs font-bold text-slate-700 dark:text-zinc-200 hover:border-lime-400 cursor-pointer"
+                    >
+                      ← Voltar para o Aplicativo
+                    </button>
+                    <span className="text-xs font-mono text-slate-500 dark:text-zinc-400">
+                      {TAB_TITLES[activeTab] ? 'Backoffice Seguro' : ''}
+                    </span>
+                  </div>
+                  <AdminPanel />
                 </div>
-              }
-            >
-              <AdminPanel />
-            </Suspense>
-          )
-        ) : (
-          <>
-            {activeTab === 'games' && (
-              <GamesHub
-                onNavigateWallet={() => setActiveTab('wallet')}
-                onNavigateProfile={() => setActiveTab('profile')}
-                onNavigateInvites={() => setActiveTab('invites')}
-                onNavigateMailbox={() => setActiveTab('notifications')}
-                onNavigateRanking={() => setActiveTab('ranking')}
-              />
-            )}
-            {activeTab === 'invites' && <InvitesAndCodesSection />}
-            {activeTab === 'ranking' && (
-              <GlobalRanking
-                onGoToGames={() => setActiveTab('games')}
-                onGoToWallet={() => setActiveTab('wallet')}
-              />
-            )}
-            {activeTab === 'profile' && <PlayerProfile />}
-            {activeTab === 'wallet' && <WalletSection />}
-            {activeTab === 'dashboard' && <DashboardSection />}
-            {activeTab === 'notifications' && <NotificationsSection />}
-            {activeTab === 'settings' && (
-              <SettingsSection
-                theme={theme}
-                onChangeTheme={setTheme}
-                onNavigateProfile={() => handleSelectTab('profile')}
-                onNavigateWallet={() => handleSelectTab('wallet')}
-              />
-            )}
-          </>
-        )}
-      </main>
+              </Suspense>
+            )
+          ) : (
+            <>
+              {activeTab === 'games' && (
+                <GamesHub
+                  searchQuery={gameSearchQuery}
+                  onSearchQueryChange={setGameSearchQuery}
+                  onNavigateWallet={() => handleSelectTab('wallet')}
+                  onNavigateProfile={() => handleSelectTab('profile')}
+                  onNavigateInvites={() => handleSelectTab('invites')}
+                  onNavigateMailbox={() => handleSelectTab('notifications')}
+                  onNavigateRanking={() => handleSelectTab('ranking')}
+                  onNavigateFriends={() => handleSelectTab('friends')}
+                  onInspectPlayer={(player, rank) => setInspectedPlayer({ player, rank })}
+                />
+              )}
+              {activeTab === 'ranking' && (
+                <GlobalRanking
+                  onGoToGames={() => handleSelectTab('games')}
+                  onGoToWallet={() => handleSelectTab('wallet')}
+                  onInspectPlayer={(player, rank) => setInspectedPlayer({ player, rank })}
+                />
+              )}
+              {activeTab === 'friends' && (
+                <SocialSection
+                  initialSelectedUid={friendChatTargetUid}
+                  onInspectPlayer={(player, rank) => setInspectedPlayer({ player, rank })}
+                />
+              )}
+              {activeTab === 'invites' && <InvitesAndCodesSection />}
+              {activeTab === 'profile' && <PlayerProfile />}
+              {activeTab === 'wallet' && <WalletSection />}
+              {activeTab === 'support' && <SupportChatSection />}
+              {activeTab === 'dashboard' && <DashboardSection />}
+              {activeTab === 'notifications' && <NotificationsSection />}
+              {activeTab === 'settings' && (
+                <SettingsSection
+                  theme={theme}
+                  onChangeTheme={setTheme}
+                  onNavigateProfile={() => handleSelectTab('profile')}
+                  onNavigateWallet={() => handleSelectTab('wallet')}
+                />
+              )}
+            </>
+          )}
+        </main>
+      </div>
 
-      <footer
-        className={`border-t transition-colors ${
-          isBlackTheme
-            ? 'border-zinc-800 bg-black'
-            : 'border-slate-200 bg-white'
-        }`}
-      >
-        <div
-          className={`max-w-7xl mx-auto px-4 sm:px-6 py-6 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs ${
-            isDarkView ? 'text-zinc-400' : 'text-slate-500'
+      {/* Mobile Fixed Bottom Navigation Dock (Thumb Zone) */}
+      {!isBackofficeRoute && (
+        <nav
+          aria-label="Menu inferior do aplicativo"
+          className={`md:hidden fixed bottom-0 inset-x-0 z-30 h-16 border-t backdrop-blur-xl grid grid-cols-5 px-1 transition-colors ${
+            isBlackTheme
+              ? 'bg-[#090d12]/95 border-zinc-800/90'
+              : 'bg-white/95 border-slate-200/90'
           }`}
         >
-          <span>Earn Easy · 1.000 pontos = R$ 0,10 · Limite de 1 conversão diária · Saque Pix mínimo R$ 5,00</span>
-          <div className="flex items-center gap-4">
-            <button
-              type="button"
-              onClick={() => setTutorialOpen(true)}
-              className={`inline-flex items-center gap-1.5 font-medium underline underline-offset-4 cursor-pointer ${
-                isDarkView ? 'text-zinc-200 hover:text-white' : 'text-slate-700 hover:text-slate-900'
-              }`}
-            >
-              <HelpCircle className="w-3.5 h-3.5" />
-              Tutorial
-            </button>
-            <button
-              type="button"
-              onClick={() => handleSelectTab('settings')}
-              className={`inline-flex items-center gap-1.5 font-medium underline underline-offset-4 cursor-pointer ${
-                isDarkView ? 'text-zinc-200 hover:text-white' : 'text-slate-700 hover:text-slate-900'
-              }`}
-            >
-              <Settings className="w-3.5 h-3.5" />
-              Configurações ({isBlackTheme ? 'Tema Preto' : 'Tema Claro'})
-            </button>
-            <span>Autenticação Firebase & Proteção Antifraude</span>
+          {[
+            { id: 'games' as NavTab, label: 'Início', Icon: Home },
+            { id: 'ranking' as NavTab, label: 'Ranking', Icon: Trophy },
+            { id: 'friends' as NavTab, label: 'Amigos', Icon: Users },
+            { id: 'wallet' as NavTab, label: 'Carteira', Icon: Wallet },
+          ].map(({ id, label, Icon }) => {
+            const active = activeTab === id;
+            return (
+              <button
+                key={id}
+                type="button"
+                onClick={() => handleSelectTab(id)}
+                className={`flex flex-col items-center justify-center gap-0.5 min-h-[44px] rounded-xl transition-colors cursor-pointer ${
+                  active
+                    ? 'text-emerald-700 dark:text-lime-400 font-bold'
+                    : 'text-slate-500 dark:text-zinc-400 font-medium'
+                }`}
+              >
+                <Icon className="w-5 h-5" />
+                <span className="text-[10px] leading-tight">{label}</span>
+              </button>
+            );
+          })}
+
+          <button
+            type="button"
+            onClick={() => setMoreSheetOpen(true)}
+            className={`flex flex-col items-center justify-center gap-0.5 min-h-[44px] rounded-xl transition-colors cursor-pointer relative ${
+              isSecondaryMobileTabActive
+                ? 'text-emerald-700 dark:text-lime-400 font-bold'
+                : 'text-slate-500 dark:text-zinc-400 font-medium'
+            }`}
+          >
+            <MoreHorizontal className="w-5 h-5" />
+            <span className="text-[10px] leading-tight">Menu</span>
+            {unreadMailboxCount > 0 && (
+              <span className="absolute top-1.5 right-3.5 w-2 h-2 rounded-full bg-red-500" />
+            )}
+          </button>
+        </nav>
+      )}
+
+      {/* Mobile "Menu" Action Sheet */}
+      {moreSheetOpen && (
+        <div
+          className="md:hidden fixed inset-0 z-50 flex items-end justify-center bg-black/70 backdrop-blur-sm"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setMoreSheetOpen(false);
+          }}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Mais seções do aplicativo"
+        >
+          <div className="w-full max-h-[85vh] overflow-y-auto rounded-t-3xl bg-white dark:bg-[#0e1319] border-t border-slate-200 dark:border-zinc-800 p-5 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2.5 min-w-0">
+                {userAccount && (
+                  <>
+                    <ProfileAvatar
+                      name={userAccount.displayName}
+                      photoURL={userAccount.photoURL}
+                      sizeClass="w-10 h-10"
+                      textSizeClass="text-xs"
+                    />
+                    <div className="min-w-0">
+                      <div className="text-sm font-bold text-slate-900 dark:text-white leading-snug">
+                        {userAccount.displayName}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleCopyOwnId}
+                        className="text-[11px] font-mono text-emerald-600 dark:text-lime-400 flex items-center gap-1 cursor-pointer"
+                      >
+                        {copiedSidebarId ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                        {copiedSidebarId ? 'ID Copiado!' : `Copiar ID: ${userAccount.uid}`}
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => setMoreSheetOpen(false)}
+                aria-label="Fechar menu"
+                className="min-w-[44px] min-h-[44px] rounded-xl bg-slate-100 dark:bg-zinc-800 flex items-center justify-center text-slate-600 dark:text-zinc-300 cursor-pointer shrink-0"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2.5">
+              <button
+                type="button"
+                onClick={() => handleSelectTab('invites')}
+                className="min-h-[48px] px-3.5 py-2.5 rounded-2xl bg-slate-50 dark:bg-[#090d12] border border-slate-200 dark:border-zinc-800 flex items-center gap-2.5 text-xs font-bold text-slate-800 dark:text-zinc-100 cursor-pointer"
+              >
+                <Ticket className="w-4 h-4 text-emerald-600 dark:text-lime-400 shrink-0" />
+                <span>Convites & Códigos</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSelectTab('notifications')}
+                className="min-h-[48px] px-3.5 py-2.5 rounded-2xl bg-slate-50 dark:bg-[#090d12] border border-slate-200 dark:border-zinc-800 flex items-center gap-2.5 text-xs font-bold text-slate-800 dark:text-zinc-100 cursor-pointer"
+              >
+                <Inbox className="w-4 h-4 text-emerald-600 dark:text-lime-400 shrink-0" />
+                <span>Correio{unreadMailboxCount > 0 ? ` (${unreadMailboxCount})` : ''}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSelectTab('profile')}
+                className="min-h-[48px] px-3.5 py-2.5 rounded-2xl bg-slate-50 dark:bg-[#090d12] border border-slate-200 dark:border-zinc-800 flex items-center gap-2.5 text-xs font-bold text-slate-800 dark:text-zinc-100 cursor-pointer"
+              >
+                <User className="w-4 h-4 text-emerald-600 dark:text-lime-400 shrink-0" />
+                <span>Perfil & Foto</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSelectTab('support')}
+                className="min-h-[48px] px-3.5 py-2.5 rounded-2xl bg-slate-50 dark:bg-[#090d12] border border-slate-200 dark:border-zinc-800 flex items-center gap-2.5 text-xs font-bold text-slate-800 dark:text-zinc-100 cursor-pointer"
+              >
+                <Headset className="w-4 h-4 text-emerald-600 dark:text-lime-400 shrink-0" />
+                <span>Suporte (Biel)</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSelectTab('dashboard')}
+                className="min-h-[48px] px-3.5 py-2.5 rounded-2xl bg-slate-50 dark:bg-[#090d12] border border-slate-200 dark:border-zinc-800 flex items-center gap-2.5 text-xs font-bold text-slate-800 dark:text-zinc-100 cursor-pointer"
+              >
+                <BarChart3 className="w-4 h-4 text-emerald-600 dark:text-lime-400 shrink-0" />
+                <span>Resumo Financeiro</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSelectTab('settings')}
+                className="min-h-[48px] px-3.5 py-2.5 rounded-2xl bg-slate-50 dark:bg-[#090d12] border border-slate-200 dark:border-zinc-800 flex items-center gap-2.5 text-xs font-bold text-slate-800 dark:text-zinc-100 cursor-pointer"
+              >
+                <Settings className="w-4 h-4 text-emerald-600 dark:text-lime-400 shrink-0" />
+                <span>Configurações</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setMoreSheetOpen(false);
+                  setTheme(isBlackTheme ? 'light' : 'dark');
+                }}
+                className="min-h-[48px] px-3.5 py-2.5 rounded-2xl bg-slate-50 dark:bg-[#090d12] border border-slate-200 dark:border-zinc-800 flex items-center gap-2.5 text-xs font-bold text-slate-800 dark:text-zinc-100 cursor-pointer"
+              >
+                {isBlackTheme ? <Sun className="w-4 h-4 text-amber-400 shrink-0" /> : <Moon className="w-4 h-4 text-slate-600 shrink-0" />}
+                <span>{isBlackTheme ? 'Tema Claro' : 'Tema Escuro'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setMoreSheetOpen(false);
+                  setTutorialOpen(true);
+                }}
+                className="min-h-[48px] px-3.5 py-2.5 rounded-2xl bg-slate-50 dark:bg-[#090d12] border border-slate-200 dark:border-zinc-800 flex items-center gap-2.5 text-xs font-bold text-slate-800 dark:text-zinc-100 cursor-pointer"
+              >
+                <HelpCircle className="w-4 h-4 text-emerald-600 dark:text-lime-400 shrink-0" />
+                <span>Tutorial</span>
+              </button>
+            </div>
+
+            {isAdmin && (
+              <button
+                type="button"
+                onClick={enterBackoffice}
+                className="w-full min-h-[46px] px-4 py-2.5 rounded-2xl bg-lime-400 hover:bg-lime-300 text-slate-950 text-xs font-extrabold flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <ShieldCheck className="w-4 h-4" />
+                Abrir Painel Administrativo
+              </button>
+            )}
+
+            {firebaseUser && (
+              <button
+                type="button"
+                onClick={() => {
+                  setMoreSheetOpen(false);
+                  logout();
+                }}
+                className="w-full min-h-[44px] px-4 py-2.5 rounded-2xl border border-red-200 dark:border-red-900/60 text-red-600 dark:text-red-400 text-xs font-semibold flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <LogOut className="w-4 h-4" />
+                Sair da Conta
+              </button>
+            )}
           </div>
         </div>
-      </footer>
+      )}
+
+      {/* Player Inspector Modal */}
+      <PlayerInspectorModal
+        player={inspectedPlayer?.player || null}
+        rank={inspectedPlayer?.rank ?? null}
+        onClose={() => setInspectedPlayer(null)}
+        onGoToFriendsChat={(targetUid) => {
+          setFriendChatTargetUid(targetUid);
+          handleSelectTab('friends');
+        }}
+        onEditMyProfile={() => handleSelectTab('profile')}
+      />
+
+      {!isBackofficeRoute && <FloatingSupportWidget externalOpenSignal={supportOpenSignal} />}
 
       <WelcomeTutorialModal
         open={tutorialOpen}

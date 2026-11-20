@@ -7,6 +7,7 @@ import {
 } from 'firebase/auth';
 import {
   collection,
+  deleteDoc,
   doc,
   getDoc,
   increment,
@@ -30,6 +31,7 @@ import {
   ADMIN_BOOTSTRAP_EMAIL,
   CENTS_PER_BLOCK,
   DailyCheckin,
+  DEFAULT_MAINTENANCE_SETTINGS,
   DEFAULT_WITHDRAWAL_SETTINGS,
   EmailNotification,
   FraudEvent,
@@ -37,6 +39,7 @@ import {
   GameSession,
   LevelReward,
   MailboxMessage,
+  MaintenanceSettings,
   MAX_CONFIGURABLE_WITHDRAWAL_CENTS,
   MIN_CONFIGURABLE_WITHDRAWAL_CENTS,
   PixKeyType,
@@ -75,10 +78,47 @@ import {
   formatPoints,
   formatScheduleRemaining,
   formatScheduleTime,
+  getServerNowMs,
   getTodayUtcDate,
   getUtcDateDaysAgo,
+  syncServerUtcClock,
   timestampToMillis,
 } from '../utils/pix';
+
+function isFirestoreSdkError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const maybe = error as { code?: unknown; name?: unknown };
+  return (
+    typeof maybe.code === 'string' ||
+    maybe.name === 'FirebaseError'
+  );
+}
+
+function handleTransactionError(
+  error: unknown,
+  operationType: OperationType,
+  path: string
+): never {
+  if (isFirestoreSdkError(error)) {
+    handleFirestoreError(error, operationType, path);
+  }
+  throw error instanceof Error ? error : new Error(String(error));
+}
+
+function sanitizePhotoUrl(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return '';
+  if (/^data:image\/(jpeg|jpg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(trimmed)) {
+    if (trimmed.length > 60000) {
+      throw new Error('A imagem da galeria excedeu o tamanho máximo permitido. Escolha outra foto menor.');
+    }
+    return trimmed;
+  }
+  if (trimmed.startsWith('data:')) {
+    throw new Error('Formato de imagem inválido. Use JPEG, PNG ou WebP.');
+  }
+  return trimmed.slice(0, 500);
+}
 
 interface AuthContextValue {
   firebaseUser: User | null;
@@ -101,6 +141,7 @@ interface AuthContextValue {
   readMailboxIds: string[];
   unreadMailboxCount: number;
   withdrawalSettings: WithdrawalSettings;
+  maintenanceSettings: MaintenanceSettings;
   isFirstWithdrawalEligible: boolean;
   activeMinWithdrawalCents: number;
   needsOnboarding: boolean;
@@ -112,6 +153,15 @@ interface AuthContextValue {
   sendTestBrowserNotification: () => boolean;
   markMailboxRead: (messageId: string) => void;
   markAllMailboxRead: () => void;
+  deleteMailboxMessage: (messageId: string) => Promise<void>;
+  clearAllMailboxMessages: () => Promise<void>;
+  deleteEmailNotification: (notificationId: string) => Promise<void>;
+  updateMaintenanceSettings: (params: {
+    enabled: boolean;
+    title: string;
+    message: string;
+    estimatedReturn: string;
+  }) => Promise<void>;
   signInWithGoogle: () => Promise<void>;
   logout: () => Promise<void>;
   createUserAccount: (params: {
@@ -270,10 +320,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [myInvitedReferrals, setMyInvitedReferrals] = useState<Referral[]>([]);
   const [publicPromoEvents, setPublicPromoEvents] = useState<PromoCode[]>([]);
   const [myPromoRedemptions, setMyPromoRedemptions] = useState<PromoRedemption[]>([]);
-  const [mailboxMessages, setMailboxMessages] = useState<MailboxMessage[]>([]);
+  const [rawMailboxMessages, setRawMailboxMessages] = useState<MailboxMessage[]>([]);
+  const [deletedMailboxIds, setDeletedMailboxIds] = useState<string[]>([]);
   const [readMailboxIds, setReadMailboxIds] = useState<string[]>([]);
   const [withdrawalSettings, setWithdrawalSettings] =
     useState<WithdrawalSettings>(DEFAULT_WITHDRAWAL_SETTINGS);
+  const [maintenanceSettings, setMaintenanceSettings] =
+    useState<MaintenanceSettings>(DEFAULT_MAINTENANCE_SETTINGS);
   const [authError, setAuthError] = useState<string | null>(null);
   const [browserNotifPermission, setBrowserNotifPermission] =
     useState<BrowserNotificationPermissionState>(() => getBrowserNotificationPermission());
@@ -339,7 +392,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setMyInvitedReferrals([]);
         setPublicPromoEvents([]);
         setMyPromoRedemptions([]);
-        setMailboxMessages([]);
+        setRawMailboxMessages([]);
+        setDeletedMailboxIds([]);
         setReadMailboxIds([]);
         setWithdrawalSettings(DEFAULT_WITHDRAWAL_SETTINGS);
         lastSyncedLbSigRef.current = '';
@@ -391,6 +445,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               !lbData ||
               lbData.brlBalanceCents !== userData.brlBalanceCents ||
               lbData.pointsBalance !== userData.pointsBalance ||
+              lbData.lifetimePoints !== userData.lifetimePoints ||
               lbData.gamesPlayed !== userData.gamesPlayed ||
               lbData.displayName !== userData.displayName ||
               lbData.photoURL !== userData.photoURL ||
@@ -402,6 +457,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 photoURL: userData.photoURL,
                 brlBalanceCents: userData.brlBalanceCents,
                 pointsBalance: userData.pointsBalance,
+                lifetimePoints: userData.lifetimePoints,
                 gamesPlayed: userData.gamesPlayed,
                 status: userData.status,
                 updatedAt: serverTimestamp(),
@@ -428,7 +484,45 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     });
 
+    void syncServerUtcClock();
+
     return () => unsubAuth();
+  }, []);
+
+  // Global listener for platform Maintenance Mode (readable even before sign-in)
+  useEffect(() => {
+    const unsubMaintenance = onSnapshot(
+      doc(db, 'appSettings', 'maintenance'),
+      (snap) => {
+        if (!snap.exists()) {
+          setMaintenanceSettings(DEFAULT_MAINTENANCE_SETTINGS);
+          return;
+        }
+        const raw = snap.data() as Partial<MaintenanceSettings>;
+        setMaintenanceSettings({
+          settingId: 'maintenance',
+          enabled: Boolean(raw.enabled),
+          title:
+            typeof raw.title === 'string' && raw.title.trim()
+              ? raw.title.trim()
+              : DEFAULT_MAINTENANCE_SETTINGS.title,
+          message:
+            typeof raw.message === 'string' && raw.message.trim()
+              ? raw.message.trim()
+              : DEFAULT_MAINTENANCE_SETTINGS.message,
+          estimatedReturn:
+            typeof raw.estimatedReturn === 'string'
+              ? raw.estimatedReturn.trim()
+              : DEFAULT_MAINTENANCE_SETTINGS.estimatedReturn,
+          updatedBy: typeof raw.updatedBy === 'string' ? raw.updatedBy : 'admin',
+          updatedAt: raw.updatedAt ?? null,
+        });
+      },
+      () => {
+        // Fallback smoothly if maintenance document does not exist yet
+      }
+    );
+    return () => unsubMaintenance();
   }, []);
 
   // Attach real-time Firestore listeners ONLY when authReady && firebaseUser
@@ -443,7 +537,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           const uData = snap.data() as UserAccount;
           setUserAccount(uData);
           if (uData.status === 'active') {
-            const sig = `${uData.pointsBalance}|${uData.brlBalanceCents}|${uData.gamesPlayed}|${uData.displayName}|${uData.photoURL}|${uData.status}`;
+            const sig = `${uData.pointsBalance}|${uData.lifetimePoints}|${uData.brlBalanceCents}|${uData.gamesPlayed}|${uData.displayName}|${uData.photoURL}|${uData.status}`;
             if (lastSyncedLbSigRef.current && lastSyncedLbSigRef.current !== sig) {
               setDoc(doc(db, 'leaderboard', uid), {
                 uid: uData.uid,
@@ -451,6 +545,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 photoURL: uData.photoURL,
                 brlBalanceCents: uData.brlBalanceCents,
                 pointsBalance: uData.pointsBalance,
+                lifetimePoints: uData.lifetimePoints,
                 gamesPlayed: uData.gamesPlayed,
                 status: uData.status,
                 updatedAt: serverTimestamp(),
@@ -652,7 +747,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const list = snap.docs
           .map((d) => d.data() as MailboxMessage)
           .sort((a, b) => timestampToMillis(b.createdAt) - timestampToMillis(a.createdAt));
-        setMailboxMessages(list);
+        setRawMailboxMessages(list);
 
         const now = Date.now();
         if (!mailboxInitRef.current) {
@@ -693,6 +788,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
       },
       (error) => handleFirestoreError(error, OperationType.LIST, 'mailboxMessages')
+    );
+
+    const unsubDeletedMailbox = onSnapshot(
+      collection(db, 'users', uid, 'deletedMailbox'),
+      (snap) => {
+        setDeletedMailboxIds(snap.docs.map((d) => d.id));
+      },
+      () => {
+        setDeletedMailboxIds([]);
+      }
     );
 
     const unsubWithdrawalSettings = onSnapshot(
@@ -783,6 +888,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       unsubPublicPromoEvents();
       unsubPromoRedemptions();
       unsubMailbox();
+      unsubDeletedMailbox();
       unsubWithdrawalSettings();
     };
   }, [authReady, firebaseUser]);
@@ -808,7 +914,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
       }
 
-      for (const m of mailboxMessages) {
+      for (const m of rawMailboxMessages) {
         const publishMs = timestampToMillis(m.publishAt);
         if (publishMs > 0 && publishMs <= now && !seenReleasedMailboxIdsRef.current.has(m.messageId)) {
           seenReleasedMailboxIdsRef.current.add(m.messageId);
@@ -832,7 +938,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }, 5000);
 
     return () => window.clearInterval(interval);
-  }, [authReady, firebaseUser, publicPromoEvents, mailboxMessages]);
+  }, [authReady, firebaseUser, publicPromoEvents, rawMailboxMessages]);
 
   const signInWithGoogle = async () => {
     setAuthError(null);
@@ -882,6 +988,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       throw new Error('Sua conta está em revisão antifraude ou suspensa. Contate o administrador.');
     }
 
+    await syncServerUtcClock();
     const safeDuration = Math.max(3000, Math.round(params.durationMs));
     const verification = await verifyGameSessionWithServer({
       userId: firebaseUser.uid,
@@ -906,13 +1013,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           throw new Error('Conta bloqueada para pontuação.');
         }
 
-        const commission = credited > 0 ? Math.floor(credited * REFERRAL_COMMISSION_RATE) : 0;
+        const commission = credited > 0 ? Math.floor((credited * 12) / 100) : 0;
         let activeReferrerData: Referral | null = null;
         if (refSnap.exists() && commission >= 1) {
           const candidateRef = refSnap.data() as Referral;
-          const refLbSnap = await tx.get(doc(db, 'leaderboard', candidateRef.referrerUid));
-          if (refLbSnap.exists() && refLbSnap.data().status === 'active') {
-            activeReferrerData = candidateRef;
+          if (candidateRef.referrerUid && candidateRef.referrerUid !== firebaseUser.uid) {
+            const refLbSnap = await tx.get(doc(db, 'leaderboard', candidateRef.referrerUid));
+            if (refLbSnap.exists() && refLbSnap.data().status === 'active') {
+              activeReferrerData = candidateRef;
+            }
           }
         }
 
@@ -954,13 +1063,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           photoURL: current.photoURL,
           brlBalanceCents: current.brlBalanceCents,
           pointsBalance: current.pointsBalance + credited,
+          lifetimePoints: current.lifetimePoints + credited,
           gamesPlayed: current.gamesPlayed + 1,
           status: current.status,
           updatedAt: serverTimestamp(),
         });
       });
     } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, `users/${firebaseUser.uid}`);
+      handleTransactionError(error, OperationType.WRITE, `users/${firebaseUser.uid}`);
     }
 
     if (verification.verificationStatus !== 'verified') {
@@ -982,6 +1092,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!firebaseUser || !userAccount) {
       throw new Error('Usuário não autenticado.');
     }
+    await syncServerUtcClock(true);
     const today = getTodayUtcDate();
     if (userAccount.lastConversionDate === today) {
       await logFraudAttempt(
@@ -1045,13 +1156,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           photoURL: current.photoURL,
           brlBalanceCents: current.brlBalanceCents + brlCentsCredited,
           pointsBalance: current.pointsBalance - validPoints,
+          lifetimePoints: current.lifetimePoints,
           gamesPlayed: current.gamesPlayed,
           status: current.status,
           updatedAt: serverTimestamp(),
         });
       });
     } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, `conversions/${conversionId}`);
+      handleTransactionError(error, OperationType.WRITE, `conversions/${conversionId}`);
     }
 
     const recipientEmail = privateInfo?.email || firebaseUser.email || 'usuario@earneasy.app';
@@ -1236,6 +1348,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           photoURL: current.photoURL,
           brlBalanceCents: current.brlBalanceCents - params.amountCents,
           pointsBalance: current.pointsBalance,
+          lifetimePoints: current.lifetimePoints,
           gamesPlayed: current.gamesPlayed,
           status: current.status,
           updatedAt: serverTimestamp(),
@@ -1251,7 +1364,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         pixKey: params.pixKey,
         details: msg,
       });
-      handleFirestoreError(error, OperationType.WRITE, `withdrawals/${withdrawalId}`);
+      handleTransactionError(error, OperationType.WRITE, `withdrawals/${withdrawalId}`);
     }
 
     const recipientEmail = privateInfo?.email || firebaseUser.email || 'usuario@earneasy.app';
@@ -1284,7 +1397,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
 
     const cleanName = formatCheck.clean;
-    const cleanPhoto = params.photoURL.trim().slice(0, 500);
+    const cleanPhoto = sanitizePhotoUrl(params.photoURL);
     const profanity = checkUsernameProfanity(cleanName);
     const fingerprint = await getDeviceFingerprint();
     const userRef = doc(db, 'users', firebaseUser.uid);
@@ -1381,6 +1494,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         photoURL: cleanPhoto,
         brlBalanceCents: 0,
         pointsBalance: 0,
+        lifetimePoints: 0,
         gamesPlayed: 0,
         status: 'active',
         updatedAt: serverTimestamp(),
@@ -1449,7 +1563,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
 
     const cleanName = formatCheck.clean;
-    const cleanPhoto = params.photoURL.trim().slice(0, 500);
+    const cleanPhoto = sanitizePhotoUrl(params.photoURL);
     const profanity = checkUsernameProfanity(cleanName);
 
     if (profanity.blocked) {
@@ -1467,6 +1581,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           photoURL: userAccount.photoURL,
           brlBalanceCents: userAccount.brlBalanceCents,
           pointsBalance: userAccount.pointsBalance,
+          lifetimePoints: userAccount.lifetimePoints,
           gamesPlayed: userAccount.gamesPlayed,
           status: 'suspended',
           updatedAt: serverTimestamp(),
@@ -1501,6 +1616,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           photoURL: cleanPhoto,
           brlBalanceCents: userAccount.brlBalanceCents,
           pointsBalance: userAccount.pointsBalance,
+          lifetimePoints: userAccount.lifetimePoints,
           gamesPlayed: userAccount.gamesPlayed,
           status: userAccount.status,
           updatedAt: serverTimestamp(),
@@ -1520,6 +1636,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       throw new Error('Sua conta está em revisão antifraude.');
     }
 
+    await syncServerUtcClock(true);
     const today = getTodayUtcDate();
     const yesterday = getUtcDateDaysAgo(1);
     const checkinId = `chk_${firebaseUser.uid}_${today}`;
@@ -1532,7 +1649,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const prevWindow = myCheckins.filter(
       (c) => c.checkinDate >= windowStartStr && c.checkinDate < today
     );
-    const prevSum = prevWindow.reduce((sum, c) => sum + c.pointsAwarded, 0);
+    const prevSum = Math.max(0, prevWindow.reduce((sum, c) => sum + c.pointsAwarded, 0));
 
     let minPts = 143;
     let maxPts = 172;
@@ -1542,7 +1659,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
 
     const pointsAwarded = minPts + Math.floor(Math.random() * (maxPts - minPts + 1));
-    const weekTotalAfter = Math.min(1400, prevSum + pointsAwarded);
+    const weekTotalAfter = Math.max(pointsAwarded, Math.min(1400, prevSum + pointsAwarded));
     const hadPreviousCheckinsBeforeYesterday = myCheckins.some((c) => c.checkinDate < yesterday);
 
     let streakDay = 1;
@@ -1572,19 +1689,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           throw new Error('Sua conta está em revisão antifraude.');
         }
 
-        const commission = Math.floor(pointsAwarded * REFERRAL_COMMISSION_RATE);
+        const commission = Math.floor((pointsAwarded * 12) / 100);
         let activeReferrerData: Referral | null = null;
         if (refSnap.exists() && commission >= 1) {
           const candidateRef = refSnap.data() as Referral;
-          const refLbSnap = await tx.get(doc(db, 'leaderboard', candidateRef.referrerUid));
-          if (refLbSnap.exists() && refLbSnap.data().status === 'active') {
-            activeReferrerData = candidateRef;
+          if (candidateRef.referrerUid && candidateRef.referrerUid !== firebaseUser.uid) {
+            const refLbSnap = await tx.get(doc(db, 'leaderboard', candidateRef.referrerUid));
+            if (refLbSnap.exists() && refLbSnap.data().status === 'active') {
+              activeReferrerData = candidateRef;
+            }
           }
         }
 
         if (yesterdaySnap.exists()) {
           const yData = yesterdaySnap.data() as Partial<DailyCheckin>;
-          const prevStreak = typeof yData.streakDay === 'number' ? yData.streakDay : 1;
+          const prevStreak =
+            typeof yData.streakDay === 'number' && Number.isFinite(yData.streakDay)
+              ? Math.max(1, Math.min(STREAK_TARGET_DAYS, Math.round(yData.streakDay)))
+              : 1;
           streakDay = prevStreak >= STREAK_TARGET_DAYS ? 1 : prevStreak + 1;
           streakBroken = false;
         } else {
@@ -1629,13 +1751,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           photoURL: current.photoURL,
           brlBalanceCents: current.brlBalanceCents + brlBonusCents,
           pointsBalance: current.pointsBalance + pointsAwarded,
+          lifetimePoints: current.lifetimePoints + pointsAwarded,
           gamesPlayed: current.gamesPlayed,
           status: current.status,
           updatedAt: serverTimestamp(),
         });
       });
     } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, `dailyCheckins/${checkinId}`);
+      handleTransactionError(error, OperationType.WRITE, `dailyCheckins/${checkinId}`);
     }
 
     if (brlBonusCents > 0) {
@@ -1722,13 +1845,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           photoURL: current.photoURL,
           brlBalanceCents: current.brlBalanceCents,
           pointsBalance: current.pointsBalance + tier.rewardPoints,
+          lifetimePoints: current.lifetimePoints,
           gamesPlayed: current.gamesPlayed,
           status: current.status,
           updatedAt: serverTimestamp(),
         });
       });
     } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, `levelRewards/${rewardId}`);
+      handleTransactionError(error, OperationType.WRITE, `levelRewards/${rewardId}`);
     }
 
     return {
@@ -1754,6 +1878,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       throw new Error(`Você já resgatou o código ${code}.`);
     }
 
+    await syncServerUtcClock();
     const redemptionId = `prm_${firebaseUser.uid}_${code}`;
     let redeemedTitle = '';
     let redeemedPoints = 0;
@@ -1783,7 +1908,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           throw new Error('Este evento de código já foi encerrado ou pausado pelo administrador.');
         }
         const publishMs = timestampToMillis(promo.publishAt);
-        const nowMs = Date.now();
+        const nowMs = getServerNowMs();
         if (publishMs > nowMs) {
           throw new Error(
             `Este código está agendado para ser publicado às ${formatScheduleTime(publishMs)} (falta ${formatScheduleRemaining(publishMs, nowMs)}).`
@@ -1824,14 +1949,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           photoURL: current.photoURL,
           brlBalanceCents: current.brlBalanceCents,
           pointsBalance: current.pointsBalance + promo.pointsValue,
+          lifetimePoints: current.lifetimePoints,
           gamesPlayed: current.gamesPlayed,
           status: current.status,
           updatedAt: serverTimestamp(),
         });
       });
     } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, `promoRedemptions/${redemptionId}`);
-      throw error;
+      handleTransactionError(error, OperationType.WRITE, `promoRedemptions/${redemptionId}`);
     }
 
     return {
@@ -1947,6 +2072,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return { deliveryStatus, referenceId };
   };
 
+  const mailboxMessages = rawMailboxMessages.filter(
+    (m) => !deletedMailboxIds.includes(m.messageId)
+  );
+
   const persistReadMailboxIds = (nextIds: string[]) => {
     setReadMailboxIds(nextIds);
     if (!firebaseUser) return;
@@ -1966,6 +2095,82 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const allIds = mailboxMessages.map((m) => m.messageId);
     const merged = Array.from(new Set([...readMailboxIds, ...allIds]));
     persistReadMailboxIds(merged);
+  };
+
+  const deleteMailboxMessage = async (messageId: string) => {
+    if (!firebaseUser || !messageId) return;
+    if (!/^[a-zA-Z0-9_-]{1,128}$/.test(messageId)) return;
+    try {
+      await setDoc(doc(db, 'users', firebaseUser.uid, 'deletedMailbox', messageId), {
+        messageId,
+        deletedAt: serverTimestamp(),
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, `users/${firebaseUser.uid}/deletedMailbox/${messageId}`);
+      throw error;
+    }
+  };
+
+  const clearAllMailboxMessages = async () => {
+    if (!firebaseUser) return;
+    if (mailboxMessages.length === 0) return;
+    try {
+      const batch = writeBatch(db);
+      mailboxMessages.slice(0, 450).forEach((m) => {
+        if (/^[a-zA-Z0-9_-]{1,128}$/.test(m.messageId)) {
+          batch.set(doc(db, 'users', firebaseUser.uid, 'deletedMailbox', m.messageId), {
+            messageId: m.messageId,
+            deletedAt: serverTimestamp(),
+          });
+        }
+      });
+      await batch.commit();
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, `users/${firebaseUser.uid}/deletedMailbox`);
+      throw error;
+    }
+  };
+
+  const deleteEmailNotification = async (notificationId: string) => {
+    if (!firebaseUser || !notificationId) return;
+    try {
+      await deleteDoc(doc(db, 'emailNotifications', notificationId));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `emailNotifications/${notificationId}`);
+      throw error;
+    }
+  };
+
+  const updateMaintenanceSettings = async (params: {
+    enabled: boolean;
+    title: string;
+    message: string;
+    estimatedReturn: string;
+  }) => {
+    if (!firebaseUser || !isAdmin) {
+      throw new Error('Somente administradores podem configurar o modo de manutenção.');
+    }
+    const cleanTitle = params.title.trim().slice(0, 120);
+    const cleanMessage = params.message.trim().slice(0, 500);
+    const cleanReturn = params.estimatedReturn.trim().slice(0, 120);
+    if (cleanTitle.length < 3 || cleanMessage.length < 3) {
+      throw new Error('Informe título e mensagem de manutenção com pelo menos 3 caracteres.');
+    }
+
+    try {
+      await setDoc(doc(db, 'appSettings', 'maintenance'), {
+        settingId: 'maintenance',
+        enabled: Boolean(params.enabled),
+        title: cleanTitle,
+        message: cleanMessage,
+        estimatedReturn: cleanReturn,
+        updatedBy: (firebaseUser.email || firebaseUser.uid).slice(0, 160),
+        updatedAt: serverTimestamp(),
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, 'appSettings/maintenance');
+      throw error;
+    }
   };
 
   const setBrowserNotifEnabled = (enabled: boolean) => {
@@ -2035,6 +2240,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         readMailboxIds,
         unreadMailboxCount,
         withdrawalSettings,
+        maintenanceSettings,
         isFirstWithdrawalEligible,
         activeMinWithdrawalCents,
         needsOnboarding,
@@ -2059,6 +2265,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         sendInviteEmail,
         markMailboxRead,
         markAllMailboxRead,
+        deleteMailboxMessage,
+        clearAllMailboxMessages,
+        deleteEmailNotification,
+        updateMaintenanceSettings,
       }}
     >
       {children}

@@ -35,13 +35,13 @@ const TUTORIAL_STEPS: TutorialStep[] = [
   {
     id: 2,
     kicker: 'Passo 2 de 4 · Como Jogar',
-    title: 'Acumule pontos nos 5 jogos de lógica verificados',
+    title: 'Acumule pontos nos 7 jogos gratuitos verificados',
     description:
-      'Na aba Jogos, escolha entre Jogo da Velha, Dot Link, Caça-Palavras, Desafio Matemático ou Memória Premiada. Cada vitória credita pontos imediatamente e sobe seu nível de jogador.',
+      'Escolha entre Jogo da Velha, Caça-Palavras, Dot Link, Memória de Cartas, Maior ou Menor, Desafio Matemático e Reflexo Rápido. Cada vitória avança sua Fase no jogo, soma moedas na hora e aumenta seu nível.',
     highlights: [
-      'Dot Link, Caça-Palavras e Matemática pagam até 450 pontos por rodada.',
+      'Desafio Matemático, Caça-Palavras, Dot Link e Reflexo Rápido pagam até 450 pontos por rodada.',
       'Todas as partidas passam por validação antifraude automática.',
-      'Sua evolução de XP e avatar personalizado aparecem no Perfil e no Ranking.',
+      'Sua evolução de fases, XP e avatar personalizado aparecem no Perfil e no Ranking.',
     ],
     Icon: Gamepad2,
   },

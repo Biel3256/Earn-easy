@@ -13,7 +13,7 @@ import {
   POINTS_PER_TEN_CENTS,
 } from '../types/earneasy';
 import { createHumanChallenge } from '../utils/antifraud';
-import { formatBRL, formatPoints, getTodayUtcDate, validatePixKey } from '../utils/pix';
+import { extractReadableError, formatBRL, formatPoints, getTodayUtcDate, validatePixKey } from '../utils/pix';
 import { DailyCheckinCard } from './DailyCheckinCard';
 import { WithdrawalHistory } from './WithdrawalHistory';
 
@@ -118,7 +118,7 @@ export const WalletSection: React.FC = () => {
     } catch (err) {
       setConvertFeedback({
         type: 'err',
-        msg: err instanceof Error ? err.message : 'Erro ao converter pontos.',
+        msg: extractReadableError(err, 'Erro ao converter pontos.'),
       });
     } finally {
       setConverting(false);
@@ -204,7 +204,7 @@ export const WalletSection: React.FC = () => {
     } catch (err) {
       setWithdrawFeedback({
         type: 'err',
-        msg: err instanceof Error ? err.message : 'Erro ao solicitar saque Pix.',
+        msg: extractReadableError(err, 'Erro ao solicitar saque Pix.'),
       });
     } finally {
       setWithdrawing(false);

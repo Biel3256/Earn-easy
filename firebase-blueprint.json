@@ -7,7 +7,7 @@
       "properties": {
         "uid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "displayName": { "type": "string", "minLength": 1, "maxLength": 80 },
-        "photoURL": { "type": "string", "maxLength": 500 },
+        "photoURL": { "type": "string", "maxLength": 60000 },
         "pointsBalance": { "type": "number" },
         "lifetimePoints": { "type": "number" },
         "brlBalanceCents": { "type": "number" },
@@ -73,7 +73,7 @@
       "properties": {
         "sessionId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "gameCategory": { "type": "string", "enum": ["tic_tac_toe", "dot_link", "word_search", "math_sprint", "memory_match"] },
+        "gameCategory": { "type": "string", "enum": ["tic_tac_toe", "dot_link", "word_search", "math_sprint", "memory_match", "quick_reflex", "high_low_cards"] },
         "scoreEarned": { "type": "number" },
         "durationMs": { "type": "number" },
         "movesCount": { "type": "number" },
@@ -237,9 +237,10 @@
       "properties": {
         "uid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "displayName": { "type": "string", "minLength": 1, "maxLength": 80 },
-        "photoURL": { "type": "string", "maxLength": 500 },
+        "photoURL": { "type": "string", "maxLength": 60000 },
         "brlBalanceCents": { "type": "number" },
         "pointsBalance": { "type": "number" },
+        "lifetimePoints": { "type": "number" },
         "gamesPlayed": { "type": "number" },
         "status": { "type": "string", "enum": ["active", "suspended", "flagged"] },
         "updatedAt": { "type": "string", "format": "date-time" }
@@ -461,6 +462,141 @@
         "actorUid",
         "createdAt"
       ]
+    },
+    "SocialPresence": {
+      "title": "SocialPresence",
+      "description": "Heartbeat document tracking active online presence for the Friends chat.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "lastSeen": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "lastSeen"]
+    },
+    "FriendRequest": {
+      "title": "FriendRequest",
+      "description": "Friend request between two authenticated Earn Easy players.",
+      "type": "object",
+      "properties": {
+        "senderUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "recipientUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "senderName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "recipientName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "participantUids": { "type": "array" },
+        "status": { "type": "string", "enum": ["pending", "accepted", "rejected"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "respondedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["senderUid", "recipientUid", "senderName", "recipientName", "participantUids", "status", "createdAt"]
+    },
+    "Friendship": {
+      "title": "Friendship",
+      "description": "Confirmed bidirectional friendship enabling private 1-on-1 chat.",
+      "type": "object",
+      "properties": {
+        "memberUids": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["memberUids", "createdAt"]
+    },
+    "SocialMessage": {
+      "title": "SocialMessage",
+      "description": "Chat message sent in global chat or private friend conversation.",
+      "type": "object",
+      "properties": {
+        "senderUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "senderName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "text": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["senderUid", "senderName", "text", "createdAt"]
+    },
+    "SupportTicket": {
+      "title": "SupportTicket",
+      "description": "Support ticket escalated from AI Biel to human specialist in the admin panel.",
+      "type": "object",
+      "properties": {
+        "ticketId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userDisplayName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "topic": { "type": "string", "enum": ["checkin", "pix", "invites", "games", "account", "other"] },
+        "subject": { "type": "string", "minLength": 3, "maxLength": 140 },
+        "bielSummary": { "type": "string", "minLength": 3, "maxLength": 800 },
+        "status": { "type": "string", "enum": ["waiting_human", "active_human", "closed"] },
+        "assignedAdminUid": { "type": "string", "maxLength": 128 },
+        "assignedAdminName": { "type": "string", "maxLength": 80 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ticketId",
+        "userId",
+        "userDisplayName",
+        "topic",
+        "subject",
+        "bielSummary",
+        "status",
+        "assignedAdminUid",
+        "assignedAdminName",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "SupportMessage": {
+      "title": "SupportMessage",
+      "description": "Live message inside a support ticket (player, Biel triage context, or admin specialist).",
+      "type": "object",
+      "properties": {
+        "messageId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ticketId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "senderUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "senderName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "senderRole": { "type": "string", "enum": ["user", "biel", "admin"] },
+        "text": { "type": "string", "minLength": 1, "maxLength": 800 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "messageId",
+        "ticketId",
+        "senderUid",
+        "senderName",
+        "senderRole",
+        "text",
+        "createdAt"
+      ]
+    },
+    "MaintenanceSettings": {
+      "title": "MaintenanceSettings",
+      "description": "Admin-managed platform maintenance banner/lock configuration stored at appSettings/maintenance.",
+      "type": "object",
+      "properties": {
+        "settingId": { "type": "string", "maxLength": 32, "pattern": "^maintenance$" },
+        "enabled": { "type": "boolean" },
+        "title": { "type": "string", "minLength": 3, "maxLength": 120 },
+        "message": { "type": "string", "minLength": 3, "maxLength": 500 },
+        "estimatedReturn": { "type": "string", "maxLength": 120 },
+        "updatedBy": { "type": "string", "maxLength": 160 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "settingId",
+        "enabled",
+        "title",
+        "message",
+        "estimatedReturn",
+        "updatedBy",
+        "updatedAt"
+      ]
+    },
+    "DeletedMailboxEntry": {
+      "title": "DeletedMailboxEntry",
+      "description": "Per-user dismissal/deletion marker for global Caixa de Correio messages.",
+      "type": "object",
+      "properties": {
+        "messageId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "deletedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["messageId", "deletedAt"]
     }
   },
   "firestore": {
@@ -471,6 +607,10 @@
     "/users/{userId}/private/{docId}": {
       "schema": { "$ref": "#/entities/UserPrivateInfo" },
       "description": "User PII (email, default Pix key, device fingerprint) isolated from public queries."
+    },
+    "/users/{userId}/deletedMailbox/{messageId}": {
+      "schema": { "$ref": "#/entities/DeletedMailboxEntry" },
+      "description": "Per-user hidden/deleted broadcast mailbox message markers."
     },
     "/admins/{userId}": {
       "schema": { "$ref": "#/entities/AdminRole" },
@@ -530,11 +670,39 @@
     },
     "/appSettings/{settingId}": {
       "schema": { "$ref": "#/entities/WithdrawalSettings" },
-      "description": "Admin-configured platform settings such as configurable Pix withdrawal minimums (1 to 2000 cents)."
+      "description": "Admin-configured platform settings: 'withdrawal' (Pix withdrawal minimums 1..2000 cents) and 'maintenance' (site-wide MaintenanceSettings)."
     },
     "/withdrawalAttempts/{attemptId}": {
       "schema": { "$ref": "#/entities/WithdrawalAttemptLog" },
       "description": "Detailed anti-fraud audit trail of all Pix withdrawal attempts and status updates."
+    },
+    "/socialPresence/{userId}": {
+      "schema": { "$ref": "#/entities/SocialPresence" },
+      "description": "Online heartbeat timestamps for the community friends tab."
+    },
+    "/friendRequests/{requestId}": {
+      "schema": { "$ref": "#/entities/FriendRequest" },
+      "description": "Friend requests exchanged between active players."
+    },
+    "/friendships/{chatId}": {
+      "schema": { "$ref": "#/entities/Friendship" },
+      "description": "Confirmed friendships and private chat rooms."
+    },
+    "/friendships/{chatId}/messages/{messageId}": {
+      "schema": { "$ref": "#/entities/SocialMessage" },
+      "description": "Private 1-on-1 messages between friends."
+    },
+    "/globalMessages/{messageId}": {
+      "schema": { "$ref": "#/entities/SocialMessage" },
+      "description": "Public global community chat messages."
+    },
+    "/supportTickets/{ticketId}": {
+      "schema": { "$ref": "#/entities/SupportTicket" },
+      "description": "Support tickets escalated from Biel AI to human specialists."
+    },
+    "/supportTickets/{ticketId}/messages/{messageId}": {
+      "schema": { "$ref": "#/entities/SupportMessage" },
+      "description": "Live messages exchanged inside a support ticket."
     }
   }
 }
