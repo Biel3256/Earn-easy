@@ -1250,7 +1250,8 @@ service cloud.firestore {
       return data.keys().hasOnly(['senderUid', 'senderName', 'text', 'createdAt']) &&
         data.keys().hasAll(['senderUid', 'senderName', 'text', 'createdAt']) &&
         data.senderUid == request.auth.uid &&
-        data.senderName is string && data.senderName.size() >= 1 && data.senderName.size() <= 60 &&\n        data.senderName == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.displayName &&
+        data.senderName is string && data.senderName.size() >= 1 && data.senderName.size() <= 60 &&
+        data.senderName == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.displayName &&
         data.text is string && data.text.size() >= 1 && data.text.size() <= 500 &&
         data.createdAt == request.time;
     }
@@ -1281,7 +1282,9 @@ service cloud.firestore {
         request.auth.uid in incoming().participantUids &&
         incoming().recipientUid in incoming().participantUids &&
         incoming().senderName is string && incoming().senderName.size() <= 60 &&
+        incoming().senderName == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.displayName &&
         incoming().recipientName is string && incoming().recipientName.size() <= 60 &&
+        incoming().recipientName == get(/databases/$(database)/documents/users/$(incoming().recipientUid)).data.displayName &&
         incoming().status == 'pending' &&
         incoming().createdAt == request.time;
       allow update: if isSignedIn() &&
@@ -1304,7 +1307,7 @@ service cloud.firestore {
         chatId == incoming().memberUids[0] + '__' + incoming().memberUids[1] &&
         existsAfter(/databases/$(database)/documents/friendRequests/$(incoming().memberUids[0] + '__' + incoming().memberUids[1])) &&
         getAfter(/databases/$(database)/documents/friendRequests/$(incoming().memberUids[0] + '__' + incoming().memberUids[1])).data.status == 'accepted' &&
-        getAfter(/databases/$(database)/documents/friendRequests/$(incoming().memberUids[0] + '__' + incoming().memberUids[1])).data.participantUids.hasAll(incoming().memberUids)
+        getAfter(/databases/$(database)/documents/friendRequests/$(incoming().memberUids[0] + '__' + incoming().memberUids[1])).data.participantUids.hasAll(incoming().memberUids);
       allow update, delete: if false;
 
       match /messages/{messageId} {
