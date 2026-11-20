@@ -43,7 +43,6 @@ import { MemoryMatchGame } from './games/MemoryMatchGame';
 import { QuickReflexGame } from './games/QuickReflexGame';
 import { TicTacToeGame } from './games/TicTacToeGame';
 import { WordSearchGame } from './games/WordSearchGame';
-import { BlockBlastGame } from './games/BlockBlastGame';
 
 type FilterGroupId =
   | 'all'
@@ -132,14 +131,6 @@ const GAME_CATALOG: GameCatalogItem[] = [
     avgTime: '30 seg',
     groups: ['reflexo'],
   },
-  {
-    id: 'block_blast',
-    title: GAME_LABELS.block_blast,
-    subtitle: 'Encaixe blocos, complete linhas e bata seu recorde.',
-    rewardRange: 'Até 60 pts por partida',
-    avgTime: '2–5 min',
-    groups: ['estrategia', 'raciocinio'],
-  },
 ];
 
 interface GamesHubProps {
@@ -205,7 +196,6 @@ export const GamesHub: React.FC<GamesHubProps> = ({
       memory_match: 1,
       quick_reflex: 1,
       high_low_cards: 1,
-      block_blast: 1,
     };
     mySessions.forEach((s) => {
       if (s.verificationStatus === 'verified' && map[s.gameCategory] !== undefined) {
@@ -349,9 +339,6 @@ export const GamesHub: React.FC<GamesHubProps> = ({
             onComplete={(s, d, m) => handleGameComplete('quick_reflex', s, d, m)}
             onExit={() => setActiveGame(null)}
           />
-        )}
-        {activeGame === 'block_blast' && (
-          <BlockBlastGame onComplete={(s, d, m) => handleGameComplete('block_blast', s, d, m)} onExit={() => setActiveGame(null)} />
         )}
         {activeGame === 'high_low_cards' && (
           <HighLowCardsGame
