@@ -879,7 +879,7 @@ service cloud.firestore {
     // 9. Global Leaderboard Projection (Zero PII, synced atomically with /users/{userId})
     match /leaderboard/{userId} {
       allow get: if isValidId(userId) && isSignedIn() && (existing().status == 'active' || isOwner(userId) || isAdmin());
-      allow list: if isSignedIn() && resource.data.brlBalanceCents >= 0;
+      allow list: if isSignedIn() && resource.data.status == 'active';
 
       allow create, update: if isValidId(userId) &&
         isSignedIn() &&
