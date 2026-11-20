@@ -2,13 +2,6 @@ import React, { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import {
   BarChart3,
   HelpCircle,
-  Home,
-  Gamepad2,
-  Gift,
-  Trophy,
-  UserRound,
-  WalletCards,
-  Gem,
   Inbox,
   LogOut,
   Menu,
@@ -51,12 +44,11 @@ type NavTab =
 const THEME_STORAGE_KEY = 'earneasy_theme';
 
 function getInitialTheme(): AppTheme {
-  if (typeof window === 'undefined') return 'dark';
+  if (typeof window === 'undefined') return 'light';
   try {
-    const savedTheme = window.localStorage.getItem(THEME_STORAGE_KEY);
-    return savedTheme === 'light' ? 'light' : 'dark';
+    return window.localStorage.getItem(THEME_STORAGE_KEY) === 'dark' ? 'dark' : 'light';
   } catch {
-    return 'dark';
+    return 'light';
   }
 }
 
@@ -159,18 +151,6 @@ function MainShell() {
     },
   ];
 
-  const sidebarItems: { id: NavTab; label: string; Icon: React.ElementType }[] = [
-    { id: 'games', label: 'Início', Icon: Home },
-    { id: 'games', label: 'Jogos', Icon: Gamepad2 },
-    { id: 'invites', label: 'Ofertas e Códigos', Icon: Gift },
-    { id: 'ranking', label: 'Ranking', Icon: Trophy },
-    { id: 'profile', label: 'Perfil', Icon: UserRound },
-    { id: 'wallet', label: 'Carteira Pix', Icon: WalletCards },
-    { id: 'notifications', label: 'Caixa de Correio', Icon: Inbox },
-    { id: 'dashboard', label: 'Resumo', Icon: BarChart3 },
-    { id: 'settings', label: 'Configurações', Icon: Settings },
-  ];
-
   const isBlackTheme = theme === 'dark';
   const isDarkView = isBlackTheme;
 
@@ -222,7 +202,7 @@ function MainShell() {
 
   return (
     <div
-      className={`ee-app-shell min-h-screen flex flex-col transition-colors ${
+      className={`min-h-screen flex flex-col transition-colors ${
         isBlackTheme
           ? 'dark bg-black text-zinc-100'
           : 'bg-slate-50 text-slate-900'
@@ -230,7 +210,7 @@ function MainShell() {
     >
       {/* Strict 3-Zone Top Bar Contract */}
       <header
-        className={`ee-header sticky top-0 z-30 backdrop-blur border-b transition-colors ${
+        className={`sticky top-0 z-30 backdrop-blur border-b transition-colors ${
           isBlackTheme
             ? 'bg-black/95 border-zinc-800'
             : 'bg-white/95 border-slate-200'
@@ -241,7 +221,7 @@ function MainShell() {
           <button
             type="button"
             onClick={() => handleSelectTab('games')}
-            className={`ee-brand text-lg font-display font-extrabold tracking-tight whitespace-nowrap shrink-0 cursor-pointer ${
+            className={`text-lg font-display font-extrabold tracking-tight whitespace-nowrap shrink-0 cursor-pointer ${
               isDarkView ? 'text-zinc-50' : 'text-slate-900'
             }`}
           >
@@ -570,21 +550,7 @@ function MainShell() {
         )}
       </header>
 
-      <aside className="ee-sidebar" aria-label="Menu principal">
-        <div className="ee-sidebar-brand"><Gem size={32} /><span>Earn <b>Easy</b></span></div>
-        <nav className="ee-sidebar-nav">
-          {sidebarItems.map(({ id, label, Icon }, index) => (
-            <button key={`${id}-${index}`} type="button" onClick={() => handleSelectTab(id)}
-              className={`ee-side-link ${!isBackofficeRoute && activeTab === id ? 'active' : ''}`}>
-              <Icon size={19} /><span>{label}</span>
-              {id === 'notifications' && unreadMailboxCount > 0 && <small>{unreadMailboxCount}</small>}
-            </button>
-          ))}
-        </nav>
-        <button type="button" className="ee-side-logout" onClick={logout}><LogOut size={18} /> Sair</button>
-      </aside>
-
-      <main className="ee-main flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-8">
+      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-8">
         {authError && (
           <div className="mb-6 p-4 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 rounded-xl text-xs text-red-800 dark:text-red-300">
             {authError}
