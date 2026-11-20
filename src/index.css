@@ -44,3 +44,94 @@
     scroll-behavior: auto !important;
   }
 }
+
+
+/* Earn Easy visual refresh — presentation only */
+:root {
+  --ee-accent: #8b5cf6;
+  --ee-accent-strong: #7c3aed;
+  --ee-accent-soft: #ede9fe;
+}
+
+body {
+  background-color: #f7f5ff;
+}
+
+html.dark body {
+  background-color: #090711;
+}
+
+.bg-emerald-600,
+.bg-emerald-500 {
+  background-color: var(--ee-accent-strong) !important;
+}
+
+.hover\\:bg-emerald-500:hover,
+.hover\\:bg-emerald-600:hover {
+  background-color: #6d28d9 !important;
+}
+
+.text-emerald-600,
+.text-emerald-700,
+.text-emerald-500 {
+  color: var(--ee-accent-strong) !important;
+}
+
+.border-emerald-500,
+.border-emerald-600 {
+  border-color: var(--ee-accent) !important;
+}
+
+.ring-emerald-500 {
+  --tw-ring-color: var(--ee-accent) !important;
+}
+
+html:not(.dark) .bg-slate-50 {
+  background-color: #f7f5ff !important;
+}
+
+html:not(.dark) .border-slate-200 {
+  border-color: #e9e2fb !important;
+}
+
+html:not(.dark) .bg-white {
+  background-color: #fff !important;
+}
+
+header {
+  box-shadow: 0 4px 24px rgb(46 16 101 / 5%);
+}
+
+header nav button {
+  transition: color 160ms ease, border-color 160ms ease, background 160ms ease;
+}
+
+main {
+  width: 100%;
+}
+
+main > * {
+  animation: ee-fade-in 220ms ease both;
+}
+
+button,
+[role="button"] {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--ee-accent);
+  outline-offset: 3px;
+}
+
+@keyframes ee-fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (max-width: 767px) {
+  header {
+    backdrop-filter: blur(18px);
+  }
+}
