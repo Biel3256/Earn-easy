@@ -1244,5 +1244,84 @@ service cloud.firestore {
       allow update: if false;
       allow delete: if isValidId(attemptId) && isAdmin();
     }
+
+    // 18. Earn Easy social features (isolated collections)
+    function validSocialMessage(data) {
+      return data.keys().hasOnly(['senderUid', 'senderName', 'text', 'createdAt']) &&
+        data.keys().hasAll(['senderUid', 'senderName', 'text', 'createdAt']) &&
+        data.senderUid == request.auth.uid &&
+        data.senderName is string && data.senderName.size() >= 1 && data.senderName.size() <= 60 &&
+        data.text is string && data.text.size() >= 1 && data.text.size() <= 500 &&
+        data.createdAt == request.time;
+    }
+
+    match /socialPresence/{userId} {
+      allow get, list: if isSignedIn();
+      allow create: if isOwner(userId) &&
+        incoming().keys().hasOnly(['uid', 'lastSeen']) &&
+        incoming().uid == userId &&
+        incoming().lastSeen == request.time;
+      allow update: if isOwner(userId) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['lastSeen']) &&
+        incoming().lastSeen == request.time;
+      allow delete: if isOwner(userId);
+    }
+
+    match /friendRequests/{requestId} {
+      allow get, list: if isSignedIn() &&
+        request.auth.uid in existing().participantUids;
+      allow create: if isSignedIn() &&
+        requestId == request.auth.uid + '_' + incoming().recipientUid &&
+        incoming().keys().hasOnly(['senderUid', 'recipientUid', 'senderName', 'recipientName', 'participantUids', 'status', 'createdAt']) &&
+        incoming().senderUid == request.auth.uid &&
+        isValidId(incoming().recipientUid) &&
+        incoming().recipientUid != request.auth.uid &&
+        incoming().participantUids is list &&
+        incoming().participantUids.size() == 2 &&
+        request.auth.uid in incoming().participantUids &&
+        incoming().recipientUid in incoming().participantUids &&
+        incoming().senderName is string && incoming().senderName.size() <= 60 &&
+        incoming().recipientName is string && incoming().recipientName.size() <= 60 &&
+        incoming().status == 'pending' &&
+        incoming().createdAt == request.time;
+      allow update: if isSignedIn() &&
+        request.auth.uid == existing().recipientUid &&
+        existing().status == 'pending' &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['status', 'respondedAt']) &&
+        incoming().status in ['accepted', 'rejected'] &&
+        incoming().respondedAt == request.time;
+      allow delete: if false;
+    }
+
+    match /friendships/{chatId} {
+      allow get, list: if isSignedIn() && request.auth.uid in existing().memberUids;
+      allow create: if isSignedIn() &&
+        incoming().keys().hasOnly(['memberUids', 'createdAt']) &&
+        incoming().memberUids is list &&
+        incoming().memberUids.size() == 2 &&
+        request.auth.uid in incoming().memberUids &&
+        incoming().createdAt == request.time &&
+        chatId == incoming().memberUids[0] + '__' + incoming().memberUids[1] &&
+        existsAfter(/databases/$(database)/documents/friendRequests/$(getAfter(/databases/$(database)/documents/friendRequests/$(incoming().memberUids[0] + '_' + incoming().memberUids[1])).data.senderUid + '_' + getAfter(/databases/$(database)/documents/friendRequests/$(incoming().memberUids[0] + '_' + incoming().memberUids[1])).data.recipientUid)) &&
+        getAfter(/databases/$(database)/documents/friendRequests/$(incoming().memberUids[0] + '_' + incoming().memberUids[1])).data.status == 'accepted';
+      allow update, delete: if false;
+
+      match /messages/{messageId} {
+        allow get, list: if isSignedIn() &&
+          request.auth.uid in get(/databases/$(database)/documents/friendships/$(chatId)).data.memberUids;
+        allow create: if isSignedIn() &&
+          request.auth.uid in get(/databases/$(database)/documents/friendships/$(chatId)).data.memberUids &&
+          validSocialMessage(incoming());
+        allow update, delete: if false;
+      }
+    }
+
+    match /globalMessages/{messageId} {
+      allow get, list: if isSignedIn();
+      allow create: if isSignedIn() &&
+        validSocialMessage(incoming()) &&
+        incoming().senderName == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.displayName;
+      allow update, delete: if false;
+    }
   }
 }
