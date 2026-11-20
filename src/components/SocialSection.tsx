@@ -14,6 +14,20 @@ type FriendRequest = { id: string; senderUid: string; recipientUid: string; send
 const safeText = (value: string) => value.trim().slice(0, 500);
 const friendshipId = (a: string, b: string) => [a, b].sort().join('__');
 
+export function SocialPresence() {
+  const { firebaseUser } = useAuth();
+  const uid = firebaseUser?.uid || '';
+  useEffect(() => {
+    if (!uid) return;
+    const presenceRef = doc(db, 'socialPresence', uid);
+    const beat = () => setDoc(presenceRef, { uid, lastSeen: serverTimestamp() }, { merge: true }).catch(() => {});
+    beat();
+    const timer = window.setInterval(beat, 45000);
+    return () => window.clearInterval(timer);
+  }, [uid]);
+  return null;
+}
+
 export function SocialSection() {
   const { firebaseUser, userAccount } = useAuth();
   const uid = firebaseUser?.uid || '';
@@ -31,15 +45,6 @@ export function SocialSection() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [tab, setTab] = useState<'friends' | 'global'>('friends');
-
-  useEffect(() => {
-    if (!uid) return;
-    const presenceRef = doc(db, 'socialPresence', uid);
-    const beat = () => setDoc(presenceRef, { uid, lastSeen: serverTimestamp() }, { merge: true }).catch(() => {});
-    beat();
-    const timer = window.setInterval(beat, 45000);
-    return () => window.clearInterval(timer);
-  }, [uid]);
 
   useEffect(() => {
     if (!uid) return;
