@@ -27,7 +27,7 @@ import { NotificationsSection } from './components/NotificationsSection';
 import { AppTheme, SettingsSection } from './components/SettingsSection';
 import { WelcomeTutorialModal } from './components/WelcomeTutorialModal';
 import { formatBRL } from './utils/pix';
-import { SocialSection } from './components/SocialSection';
+import { SocialPresence, SocialSection } from './components/SocialSection';
 
 const AdminPanel = lazy(() =>
   import('./components/AdminPanel').then((mod) => ({ default: mod.AdminPanel }))
@@ -652,6 +652,8 @@ function MainShell() {
           </>
         )}
       </main>
+
+      <SocialPresence />
 
       <footer
         className={`border-t transition-colors ${
