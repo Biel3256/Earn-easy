@@ -211,7 +211,7 @@ export function SocialSection() {
         {searchResults.map((profile) => (
           <div key={profile.uid} className="flex items-center justify-between gap-3 rounded-lg bg-slate-50 p-3 dark:bg-zinc-800">
             <div className="min-w-0"><p className="truncate text-sm font-semibold">{profile.displayName}</p><p className="truncate text-xs text-slate-500">{profile.uid}</p></div>
-            <button className={button} onClick={() => sendRequest(profile)} disabled={busy || friends.some((friend) => friend.uid === profile.uid) || sentRequests.some((request) => request.recipientUid === profile.uid)}><UserPlus className="h-4 w-4" /> Adicionar</button>
+            <button className={button} onClick={() => sendRequest(profile)} disabled={busy || friends.some((friend) => friend.uid === profile.uid) || requests.some((request) => request.status === 'pending' && (request.senderUid === profile.uid || request.recipientUid === profile.uid))}><UserPlus className="h-4 w-4" /> Adicionar</button>
           </div>
         ))}
       </div>
