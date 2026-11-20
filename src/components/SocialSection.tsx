@@ -57,6 +57,20 @@ export function SocialSection() {
   }, [uid]);
 
   useEffect(() => {
+    if (!uid) { setPresence({}); return; }
+    return onSnapshot(collection(db, 'socialPresence'), (snap) => {
+      const next: Record<string, number> = {};
+      snap.docs.forEach((item) => {
+        const lastSeen = item.data().lastSeen;
+        if (lastSeen && typeof lastSeen.toMillis === 'function') {
+          next[item.id] = lastSeen.toMillis();
+        }
+      });
+      setPresence(next);
+    }, () => setError('Não foi possível atualizar o status online.'));
+  }, [uid]);
+
+  useEffect(() => {
     if (!uid) return;
     const friendQuery = query(collection(db, 'friendships'), where('memberUids', 'array-contains', uid), limit(100));
     return onSnapshot(friendQuery, async (snap) => {
