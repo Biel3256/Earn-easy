@@ -39,6 +39,8 @@ import {
   Wrench,
   X,
   XCircle,
+  MessageCircle,
+  Trash2,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { db, handleFirestoreError, OperationType } from '../firebase';
@@ -70,7 +72,7 @@ import {
   timestampToMillis,
 } from '../utils/pix';
 
-type AdminTab = 'overview' | 'payouts' | 'users' | 'codes' | 'support' | 'antifraud' | 'api';
+type AdminTab = 'overview' | 'payouts' | 'users' | 'codes' | 'support' | 'chat' | 'antifraud' | 'api';
 
 const ATTEMPT_STATUS_META: Record<
   WithdrawalAttemptStatus,
@@ -179,6 +181,7 @@ export const AdminPanel: React.FC = () => {
   const [supportFilter, setSupportFilter] = useState<'all' | 'waiting_human' | 'active_human' | 'closed'>('all');
   const [supportReplyDraft, setSupportReplyDraft] = useState('');
   const [supportBusy, setSupportBusy] = useState(false);
+  const [globalChatMessages, setGlobalChatMessages] = useState<Array<{ id: string; senderName?: string; senderUid?: string; text?: string; createdAt?: Timestamp }>>([]);
 
   const [payoutFilter, setPayoutFilter] = useState<'all' | 'pending' | 'approved' | 'paid' | 'rejected'>('all');
   const [attemptFilter, setAttemptFilter] = useState<
@@ -204,6 +207,19 @@ export const AdminPanel: React.FC = () => {
     setMaintMessage(maintenanceSettings.message);
     setMaintReturn(maintenanceSettings.estimatedReturn);
   }, [maintenanceSettings]);
+
+  useEffect(() => {
+    if (!firebaseUser || !isAdmin) {
+      setGlobalChatMessages([]);
+      return;
+    }
+    const chatQuery = query(collection(db, 'globalMessages'), orderBy('createdAt', 'desc'), limit(100));
+    return onSnapshot(
+      chatQuery,
+      (snap) => setGlobalChatMessages(snap.docs.map((item) => ({ id: item.id, ...item.data() } as { id: string; senderName?: string; senderUid?: string; text?: string; createdAt?: Timestamp }))),
+      (err) => handleFirestoreError(err, OperationType.LIST, 'globalMessages')
+    );
+  }, [firebaseUser, isAdmin]);
 
   // Pix withdrawal minimum & values settings state
   const [firstMinReais, setFirstMinReais] = useState(
@@ -1283,6 +1299,18 @@ export const AdminPanel: React.FC = () => {
     }
   };
 
+  const deleteGlobalChatMessage = async (message: { id: string; senderName?: string; text?: string }) => {
+    if (!isAdmin) return;
+    const confirmed = window.confirm(`Excluir a mensagem de ${message.senderName || 'jogador'}? Esta ação não pode ser desfeita.`);
+    if (!confirmed) return;
+    try {
+      await deleteDoc(doc(db, 'globalMessages', message.id));
+      setActionMsg('Mensagem excluída do chat global.');
+    } catch (err) {
+      setActionErr(extractReadableError(err, 'Não foi possível excluir a mensagem.'));
+    }
+  };
+
   const ADMIN_TABS: Array<{
     id: AdminTab;
     label: string;
@@ -1304,6 +1332,7 @@ export const AdminPanel: React.FC = () => {
       Icon: Headset,
       badge: waitingSupportCount || undefined,
     },
+    { id: 'chat', label: 'Chat Global', Icon: MessageCircle, badge: globalChatMessages.length || undefined },
     {
       id: 'antifraud',
       label: 'Antifraude',
@@ -2695,6 +2724,42 @@ export const AdminPanel: React.FC = () => {
               </div>
             )}
           </div>
+        </div>
+      )}
+
+      {/* TAB: CHAT GLOBAL */}
+      {tab === 'chat' && (
+        <div className="bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 sm:p-6 space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+            <div>
+              <h3 className="text-base font-bold text-slate-900 dark:text-white">Moderação do Chat Global</h3>
+              <p className="text-xs text-slate-500 dark:text-zinc-400">Exclua mensagens inadequadas da conversa pública. A exclusão é permanente.</p>
+            </div>
+            <span className="text-xs font-semibold text-slate-500 dark:text-zinc-400">{globalChatMessages.length} mensagens carregadas</span>
+          </div>
+          {globalChatMessages.length === 0 ? (
+            <p className="text-xs text-slate-500 dark:text-zinc-400 py-8 text-center">Nenhuma mensagem encontrada no chat global.</p>
+          ) : (
+            <div className="space-y-2 max-h-[650px] overflow-y-auto pr-1">
+              {globalChatMessages.map((message) => (
+                <div key={message.id} className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 rounded-2xl border border-slate-200 dark:border-zinc-800 bg-slate-50/70 dark:bg-[#090d12] p-3.5">
+                  <div className="min-w-0 space-y-1">
+                    <div className="text-xs font-bold text-slate-900 dark:text-zinc-100">{message.senderName || 'Jogador'}</div>
+                    <p className="text-sm text-slate-700 dark:text-zinc-300 break-words">{message.text || ''}</p>
+                    <div className="text-[10px] text-slate-400 dark:text-zinc-500 font-mono break-all">ID: {message.id}</div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => deleteGlobalChatMessage(message)}
+                    className="inline-flex items-center justify-center gap-1.5 min-h-[36px] px-3 py-2 rounded-xl bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/60 text-red-700 dark:text-red-300 text-xs font-bold hover:bg-red-100 dark:hover:bg-red-950/50 shrink-0 cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    Excluir mensagem
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
