@@ -164,6 +164,7 @@ export const AdminPanel: React.FC = () => {
 
   const [tab, setTab] = useState<AdminTab>('overview');
   const [users, setUsers] = useState<UserAccount[]>([]);
+  const [adminUids, setAdminUids] = useState<string[]>([]);
   const [privateMap, setPrivateMap] = useState<Record<string, UserPrivateInfo>>({});
   const [withdrawals, setWithdrawals] = useState<PixWithdrawal[]>([]);
   const [fraudLogs, setFraudLogs] = useState<FraudEvent[]>([]);
@@ -277,6 +278,12 @@ export const AdminPanel: React.FC = () => {
   useEffect(() => {
     if (!firebaseUser || !isAdmin) return;
 
+    const uAdmins = onSnapshot(
+      collection(db, 'admins'),
+      (snap) => setAdminUids(snap.docs.map((adminDoc) => adminDoc.id)),
+      (err) => handleFirestoreError(err, OperationType.LIST, 'admins')
+    );
+
     const u1 = onSnapshot(
       collection(db, 'users'),
       (snap) => {
@@ -363,6 +370,7 @@ export const AdminPanel: React.FC = () => {
     );
 
     return () => {
+      uAdmins();
       u1();
       u2();
       u3();
@@ -902,6 +910,18 @@ export const AdminPanel: React.FC = () => {
       setActionMsg(`${u.displayName} promovido a administrador.`);
     } catch (err) {
       setActionErr(extractReadableError(err, 'Erro ao promover usuário.'));
+    }
+  };
+
+  const revokeAdmin = async (u: UserAccount) => {
+    if (!firebaseUser || u.uid === firebaseUser.uid) return;
+    const confirmed = window.confirm(`Retirar o cargo de administrador de ${u.displayName}?`);
+    if (!confirmed) return;
+    try {
+      await deleteDoc(doc(db, 'admins', u.uid));
+      setActionMsg(`Permissão de administrador removida de ${u.displayName}.`);
+    } catch (err) {
+      setActionErr(extractReadableError(err, 'Erro ao remover administrador.'));
     }
   };
 
@@ -2023,6 +2043,11 @@ export const AdminPanel: React.FC = () => {
                       <span className="text-sm font-bold text-slate-900 dark:text-white break-words">
                         {u.displayName}
                       </span>
+                      {adminUids.includes(u.uid) && (
+                        <span className="px-2 py-0.5 rounded-lg text-[11px] font-bold bg-lime-100 dark:bg-lime-500/15 text-lime-800 dark:text-lime-300">
+                          Administrador
+                        </span>
+                      )}
                       <span
                         className={`px-2 py-0.5 rounded-lg text-[11px] font-bold ${
                           u.status === 'active'
@@ -2094,13 +2119,29 @@ export const AdminPanel: React.FC = () => {
                         Reativar
                       </button>
                     )}
-                    <button
-                      type="button"
-                      onClick={() => promoteAdmin(u)}
-                      className="min-h-[40px] px-3 py-1.5 bg-white dark:bg-zinc-800 text-slate-800 dark:text-zinc-200 border border-slate-200 dark:border-zinc-700 rounded-xl font-semibold hover:border-lime-400 cursor-pointer"
-                    >
-                      Tornar Admin
-                    </button>
+                    {adminUids.includes(u.uid) ? (
+                      u.uid === firebaseUser?.uid ? (
+                        <span className="min-h-[40px] inline-flex items-center px-3 py-1.5 text-slate-500 dark:text-zinc-400 text-[11px] font-semibold">
+                          Seu administrador
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => revokeAdmin(u)}
+                          className="min-h-[40px] px-3 py-1.5 bg-red-50 dark:bg-red-950/50 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800 rounded-xl font-bold cursor-pointer"
+                        >
+                          Retirar Admin
+                        </button>
+                      )
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => promoteAdmin(u)}
+                        className="min-h-[40px] px-3 py-1.5 bg-white dark:bg-zinc-800 text-slate-800 dark:text-zinc-200 border border-slate-200 dark:border-zinc-700 rounded-xl font-semibold hover:border-lime-400 cursor-pointer"
+                      >
+                        Tornar Admin
+                      </button>
+                    )}
                   </div>
                 </div>
               );
