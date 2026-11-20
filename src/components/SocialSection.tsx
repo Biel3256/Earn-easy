@@ -63,9 +63,13 @@ export function SocialSection() {
       const profiles = await Promise.all(snap.docs.map(async (item) => {
         const otherUid = (item.data().memberUids as string[]).find((member) => member !== uid);
         if (!otherUid) return null;
-        const profileSnap = await getDoc(doc(db, 'leaderboard', otherUid));
-        if (!profileSnap.exists()) return { uid: otherUid, displayName: 'Usuário' } as PublicProfile;
-        return profileSnap.data() as PublicProfile;
+        try {
+          const profileSnap = await getDoc(doc(db, 'leaderboard', otherUid));
+          if (!profileSnap.exists()) return { uid: otherUid, displayName: 'Usuário' } as PublicProfile;
+          return profileSnap.data() as PublicProfile;
+        } catch {
+          return { uid: otherUid, displayName: 'Usuário' } as PublicProfile;
+        }
       }));
       setFriends(profiles.filter((profile): profile is PublicProfile => Boolean(profile)));
     }, () => setError('Não foi possível carregar seus amigos.'));
