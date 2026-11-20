@@ -5,7 +5,8 @@ export type GameCategory =
   | 'math_sprint'
   | 'memory_match'
   | 'quick_reflex'
-  | 'high_low_cards';
+  | 'high_low_cards'
+  | 'block_blast';
 
 export type AccountStatus = 'active' | 'suspended' | 'flagged';
 export type PixKeyType = 'cpf' | 'email' | 'phone' | 'random';
@@ -259,6 +260,7 @@ export const GAME_LABELS: Record<GameCategory, string> = {
   memory_match: 'Memória de Cartas',
   quick_reflex: 'Reflexo Rápido',
   high_low_cards: 'Maior ou Menor',
+  block_blast: 'Block Blast',
 };
 
 export interface MaintenanceSettings {
