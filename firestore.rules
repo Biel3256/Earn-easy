@@ -1271,7 +1271,7 @@ service cloud.firestore {
       allow get, list: if isSignedIn() &&
         request.auth.uid in existing().participantUids;
       allow create: if isSignedIn() &&
-        requestId == request.auth.uid + '_' + incoming().recipientUid &&
+        requestId == (request.auth.uid < incoming().recipientUid ? request.auth.uid + '__' + incoming().recipientUid : incoming().recipientUid + '__' + request.auth.uid) &&
         incoming().keys().hasOnly(['senderUid', 'recipientUid', 'senderName', 'recipientName', 'participantUids', 'status', 'createdAt']) &&
         incoming().senderUid == request.auth.uid &&
         isValidId(incoming().recipientUid) &&
@@ -1302,8 +1302,9 @@ service cloud.firestore {
         request.auth.uid in incoming().memberUids &&
         incoming().createdAt == request.time &&
         chatId == incoming().memberUids[0] + '__' + incoming().memberUids[1] &&
-        existsAfter(/databases/$(database)/documents/friendRequests/$(getAfter(/databases/$(database)/documents/friendRequests/$(incoming().memberUids[0] + '_' + incoming().memberUids[1])).data.senderUid + '_' + getAfter(/databases/$(database)/documents/friendRequests/$(incoming().memberUids[0] + '_' + incoming().memberUids[1])).data.recipientUid)) &&
-        getAfter(/databases/$(database)/documents/friendRequests/$(incoming().memberUids[0] + '_' + incoming().memberUids[1])).data.status == 'accepted';
+        existsAfter(/databases/$(database)/documents/friendRequests/$(incoming().memberUids[0] + '__' + incoming().memberUids[1])) &&
+        getAfter(/databases/$(database)/documents/friendRequests/$(incoming().memberUids[0] + '__' + incoming().memberUids[1])).data.status == 'accepted' &&
+        getAfter(/databases/$(database)/documents/friendRequests/$(incoming().memberUids[0] + '__' + incoming().memberUids[1])).data.participantUids.hasAll(incoming().memberUids)
       allow update, delete: if false;
 
       match /messages/{messageId} {
