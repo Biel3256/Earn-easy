@@ -93,7 +93,6 @@ export function SocialSection() {
   }, []);
 
   const pendingIncoming = useMemo(() => requests.filter((item) => item.recipientUid === uid && item.status === 'pending'), [requests, uid]);
-  const sentRequests = useMemo(() => requests.filter((item) => item.senderUid === uid && item.status === 'pending'), [requests, uid]);
 
   const searchUsers = async () => {
     if (!uid) return;
