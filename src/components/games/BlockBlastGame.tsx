@@ -57,7 +57,7 @@ export const BlockBlastGame: React.FC<Props> = ({ onComplete, onExit }) => {
     }
     setSubmitting(true);
     try {
-      setResult(await onComplete(reward, Math.max(15000, Date.now() - startedAt.current), Math.max(1,totalMoves)));
+      setResult(await onComplete(reward, Date.now() - startedAt.current, Math.max(1,totalMoves)));
     } catch (error) {
       setResult({ credited:0, verificationStatus:'rejected', fraudReason:error instanceof Error ? error.message : 'Não foi possível registrar os pontos.' });
     } finally { setSubmitting(false); }
