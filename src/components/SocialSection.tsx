@@ -43,7 +43,7 @@ export function SocialSection() {
   const [privateDraft, setPrivateDraft] = useState('');
   const [globalDraft, setGlobalDraft] = useState('');
   const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState(false);\n  const [, refreshPresenceClock] = useState(0);
   const [tab, setTab] = useState<'friends' | 'global'>('friends');
 
   useEffect(() => {
@@ -85,7 +85,7 @@ export function SocialSection() {
     }, () => setError('Não foi possível carregar a conversa privada.'));
   }, [uid, selectedFriend?.uid]);
 
-  const pendingIncoming = useMemo(() => requests.filter((item) => item.recipientUid === uid && item.status === 'pending'), [requests, uid]);
+  useEffect(() => {\n    const timer = window.setInterval(() => refreshPresenceClock((value) => value + 1), 15000);\n    return () => window.clearInterval(timer);\n  }, []);\n\n  const pendingIncoming = useMemo(() => requests.filter((item) => item.recipientUid === uid && item.status === 'pending'), [requests, uid]);
   const sentRequests = useMemo(() => requests.filter((item) => item.senderUid === uid && item.status === 'pending'), [requests, uid]);
 
   const searchUsers = async () => {
