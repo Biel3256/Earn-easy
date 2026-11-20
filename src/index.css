@@ -6,45 +6,41 @@
     --font-display: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
     --font-sans: 'DM Sans', system-ui, -apple-system, sans-serif;
     --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
-    --ee-bg: #080414;
-    --ee-panel: #100925;
-    --ee-card: #160d31;
-    --ee-border: #30205b;
-    --ee-purple: #8b19ff;
-    --ee-purple-bright: #a52cff;
-    --ee-text: #f8f4ff;
-    --ee-muted: #b9a9d7;
   }
-  html { background: var(--ee-bg); }
-  body { margin:0; min-width:320px; font-family:var(--font-sans); background:var(--ee-bg); color:var(--ee-text); -webkit-font-smoothing:antialiased; }
-  h1,h2,h3,h4,.font-display { font-family:var(--font-display); }
-  .font-mono { font-family:var(--font-mono); }
-  html.dark body,html:not(.dark) body { background:var(--ee-bg); color:var(--ee-text); }
-}
-.tabular-nums { font-variant-numeric:tabular-nums; }
-.text-balance { text-wrap:balance; }
-button,[role="button"] { -webkit-tap-highlight-color:transparent; }
-button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible { outline:2px solid #a52cff; outline-offset:3px; }
 
-.ee-app-shell { min-height:100vh; background:radial-gradient(ellipse at 75% 5%,#1b0750 0%,#080414 48%,#080414 100%); color:var(--ee-text); }
-.ee-header { height:100px; background:rgba(9,4,22,.97)!important; border-color:#251344!important; box-shadow:0 1px 0 rgba(157,55,255,.12); backdrop-filter:none!important; }
-.ee-header > div { max-width:none!important; height:100%; padding-left:28px!important; padding-right:28px!important; }
-.ee-brand { font-size:28px!important; font-style:italic; letter-spacing:-1.2px; }
-.ee-brand::before { content:"◇"; color:#9b20ff; font-size:35px; margin-right:10px; font-style:normal; }
-.ee-top-nav { display:none!important; }
-.ee-sidebar { position:fixed; z-index:25; top:100px; bottom:0; left:0; width:188px; display:flex; flex-direction:column; padding:22px 14px 18px; background:rgba(12,5,29,.97); border-right:1px solid #251344; }
-.ee-sidebar-brand { display:none; align-items:center; gap:9px; color:#fff; font-size:19px; font-weight:800; margin:0 6px 22px; }
-.ee-sidebar-brand svg { color:#9c25ff; } .ee-sidebar-brand b { color:#a52cff; }
-.ee-sidebar-nav { display:flex; flex-direction:column; gap:8px; }
-.ee-side-link,.ee-side-logout { width:100%; min-height:48px; display:flex; align-items:center; gap:13px; padding:0 14px; border:1px solid transparent; border-radius:13px; background:transparent; color:#eee6ff; text-align:left; font-size:14px; cursor:pointer; }
-.ee-side-link svg,.ee-side-logout svg { color:#c9b5f5; flex:0 0 auto; }
-.ee-side-link:hover { background:#1a0d38; border-color:#35205d; }
-.ee-side-link.active { background:linear-gradient(105deg,#7410d9,#4c0da6); color:#fff; box-shadow:0 5px 22px #6d13d533; }
-.ee-side-link.active svg { color:#fff; } .ee-side-link small { margin-left:auto; color:#fff; }
-.ee-side-logout { margin-top:auto; justify-content:center; background:#5d0db9; font-weight:700; }
-.ee-main { max-width:none!important; width:auto!important; margin-left:188px!important; padding:22px 22px 34px!important; }
-.ee-app-shell footer { margin-left:188px; background:#090416!important; border-color:#28164a!important; }
-.ee-app-shell footer > div { max-width:none!important; }
-html.dark header { background:rgba(9,4,22,.97)!important; border-color:#251344!important; }
-html.dark main { width:auto; }
-@media(prefers-reduced-motion:reduce) { *,*::before,*::after { animation-duration:.01ms!important; animation-iteration-count:1!important; transition-duration:.01ms!important; scroll-behavior:auto!important; } }
+  body {
+    font-family: var(--font-sans);
+    background-color: #f8fafc;
+    color: #0f172a;
+  }
+
+  html.dark body {
+    background-color: #000000;
+    color: #f4f4f5;
+  }
+
+  h1, h2, h3, h4, .font-display {
+    font-family: var(--font-display);
+  }
+
+  .font-mono {
+    font-family: var(--font-mono);
+  }
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+.text-balance {
+  text-wrap: balance;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
