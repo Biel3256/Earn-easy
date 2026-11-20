@@ -1287,12 +1287,22 @@ service cloud.firestore {
         incoming().recipientName == get(/databases/$(database)/documents/users/$(incoming().recipientUid)).data.displayName &&
         incoming().status == 'pending' &&
         incoming().createdAt == request.time;
-      allow update: if isSignedIn() &&
-        request.auth.uid == existing().recipientUid &&
-        existing().status == 'pending' &&
-        incoming().diff(existing()).affectedKeys().hasOnly(['status', 'respondedAt']) &&
-        incoming().status in ['accepted', 'rejected'] &&
-        incoming().respondedAt == request.time;
+      allow update: if isSignedIn() && (
+        (
+          request.auth.uid == existing().recipientUid &&
+          existing().status == 'pending' &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'respondedAt']) &&
+          incoming().status in ['accepted', 'rejected'] &&
+          incoming().respondedAt == request.time
+        ) || (
+          request.auth.uid == existing().senderUid &&
+          existing().status == 'rejected' &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'createdAt', 'respondedAt']) &&
+          incoming().status == 'pending' &&
+          incoming().createdAt == request.time &&
+          incoming().respondedAt == null
+        )
+      );
       allow delete: if false;
     }
 
