@@ -22,7 +22,7 @@ export function SocialSection() {
   const [searchResults, setSearchResults] = useState<PublicProfile[]>([]);
   const [searching, setSearching] = useState(false);
   const [requests, setRequests] = useState<FriendRequest[]>([]);
-  const [friends, setFriends] = useState<PublicProfile[]>([]);
+  const [friends, setFriends] = useState<PublicProfile[]>([]);\n  const [presence, setPresence] = useState<Record<string, number>>({});
   const [selectedFriend, setSelectedFriend] = useState<PublicProfile | null>(null);
   const [privateMessages, setPrivateMessages] = useState<SocialMessage[]>([]);
   const [globalMessages, setGlobalMessages] = useState<SocialMessage[]>([]);
@@ -115,7 +115,7 @@ export function SocialSection() {
     if (!uid || !profile.uid || busy) return;
     setBusy(true); setError('');
     try {
-      const requestId = uid + '_' + profile.uid;
+      const requestId = friendshipId(uid, profile.uid);
       await setDoc(doc(db, 'friendRequests', requestId), {
         senderUid: uid, recipientUid: profile.uid, senderName: myName,
         recipientName: profile.displayName, participantUids: [uid, profile.uid],
@@ -168,7 +168,7 @@ export function SocialSection() {
     finally { setBusy(false); }
   };
 
-  const online = (profileUid: string) => false; // Replaced below by the live presence listener.
+  const online = (profileUid: string) => Boolean(presence[profileUid] && Date.now() - presence[profileUid] < 90000);
   const card = 'rounded-xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900';
   const field = 'w-full rounded-lg border border-slate-200 dark:border-zinc-700 bg-white dark:bg-zinc-950 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-emerald-500';
   const button = 'inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-500 disabled:opacity-50';
@@ -204,7 +204,7 @@ export function SocialSection() {
             {pendingIncoming.map((request) => <div key={request.id} className="flex items-center justify-between gap-2 text-sm"><span className="truncate">{request.senderName}</span><span className="flex gap-1"><button title="Aceitar" className="rounded-md bg-emerald-600 p-2 text-white" onClick={() => respondRequest(request, true)}><Check className="h-4 w-4" /></button><button title="Recusar" className="rounded-md bg-red-600 p-2 text-white" onClick={() => respondRequest(request, false)}><X className="h-4 w-4" /></button></span></div>)}
             {pendingIncoming.length === 0 && <p className="text-xs text-slate-500">Nenhuma solicitação pendente.</p>}
             <h2 className="border-t border-slate-200 pt-3 font-bold dark:border-zinc-800">Meus amigos ({friends.length})</h2>
-            {friends.map((friend) => <button key={friend.uid} onClick={() => setSelectedFriend(friend)} className={'w-full rounded-lg p-2 text-left text-sm ' + (selectedFriend?.uid === friend.uid ? 'bg-emerald-50 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300' : 'hover:bg-slate-50 dark:hover:bg-zinc-800')}><span className="flex items-center gap-2"><Circle className="h-2.5 w-2.5 fill-slate-400 text-slate-400" />{friend.displayName}</span></button>)}
+            {friends.map((friend) => <button key={friend.uid} onClick={() => setSelectedFriend(friend)} className={'w-full rounded-lg p-2 text-left text-sm ' + (selectedFriend?.uid === friend.uid ? 'bg-emerald-50 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300' : 'hover:bg-slate-50 dark:hover:bg-zinc-800')}><span className="flex items-center gap-2"><Circle className={"h-2.5 w-2.5 " + (online(friend.uid) ? "fill-emerald-500 text-emerald-500" : "fill-slate-400 text-slate-400")} />{friend.displayName}<span className="ml-auto text-[10px] text-slate-500">{online(friend.uid) ? "online" : "offline"}</span></span></button>)}
             {friends.length === 0 && <p className="text-xs text-slate-500">Adicione alguém para começar uma conversa.</p>}
           </div>
           <div className={card + ' flex min-h-[360px] flex-col p-4'}>
