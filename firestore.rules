@@ -1250,7 +1250,7 @@ service cloud.firestore {
       return data.keys().hasOnly(['senderUid', 'senderName', 'text', 'createdAt']) &&
         data.keys().hasAll(['senderUid', 'senderName', 'text', 'createdAt']) &&
         data.senderUid == request.auth.uid &&
-        data.senderName is string && data.senderName.size() >= 1 && data.senderName.size() <= 60 &&
+        data.senderName is string && data.senderName.size() >= 1 && data.senderName.size() <= 60 &&\n        data.senderName == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.displayName &&
         data.text is string && data.text.size() >= 1 && data.text.size() <= 500 &&
         data.createdAt == request.time;
     }
