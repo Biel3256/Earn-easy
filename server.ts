@@ -66,6 +66,7 @@ const CATEGORY_BOUNDS: Record<string, { minDurationMs: number; maxScore: number;
   memory_match: { minDurationMs: 6000, maxScore: 400, maxPtsPerSec: 35 },
   quick_reflex: { minDurationMs: 5000, maxScore: 400, maxPtsPerSec: 45 },
   high_low_cards: { minDurationMs: 5000, maxScore: 380, maxPtsPerSec: 40 },
+  block_blast: { minDurationMs: 15000, maxScore: 60, maxPtsPerSec: 5 },
 };
 
 function validateEnterpriseApiKey(req: express.Request): boolean {
