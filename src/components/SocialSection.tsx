@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   addDoc, collection, doc, getDoc, getDocs, limit, onSnapshot, orderBy,
-  query, serverTimestamp, setDoc, updateDoc, where, writeBatch,
+  query, serverTimestamp, setDoc, startAt, endAt, where, writeBatch,
 } from 'firebase/firestore';
 import { MessageCircle, Search, Send, Users, UserPlus, Check, X, Circle } from 'lucide-react';
 import { db } from '../firebase';
