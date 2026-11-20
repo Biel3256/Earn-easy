@@ -304,7 +304,7 @@ service cloud.firestore {
       ]) &&
       isValidId(data.sessionId) &&
       isValidId(data.userId) &&
-      data.gameCategory in ['tic_tac_toe', 'dot_link', 'word_search', 'math_sprint', 'memory_match', 'quick_reflex', 'high_low_cards', 'block_blast'] &&
+      data.gameCategory in ['tic_tac_toe', 'dot_link', 'word_search', 'math_sprint', 'memory_match', 'quick_reflex', 'high_low_cards'] &&
       data.scoreEarned is number && data.scoreEarned >= 0 && data.scoreEarned <= 500 &&
       data.durationMs is number && data.durationMs >= 3000 &&
       data.movesCount is number && data.movesCount >= 1 &&
