@@ -26,7 +26,6 @@ import { NotificationsSection } from './components/NotificationsSection';
 import { AppTheme, SettingsSection } from './components/SettingsSection';
 import { WelcomeTutorialModal } from './components/WelcomeTutorialModal';
 import { formatBRL } from './utils/pix';
-import { SocialPresence, SocialSection } from './components/SocialSection';
 
 const AdminPanel = lazy(() =>
   import('./components/AdminPanel').then((mod) => ({ default: mod.AdminPanel }))
@@ -40,7 +39,6 @@ type NavTab =
   | 'dashboard'
   | 'notifications'
   | 'profile'
-  | 'social'
   | 'settings';
 
 const THEME_STORAGE_KEY = 'earneasy_theme';
@@ -145,7 +143,6 @@ function MainShell() {
   const navItems: { id: NavTab; label: string }[] = [
     { id: 'games', label: 'Início' },
     { id: 'ranking', label: 'Ranking' },
-    { id: 'social', label: 'Comunidade' },
     { id: 'invites', label: 'Convites & Códigos' },
     { id: 'wallet', label: 'Carteira Pix' },
     {
@@ -636,7 +633,6 @@ function MainShell() {
               />
             )}
             {activeTab === 'profile' && <PlayerProfile />}
-            {activeTab === 'social' && <SocialSection />}
             {activeTab === 'wallet' && <WalletSection />}
             {activeTab === 'dashboard' && <DashboardSection />}
             {activeTab === 'notifications' && <NotificationsSection />}
@@ -651,8 +647,6 @@ function MainShell() {
           </>
         )}
       </main>
-
-      <SocialPresence />
 
       <footer
         className={`border-t transition-colors ${

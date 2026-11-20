@@ -879,7 +879,7 @@ service cloud.firestore {
     // 9. Global Leaderboard Projection (Zero PII, synced atomically with /users/{userId})
     match /leaderboard/{userId} {
       allow get: if isValidId(userId) && isSignedIn() && (existing().status == 'active' || isOwner(userId) || isAdmin());
-      allow list: if isSignedIn() && (resource.data.brlBalanceCents >= 0 || resource.data.status == 'active');
+      allow list: if isSignedIn() && resource.data.brlBalanceCents >= 0;
 
       allow create, update: if isValidId(userId) &&
         isSignedIn() &&
@@ -1054,7 +1054,7 @@ service cloud.firestore {
 
     // 14. Promo Code Redemptions (Deterministic one-time per user: prm_{uid}_{code})
     match /promoRedemptions/{redemptionId} {
-      allow get: if isValidId(redemptionId) && (isAdmin() || (isSignedIn() && (redemptionId.matches('^prm_' + request.auth.uid + '_[A-Z0-9_\\-]{3,40}
+      allow get: if isValidId(redemptionId) && (isAdmin() || (isSignedIn() && existing().userId == request.auth.uid));
       allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
 
       allow create: if isValidId(redemptionId) &&
@@ -1147,195 +1147,6 @@ service cloud.firestore {
 
       allow update: if false;
       allow delete: if isValidId(attemptId) && isAdmin();
-    }
-  }
-}
-) || existing().userId == request.auth.uid)));
-      allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
-
-      allow create: if isValidId(redemptionId) &&
-        isSignedIn() &&
-        isValidPromoRedemption(incoming()) &&
-        incoming().redemptionId == redemptionId &&
-        incoming().userId == request.auth.uid &&
-        redemptionId == promoRedemptionDocId(request.auth.uid, incoming().code) &&
-        incoming().createdAt == request.time &&
-        isActiveUser(request.auth.uid) &&
-        exists(/databases/$(database)/documents/promoCodes/$(incoming().code)) &&
-        get(/databases/$(database)/documents/promoCodes/$(incoming().code)).data.active == true &&
-        isPromoPublished(get(/databases/$(database)/documents/promoCodes/$(incoming().code)).data) &&
-        get(/databases/$(database)/documents/promoCodes/$(incoming().code)).data.redemptionCount < get(/databases/$(database)/documents/promoCodes/$(incoming().code)).data.maxRedemptions &&
-        incoming().pointsAwarded == get(/databases/$(database)/documents/promoCodes/$(incoming().code)).data.pointsValue &&
-        getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.pointsBalance ==
-          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.pointsBalance + incoming().pointsAwarded;
-
-      allow update, delete: if isValidId(redemptionId) && isAdmin();
-    }
-
-    // 15. Caixa de Correio Broadcast Messages (sent when admin creates promo code events)
-    match /mailboxMessages/{messageId} {
-      allow get: if isValidId(messageId) && (isAdmin() || (isSignedIn() && existing().active == true));
-      allow list: if isAdmin() || (isSignedIn() && resource.data.active == true);
-
-      allow create: if isValidId(messageId) &&
-        isAdmin() &&
-        isValidMailboxMessage(incoming()) &&
-        incoming().messageId == messageId &&
-        incoming().createdAt == request.time;
-
-      allow update: if isValidId(messageId) &&
-        isAdmin() &&
-        isValidMailboxMessage(incoming()) &&
-        incoming().messageId == existing().messageId &&
-        incoming().createdAt == existing().createdAt;
-
-      allow delete: if isValidId(messageId) && isAdmin();
-    }
-
-    // 16. Platform App Settings (configurable Pix withdrawal minimums from 1 to 2000 cents)
-    match /appSettings/{settingId} {
-      allow get: if isValidId(settingId) && settingId == 'withdrawal' && isSignedIn();
-      allow list: if isAdmin();
-
-      allow create: if isValidId(settingId) &&
-        settingId == 'withdrawal' &&
-        isAdmin() &&
-        isValidWithdrawalSettings(incoming()) &&
-        incoming().settingId == settingId &&
-        incoming().updatedAt == request.time;
-
-      allow update: if isValidId(settingId) &&
-        settingId == 'withdrawal' &&
-        isAdmin() &&
-        isValidWithdrawalSettings(incoming()) &&
-        incoming().settingId == existing().settingId &&
-        incoming().updatedAt == request.time;
-
-      allow delete: if isValidId(settingId) && isAdmin();
-    }
-
-    // 17. Pix Withdrawal Attempt Audit Logs (immutable append-only trail for anti-fraud)
-    match /withdrawalAttempts/{attemptId} {
-      allow get: if isValidId(attemptId) && (isAdmin() || (isSignedIn() && existing().userId == request.auth.uid));
-      allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
-
-      allow create: if isValidId(attemptId) &&
-        isSignedIn() &&
-        isValidWithdrawalAttemptLog(incoming()) &&
-        incoming().attemptId == attemptId &&
-        incoming().actorUid == request.auth.uid &&
-        incoming().createdAt == request.time && (
-          isAdmin() || (
-            incoming().userId == request.auth.uid &&
-            incoming().status in [
-              'submitted_pending', 'blocked_min_amount',
-              'blocked_insufficient_balance', 'blocked_invalid_pix',
-              'blocked_captcha', 'blocked_account_status',
-              'failed_transaction'
-            ] && (
-              incoming().status != 'submitted_pending' || (
-                isValidId(incoming().withdrawalId) &&
-                existsAfter(/databases/$(database)/documents/withdrawals/$(incoming().withdrawalId))
-              )
-            )
-          )
-        );
-
-      allow update: if false;
-      allow delete: if isValidId(attemptId) && isAdmin();
-    }
-
-    // 18. Earn Easy social features (isolated collections)
-    function validSocialMessage(data) {
-      return data.keys().hasOnly(['senderUid', 'senderName', 'text', 'createdAt']) &&
-        data.keys().hasAll(['senderUid', 'senderName', 'text', 'createdAt']) &&
-        data.senderUid == request.auth.uid &&
-        data.senderName is string && data.senderName.size() >= 1 && data.senderName.size() <= 60 &&
-        data.senderName == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.displayName &&
-        data.text is string && data.text.size() >= 1 && data.text.size() <= 500 &&
-        data.createdAt == request.time;
-    }
-
-    match /socialPresence/{userId} {
-      allow get, list: if isSignedIn();
-      allow create: if isOwner(userId) &&
-        incoming().keys().hasOnly(['uid', 'lastSeen']) &&
-        incoming().uid == userId &&
-        incoming().lastSeen == request.time;
-      allow update: if isOwner(userId) &&
-        incoming().diff(existing()).affectedKeys().hasOnly(['lastSeen']) &&
-        incoming().lastSeen == request.time;
-      allow delete: if isOwner(userId);
-    }
-
-    match /friendRequests/{requestId} {
-      allow get, list: if isSignedIn() &&
-        request.auth.uid in existing().participantUids;
-      allow create: if isSignedIn() &&
-        requestId == (request.auth.uid < incoming().recipientUid ? request.auth.uid + '__' + incoming().recipientUid : incoming().recipientUid + '__' + request.auth.uid) &&
-        incoming().keys().hasOnly(['senderUid', 'recipientUid', 'senderName', 'recipientName', 'participantUids', 'status', 'createdAt']) &&
-        incoming().senderUid == request.auth.uid &&
-        isValidId(incoming().recipientUid) &&
-        incoming().recipientUid != request.auth.uid &&
-        incoming().participantUids is list &&
-        incoming().participantUids.size() == 2 &&
-        request.auth.uid in incoming().participantUids &&
-        incoming().recipientUid in incoming().participantUids &&
-        incoming().senderName is string && incoming().senderName.size() <= 60 &&
-        incoming().senderName == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.displayName &&
-        incoming().recipientName is string && incoming().recipientName.size() <= 60 &&
-        incoming().recipientName == get(/databases/$(database)/documents/users/$(incoming().recipientUid)).data.displayName &&
-        incoming().status == 'pending' &&
-        incoming().createdAt == request.time;
-      allow update: if isSignedIn() && (
-        (
-          request.auth.uid == existing().recipientUid &&
-          existing().status == 'pending' &&
-          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'respondedAt']) &&
-          incoming().status in ['accepted', 'rejected'] &&
-          incoming().respondedAt == request.time
-        ) || (
-          request.auth.uid == existing().senderUid &&
-          existing().status == 'rejected' &&
-          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'createdAt', 'respondedAt']) &&
-          incoming().status == 'pending' &&
-          incoming().createdAt == request.time &&
-          incoming().respondedAt == null
-        )
-      );
-      allow delete: if false;
-    }
-
-    match /friendships/{chatId} {
-      allow get, list: if isSignedIn() && request.auth.uid in existing().memberUids;
-      allow create: if isSignedIn() &&
-        incoming().keys().hasOnly(['memberUids', 'createdAt']) &&
-        incoming().memberUids is list &&
-        incoming().memberUids.size() == 2 &&
-        request.auth.uid in incoming().memberUids &&
-        incoming().createdAt == request.time &&
-        chatId == incoming().memberUids[0] + '__' + incoming().memberUids[1] &&
-        existsAfter(/databases/$(database)/documents/friendRequests/$(incoming().memberUids[0] + '__' + incoming().memberUids[1])) &&
-        getAfter(/databases/$(database)/documents/friendRequests/$(incoming().memberUids[0] + '__' + incoming().memberUids[1])).data.status == 'accepted' &&
-        getAfter(/databases/$(database)/documents/friendRequests/$(incoming().memberUids[0] + '__' + incoming().memberUids[1])).data.participantUids.hasAll(incoming().memberUids);
-      allow update, delete: if false;
-
-      match /messages/{messageId} {
-        allow get, list: if isSignedIn() &&
-          request.auth.uid in get(/databases/$(database)/documents/friendships/$(chatId)).data.memberUids;
-        allow create: if isSignedIn() &&
-          request.auth.uid in get(/databases/$(database)/documents/friendships/$(chatId)).data.memberUids &&
-          validSocialMessage(incoming());
-        allow update, delete: if false;
-      }
-    }
-
-    match /globalMessages/{messageId} {
-      allow get, list: if isSignedIn();
-      allow create: if isSignedIn() &&
-        validSocialMessage(incoming()) &&
-        incoming().senderName == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.displayName;
-      allow update, delete: if false;
     }
   }
 }
