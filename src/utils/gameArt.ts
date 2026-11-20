@@ -5,6 +5,7 @@ import gameMemoryImg from '../assets/images/game_memory_icon_1795186544976.jpg';
 import gameReflexImg from '../assets/images/game_reflex_icon_1795186544995.jpg';
 import gameTicTacToeImg from '../assets/images/game_tictactoe_icon_1795186544275.jpg';
 import gameWordSearchImg from '../assets/images/game_wordsearch_icon_1795186544984.jpg';
+import gameBlockBlastImg from '../assets/images/game_block_blast.svg';
 import heroGamingBannerImg from '../assets/images/hero_gaming_banner_1795186544377.jpg';
 import { GameCategory } from '../types/earneasy';
 
@@ -18,4 +19,5 @@ export const GAME_THUMBNAILS: Record<GameCategory, string> = {
   memory_match: gameMemoryImg,
   quick_reflex: gameReflexImg,
   high_low_cards: gameCardsImg,
+  block_blast: gameBlockBlastImg,
 };
