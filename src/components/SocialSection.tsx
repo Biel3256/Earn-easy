@@ -874,6 +874,29 @@ export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSec
           </div>
 
           <div className="flex-1 space-y-2.5 overflow-y-auto py-4 pr-1">
+          <div className="mb-3 rounded-2xl border border-amber-300/80 dark:border-amber-700/70 bg-amber-50 dark:bg-amber-950/25 p-3.5 shadow-sm">
+            <div className="flex items-center gap-2 text-amber-800 dark:text-amber-300 text-xs font-extrabold mb-2">
+              <span aria-hidden="true">📌</span>
+              AVISO FIXADO — REGRAS DO CHAT GLOBAL
+            </div>
+            <p className="text-xs text-slate-800 dark:text-zinc-200 leading-relaxed mb-2">
+              Salve, salve, galera! Aqui é o Biel, dono e administrador do site Earn Easy. Para manter o chat organizado e agradável para todos, sigam as regras abaixo:
+            </p>
+            <ol className="list-decimal pl-4 space-y-1 text-xs text-slate-700 dark:text-zinc-300 leading-relaxed">
+              <li>Respeite todos os membros. Não são permitidos insultos, ameaças ou perseguição.</li>
+              <li>Não faça spam, flood ou envie mensagens repetidas.</li>
+              <li>Não publique conteúdo ofensivo, impróprio ou ilegal.</li>
+              <li>Não divulgue links, grupos ou serviços sem autorização da administração.</li>
+              <li>Não compartilhe golpes, links suspeitos ou tente enganar outros jogadores.</li>
+              <li>Respeite as orientações dos administradores e moderadores.</li>
+              <li>Use o chat para conversar sobre o Earn Easy, trocar dicas e ajudar a comunidade.</li>
+              <li>Avise a administração se encontrar algo suspeito ou uma mensagem que viole as regras.</li>
+            </ol>
+            <p className="text-[11px] font-bold text-amber-800 dark:text-amber-300 mt-2">
+              Quem descumprir as regras poderá receber aviso, mute ou banimento.
+            </p>
+            <p className="text-[11px] text-slate-500 dark:text-zinc-400 mt-1">Biel — Dono e administrador do Earn Easy</p>
+          </div>
             {globalMessages.length === 0 ? (
               <div className="h-full flex items-center justify-center text-xs text-slate-500 dark:text-zinc-400">
                 Nenhuma mensagem ainda. Seja o primeiro a dar um oi!
