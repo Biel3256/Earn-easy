@@ -109,10 +109,10 @@ export function SocialSection() {
       } else {
         const peopleQuery = query(
           collection(db, 'leaderboard'),
-          where('brlBalanceCents', '>=', 0),
-          where('displayName', '>=', term),
-          where('displayName', '<=', term + '\uf8ff'),
+          where('status', '==', 'active'),
           orderBy('displayName'),
+          startAt(term),
+          endAt(term + '\uf8ff'),
           limit(20),
         );
         const snap = await getDocs(peopleQuery);
