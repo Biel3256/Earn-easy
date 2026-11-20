@@ -36,14 +36,16 @@ export function SocialSection() {
   const [searchResults, setSearchResults] = useState<PublicProfile[]>([]);
   const [searching, setSearching] = useState(false);
   const [requests, setRequests] = useState<FriendRequest[]>([]);
-  const [friends, setFriends] = useState<PublicProfile[]>([]);\n  const [presence, setPresence] = useState<Record<string, number>>({});
+  const [friends, setFriends] = useState<PublicProfile[]>([]);
+  const [presence, setPresence] = useState<Record<string, number>>({});
   const [selectedFriend, setSelectedFriend] = useState<PublicProfile | null>(null);
   const [privateMessages, setPrivateMessages] = useState<SocialMessage[]>([]);
   const [globalMessages, setGlobalMessages] = useState<SocialMessage[]>([]);
   const [privateDraft, setPrivateDraft] = useState('');
   const [globalDraft, setGlobalDraft] = useState('');
   const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);\n  const [, refreshPresenceClock] = useState(0);
+  const [busy, setBusy] = useState(false);
+  const [, refreshPresenceClock] = useState(0);
   const [tab, setTab] = useState<'friends' | 'global'>('friends');
 
   useEffect(() => {
@@ -85,7 +87,12 @@ export function SocialSection() {
     }, () => setError('Não foi possível carregar a conversa privada.'));
   }, [uid, selectedFriend?.uid]);
 
-  useEffect(() => {\n    const timer = window.setInterval(() => refreshPresenceClock((value) => value + 1), 15000);\n    return () => window.clearInterval(timer);\n  }, []);\n\n  const pendingIncoming = useMemo(() => requests.filter((item) => item.recipientUid === uid && item.status === 'pending'), [requests, uid]);
+  useEffect(() => {
+    const timer = window.setInterval(() => refreshPresenceClock((value) => value + 1), 15000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const pendingIncoming = useMemo(() => requests.filter((item) => item.recipientUid === uid && item.status === 'pending'), [requests, uid]);
   const sentRequests = useMemo(() => requests.filter((item) => item.senderUid === uid && item.status === 'pending'), [requests, uid]);
 
   const searchUsers = async () => {
