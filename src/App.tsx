@@ -10,7 +10,6 @@ import {
   ShieldAlert,
   Ticket,
   User,
-  Users,
   Wallet,
   X,
 } from 'lucide-react';
