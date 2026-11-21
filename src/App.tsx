@@ -31,7 +31,6 @@ import {
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ToastProvider } from './context/ToastContext';
-import { AgeVerificationGate } from './components/AgeVerificationGate';
 import { AppFooter } from './components/AppFooter';
 import { AuthGateScreen } from './components/AuthGateScreen';
 import { BrandLogo } from './components/BrandLogo';
@@ -276,11 +275,6 @@ function MainShell() {
         onAccountCreated={() => setTutorialOpen(true)}
       />
     );
-  }
-
-  // Gate 3: Mandatory +18 Age Verification for accounts without ageVerified
-  if (!isBackofficeRoute && userAccount && userAccount.ageVerified !== true) {
-    return <AgeVerificationGate theme={theme} onChangeTheme={setTheme} />;
   }
 
   const sidebarItems: Array<{
