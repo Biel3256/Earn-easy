@@ -57,7 +57,7 @@ const safeText = (value: string) => value.trim().slice(0, 500);
 const containsOffensiveLanguage = (value: string) => {
   const normalized = value
     .normalize('NFD')
-    .replace(/[\\u0300-\\u036f]/g, '')
+    .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
     .replace(/0/g, 'o')
     .replace(/1/g, 'i')
@@ -66,24 +66,24 @@ const containsOffensiveLanguage = (value: string) => {
     .replace(/5/g, 's')
     .replace(/7/g, 't');
   const terms = [
-    /\\bporra\\b/,
-    /\\bcaralho\\b/,
-    /\\bmerda\\b/,
-    /\\bbosta\\b/,
-    /\\bbuceta\\b/,
-    /\\bputa(s)?\\b/,
-    /\\bputaria\\b/,
-    /\\bfoda(se|m|mos|ndo|r)?\\b/,
-    /\\barrombado(a|s)?\\b/,
-    /\\bdesgraca(do|da)?\\b/,
-    /\\bidiota(s)?\\b/,
-    /\\botario(s)?\\b/,
-    /\\bburro(a|s)?\\b/,
-    /\\bretardado(a|s)?\\b/,
-    /\\bfilho da puta\\b/,
-    /\\bvai tomar no cu\\b/,
-    /\\bvsf\\b/,
-    /\\bfdp\\b/,
+    /\bporra\b/,
+    /\bcaralho\b/,
+    /\bmerda\b/,
+    /\bbosta\b/,
+    /\bbuceta\b/,
+    /\bputa(s)?\b/,
+    /\bputaria\b/,
+    /\bfoda(se|m|mos|ndo|r)?\b/,
+    /\barrombado(a|s)?\b/,
+    /\bdesgraca(do|da)?\b/,
+    /\bidiota(s)?\b/,
+    /\botario(s)?\b/,
+    /\bburro(a|s)?\b/,
+    /\bretardado(a|s)?\b/,
+    /\bfilho da puta\b/,
+    /\bvai tomar no cu\b/,
+    /\bvsf\b/,
+    /\bfdp\b/,
   ];
   return terms.some((term) => term.test(normalized));
 };
