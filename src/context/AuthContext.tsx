@@ -558,7 +558,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           banExplanation: '',
           bannedBy: '',
           updatedAt: serverTimestamp(),
-        }).catch(() => {});
+        }).then(() => setDoc(doc(db, 'leaderboard', firebaseUser.uid), {
+          uid: userAccount.uid,
+          displayName: userAccount.displayName,
+          photoURL: userAccount.photoURL,
+          brlBalanceCents: userAccount.brlBalanceCents,
+          pointsBalance: userAccount.pointsBalance,
+          lifetimePoints: userAccount.lifetimePoints,
+          gamesPlayed: userAccount.gamesPlayed,
+          status: 'active',
+          updatedAt: serverTimestamp(),
+        })).catch(() => {});
         return;
       }
       // Browser timers have a ~24.8-day maximum; reschedule longer suspensions safely.
