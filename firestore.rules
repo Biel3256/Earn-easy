@@ -1010,7 +1010,7 @@ service cloud.firestore {
               ) ||
               // Action L: Mandatory +18 Age Verification
               (
-                (!('ageVerified' in existing()) || existing().ageVerified == false) &&
+                (!('ageVerified' in existing()) || existing().ageVerified != true) &&
                 incoming().status == existing().status &&
                 incoming().riskScore == existing().riskScore &&
                 incoming().diff(existing()).affectedKeys().hasOnly(['birthDate', 'ageVerified', 'ageVerifiedAt', 'updatedAt']) &&
@@ -1020,7 +1020,7 @@ service cloud.firestore {
               ) ||
               // Action M: Facial Identity Verification Submission (synced atomically with /faceVerifications/{uid})
               (
-                (!('identityVerified' in existing()) || existing().identityVerified == false) &&
+                (!('identityVerified' in existing()) || existing().identityVerified != true) &&
                 incoming().status == existing().status &&
                 incoming().riskScore == existing().riskScore &&
                 incoming().diff(existing()).affectedKeys().hasOnly(['faceVerificationStatus', 'faceVerificationNote', 'updatedAt']) &&
@@ -1098,14 +1098,14 @@ service cloud.firestore {
       allow update: if isValidId(userId) &&
         isSignedIn() &&
         isOwner(userId) &&
-        isActiveUser(userId) &&
+        existing().status != 'suspended' &&
         existing().uid == userId &&
         incoming().uid == existing().uid &&
-        incoming().createdAt == existing().createdAt &&
+        (!('createdAt' in existing()) || incoming().createdAt == existing().createdAt) &&
         incoming().status == existing().status &&
         incoming().riskScore == existing().riskScore &&
         incoming().updatedAt == request.time &&
-        (!('ageVerified' in existing()) || existing().ageVerified == false) &&
+        (!('ageVerified' in existing()) || existing().ageVerified != true) &&
         incoming().birthDate is string &&
         isValidDateStr(incoming().birthDate) &&
         incoming().ageVerified == true &&
@@ -1831,7 +1831,7 @@ service cloud.firestore {
         incoming().reviewedBy == '' &&
         incoming().submittedAt == request.time &&
         incoming().reviewedAt == null &&
-        (!('identityVerified' in get(/databases/$(database)/documents/users/$(userId)).data) || get(/databases/$(database)/documents/users/$(userId)).data.identityVerified == false) &&
+        (!('identityVerified' in get(/databases/$(database)/documents/users/$(userId)).data) || get(/databases/$(database)/documents/users/$(userId)).data.identityVerified != true) &&
         existsAfter(/databases/$(database)/documents/users/$(userId)) &&
         getAfter(/databases/$(database)/documents/users/$(userId)).data.faceVerificationStatus == 'pending';
 
@@ -1850,7 +1850,7 @@ service cloud.firestore {
             incoming().reviewedBy == '' &&
             incoming().submittedAt == request.time &&
             incoming().reviewedAt == null &&
-                (!('identityVerified' in get(/databases/$(database)/documents/users/$(userId)).data) || get(/databases/$(database)/documents/users/$(userId)).data.identityVerified == false) &&
+            (!('identityVerified' in get(/databases/$(database)/documents/users/$(userId)).data) || get(/databases/$(database)/documents/users/$(userId)).data.identityVerified != true) &&
             existsAfter(/databases/$(database)/documents/users/$(userId)) &&
             getAfter(/databases/$(database)/documents/users/$(userId)).data.faceVerificationStatus == 'pending'
           ) || (

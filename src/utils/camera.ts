@@ -27,7 +27,13 @@ function encodeCanvasWithinBudget(canvas: HTMLCanvasElement): string {
     const fCtx = fallbackCanvas.getContext('2d');
     if (fCtx) {
       fCtx.drawImage(canvas, 0, 0, 240, 240);
-      out = fallbackCanvas.toDataURL('image/jpeg', 0.45);
+      for (const quality of [0.6, 0.45, 0.3, 0.2]) {
+        const attempt = fallbackCanvas.toDataURL('image/jpeg', quality);
+        if (attempt.length <= MAX_SELFIE_DATA_URL_LENGTH && SELFIE_DATA_URL_RE.test(attempt)) {
+          out = attempt;
+          break;
+        }
+      }
     }
   }
   if (!isValidSelfieDataUrl(out)) {

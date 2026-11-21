@@ -14,7 +14,7 @@ import { useToast } from '../context/ToastContext';
 import { FACE_VERIFICATION_BONUS_POINTS } from '../types/earneasy';
 import { formatBirthDateBr } from '../utils/age';
 import { captureVideoFrameAsDataUrl, compressSelfieFromFile } from '../utils/camera';
-import { formatPoints } from '../utils/pix';
+import { extractReadableError, formatPoints } from '../utils/pix';
 
 interface FaceVerificationModalProps {
   open: boolean;
@@ -89,6 +89,11 @@ export const FaceVerificationModal: React.FC<FaceVerificationModalProps> = ({
     }
   }, [stopCameraStream]);
 
+  const onCloseRef = useRef(onClose);
+  const submittingRef = useRef(submitting);
+  onCloseRef.current = onClose;
+  submittingRef.current = submitting;
+
   useEffect(() => {
     if (!open) {
       stopCameraStream();
@@ -102,8 +107,8 @@ export const FaceVerificationModal: React.FC<FaceVerificationModalProps> = ({
     void startFrontCamera();
 
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !submitting) {
-        onClose();
+      if (e.key === 'Escape' && !submittingRef.current) {
+        onCloseRef.current();
       }
     };
     window.addEventListener('keydown', onKeyDown);
@@ -111,7 +116,7 @@ export const FaceVerificationModal: React.FC<FaceVerificationModalProps> = ({
       window.removeEventListener('keydown', onKeyDown);
       stopCameraStream();
     };
-  }, [open, startFrontCamera, stopCameraStream, onClose, submitting]);
+  }, [open, startFrontCamera, stopCameraStream]);
 
   if (!open || !userAccount) return null;
 
@@ -167,8 +172,7 @@ export const FaceVerificationModal: React.FC<FaceVerificationModalProps> = ({
       });
       onClose();
     } catch (err) {
-      const msg =
-        err instanceof Error ? err.message : 'Não foi possível enviar a verificação facial.';
+      const msg = extractReadableError(err, 'Não foi possível enviar a verificação facial.');
       setSubmitError(msg);
       showToast({ type: 'error', title: 'Erro no envio', message: msg });
     } finally {
@@ -282,7 +286,6 @@ export const FaceVerificationModal: React.FC<FaceVerificationModalProps> = ({
             ref={galleryInputRef}
             type="file"
             accept="image/*"
-            capture="user"
             onChange={handlePickGalleryFile}
             className="hidden"
           />

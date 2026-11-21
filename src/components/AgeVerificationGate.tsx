@@ -13,6 +13,7 @@ import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { MIN_VERIFIED_AGE } from '../types/earneasy';
 import { validateBirthDateInput } from '../utils/age';
+import { extractReadableError } from '../utils/pix';
 import { BrandLogo } from './BrandLogo';
 import { ParticleBackdrop } from './ParticleBackdrop';
 import { AppTheme } from './SettingsSection';
@@ -78,10 +79,10 @@ export const AgeVerificationGate: React.FC<AgeVerificationGateProps> = ({
         message: 'Acesso completo ao Earn Easy liberado. Aproveite os jogos!',
       });
     } catch (err) {
-      const msg =
-        err instanceof Error
-          ? err.message
-          : 'Não foi possível validar sua data de nascimento agora.';
+      const msg = extractReadableError(
+        err,
+        'Não foi possível validar sua data de nascimento agora.'
+      );
       setErrorMsg(msg);
       showToast({ type: 'error', title: 'Erro na verificação', message: msg });
     } finally {

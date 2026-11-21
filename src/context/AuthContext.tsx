@@ -132,12 +132,12 @@ function buildLeaderboardPayload(
 ) {
   return {
     uid: userData.uid,
-    displayName: overrides.displayName ?? userData.displayName,
-    photoURL: overrides.photoURL ?? userData.photoURL,
-    brlBalanceCents: overrides.brlBalanceCents ?? userData.brlBalanceCents,
-    pointsBalance: overrides.pointsBalance ?? userData.pointsBalance,
-    lifetimePoints: overrides.lifetimePoints ?? userData.lifetimePoints,
-    gamesPlayed: overrides.gamesPlayed ?? userData.gamesPlayed,
+    displayName: overrides.displayName ?? userData.displayName ?? 'Jogador',
+    photoURL: overrides.photoURL ?? userData.photoURL ?? '',
+    brlBalanceCents: overrides.brlBalanceCents ?? userData.brlBalanceCents ?? 0,
+    pointsBalance: overrides.pointsBalance ?? userData.pointsBalance ?? 0,
+    lifetimePoints: overrides.lifetimePoints ?? userData.lifetimePoints ?? 0,
+    gamesPlayed: overrides.gamesPlayed ?? userData.gamesPlayed ?? 0,
     status: overrides.status ?? userData.status,
     identityVerified: overrides.identityVerified ?? Boolean(userData.identityVerified),
     updatedAt: serverTimestamp(),
@@ -1777,7 +1777,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     let brlBonusCents = 0;
     let streakBroken = false;
 
-    try {
+    const runCheckinTx = async (includeReferralCommission: boolean) => {
       await runTransaction(db, async (tx) => {
         const userRef = doc(db, 'users', firebaseUser.uid);
         const checkinRef = doc(db, 'dailyCheckins', checkinId);
@@ -1787,7 +1787,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           tx.get(userRef),
           tx.get(checkinRef),
           tx.get(yesterdayRef),
-          tx.get(referralRef),
+          includeReferralCommission ? tx.get(referralRef) : Promise.resolve(null),
         ]);
 
         if (!userSnap.exists()) throw new Error('Conta de usuário não encontrada.');
@@ -1800,9 +1800,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           throw new Error('Sua conta está em revisão antifraude.');
         }
 
+        const prevPoints = typeof current.pointsBalance === 'number' ? current.pointsBalance : 0;
+        const prevLifetime = typeof current.lifetimePoints === 'number' ? current.lifetimePoints : 0;
+        const prevBrl = typeof current.brlBalanceCents === 'number' ? current.brlBalanceCents : 0;
+
         const commission = Math.floor((pointsAwarded * 12) / 100);
         let activeReferrerData: Referral | null = null;
-        if (refSnap.exists() && commission >= 1) {
+        if (includeReferralCommission && refSnap && refSnap.exists() && commission >= 1) {
           const candidateRef = refSnap.data() as Referral;
           if (candidateRef.referrerUid && candidateRef.referrerUid !== firebaseUser.uid) {
             const refLbSnap = await tx.get(doc(db, 'leaderboard', candidateRef.referrerUid));
@@ -1839,9 +1843,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         });
 
         tx.update(userRef, {
-          pointsBalance: current.pointsBalance + pointsAwarded,
-          lifetimePoints: current.lifetimePoints + pointsAwarded,
-          brlBalanceCents: current.brlBalanceCents + brlBonusCents,
+          pointsBalance: prevPoints + pointsAwarded,
+          lifetimePoints: prevLifetime + pointsAwarded,
+          brlBalanceCents: prevBrl + brlBonusCents,
           updatedAt: serverTimestamp(),
         });
 
@@ -1859,12 +1863,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         tx.set(
           doc(db, 'leaderboard', firebaseUser.uid),
           buildLeaderboardPayload(current, {
-            brlBalanceCents: current.brlBalanceCents + brlBonusCents,
-            pointsBalance: current.pointsBalance + pointsAwarded,
-            lifetimePoints: current.lifetimePoints + pointsAwarded,
+            brlBalanceCents: prevBrl + brlBonusCents,
+            pointsBalance: prevPoints + pointsAwarded,
+            lifetimePoints: prevLifetime + pointsAwarded,
           })
         );
       });
+    };
+
+    try {
+      try {
+        await runCheckinTx(true);
+      } catch (firstErr) {
+        if (isFirestoreSdkError(firstErr)) {
+          await runCheckinTx(false);
+        } else {
+          throw firstErr;
+        }
+      }
     } catch (error) {
       handleTransactionError(error, OperationType.WRITE, `dailyCheckins/${checkinId}`);
     }
@@ -2492,11 +2508,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
 
     try {
+      const validBirthDate =
+        typeof userAccount.birthDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(userAccount.birthDate)
+          ? userAccount.birthDate
+          : null;
       const batch = writeBatch(db);
       batch.set(doc(db, 'faceVerifications', firebaseUser.uid), {
         uid: firebaseUser.uid,
-        displayName: userAccount.displayName.slice(0, 80),
-        ...(userAccount.birthDate ? { birthDate: userAccount.birthDate } : {}),
+        displayName: (userAccount.displayName || 'Jogador').trim().slice(0, 80) || 'Jogador',
+        ...(validBirthDate ? { birthDate: validBirthDate } : {}),
         selfieDataUrl,
         status: 'pending',
         rejectionReason: '',
