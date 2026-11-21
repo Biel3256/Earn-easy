@@ -55,7 +55,7 @@ export type FaceVerificationStatus = 'none' | 'pending' | 'approved' | 'rejected
 export interface FaceVerificationRequest {
   uid: string;
   displayName: string;
-  birthDate: string;
+  birthDate?: string;
   selfieDataUrl: string;
   status: 'pending' | 'approved' | 'rejected';
   rejectionReason: string;
