@@ -197,7 +197,7 @@ export const FaceVerificationModal: React.FC<FaceVerificationModalProps> = ({
                 Verificação Facial do Perfil
               </h2>
               <p className="text-[11px] text-slate-500 dark:text-zinc-400">
-                Envie sua foto para análise do administrador
+                Envie sua selfie para análise do perfil e da idade
               </p>
             </div>
           </div>
@@ -229,7 +229,11 @@ export const FaceVerificationModal: React.FC<FaceVerificationModalProps> = ({
               Conta: <strong className="text-slate-900 dark:text-zinc-100">{userAccount.displayName}</strong>
             </span>
             <span>
-              Nascimento: <strong className="font-mono text-slate-900 dark:text-zinc-100">{formatBirthDateBr(userAccount.birthDate)}</strong>
+              {userAccount.birthDate ? (
+                <>Nascimento informado: <strong className="font-mono text-slate-900 dark:text-zinc-100">{formatBirthDateBr(userAccount.birthDate)}</strong></>
+              ) : (
+                <>Idade: <strong className="text-slate-900 dark:text-zinc-100">aguardando análise</strong></>
+              )}
             </span>
           </div>
 
@@ -328,7 +332,7 @@ export const FaceVerificationModal: React.FC<FaceVerificationModalProps> = ({
           )}
 
           <p className="text-[11px] text-slate-500 dark:text-zinc-400 text-center leading-relaxed">
-            Tire uma foto nítida do seu rosto em local iluminado, sem óculos escuros ou boné. Sua foto fica visível apenas para você e para os administradores analisarem.
+            Tire uma foto nítida do seu rosto em local iluminado, sem óculos escuros ou boné. A equipe analisará a selfie; a aparência sozinha não comprova legalmente a idade, então confirme 18+ por documento oficial antes de aprovar.
           </p>
 
           {submitError && (
