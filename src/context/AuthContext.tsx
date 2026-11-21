@@ -546,18 +546,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!firebaseUser || !userAccount || userAccount.status !== 'suspended') return;
     const expiresAt = getSuspensionExpiryMs(userAccount);
     if (expiresAt === null) return;
-    const timer = window.setTimeout(() => {
-      updateDoc(doc(db, 'users', firebaseUser.uid), {
-        status: 'active',
-        riskScore: 0,
-        suspensionUntil: null,
-        banReason: '',
-        banExplanation: '',
-        bannedBy: '',
-        updatedAt: serverTimestamp(),
-      }).catch(() => {});
-    }, Math.max(0, expiresAt - Date.now()));
-    return () => window.clearTimeout(timer);
+    let timer: number | undefined;
+    const scheduleReactivation = () => {
+      const remaining = expiresAt - Date.now();
+      if (remaining <= 0) {
+        updateDoc(doc(db, 'users', firebaseUser.uid), {
+          status: 'active',
+          riskScore: 0,
+          suspensionUntil: null,
+          banReason: '',
+          banExplanation: '',
+          bannedBy: '',
+          updatedAt: serverTimestamp(),
+        }).catch(() => {});
+        return;
+      }
+      // Browser timers have a ~24.8-day maximum; reschedule longer suspensions safely.
+      timer = window.setTimeout(scheduleReactivation, Math.min(remaining, 2147000000));
+    };
+    scheduleReactivation();
+    return () => {
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
   }, [firebaseUser?.uid, userAccount?.uid, userAccount?.status, userAccount?.suspensionUntil]);
 
   // Attach real-time Firestore listeners ONLY when authReady && firebaseUser
