@@ -54,62 +54,6 @@ type FriendRequest = {
 };
 
 const safeText = (value: string) => value.trim().slice(0, 500);
-const containsOffensiveLanguage = (value: string) => {
-  const normalized = value
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .replace(/0/g, 'o')
-    .replace(/1/g, 'i')
-    .replace(/3/g, 'e')
-    .replace(/4/g, 'a')
-    .replace(/5/g, 's')
-    .replace(/7/g, 't')
-    .replace(/[^a-z0-9]+/g, ' ')
-    .trim();
-
-  // Termos explícitos, xingamentos, abreviações e nomes de partes íntimas.
-  // A comparação por palavras evita bloquear palavras comuns que apenas contenham
-  // uma sequência parecida (por exemplo, "disputa").
-  const blockedTerms = [
-    'porra', 'caralho', 'carai', 'krl', 'crl', 'merda', 'bosta', 'bost a',
-    'buceta', 'boceta', ' bucetao', 'xoxota', 'xana', 'xereca', 'ppk',
-    'puta', 'puto', 'putas', 'putos', 'putaria', 'putaquepariu',
-    'foda', 'foder', 'fode', 'fodase', 'foda se', 'fodido', 'fodida',
-    'arrombado', 'arrombada', 'desgraca', 'desgracado', 'desgracada',
-    ' filho da puta', 'filhadaputa', 'vai tomar no cu', 'tomar no cu',
-    'vai se foder', 'vsf', 'vtnc', 'fdp', 'pqp', 'tnc',
-    'cu', 'cuz ao', 'cuzona', 'cuzinho', 'cuzudo', 'cuzuda',
-    'rola', 'pica', 'piroca', 'pau', 'cacete', 'caceta', ' cacete',
-    'porrada', 'bicha', 'viado', 'veado', 'corno', 'corn o',
-    'idiota', 'imbecil', 'otario', 'otaria', 'babaca', 'trouxa',
-    'burro', 'burra', 'retardado', 'retardada', 'nojento', 'nojenta',
-    'desgraça', 'damn', 'fuck', 'shit', 'bitch', 'asshole',
-    // Partes íntimas e termos sexuais explícitos
-    'penis', 'pênis', 'vagina', 'vulva', 'clitoris', 'clitoris',
-    'clitóris', 'testiculo', 'testiculos', 'testículo', 'testículos',
-    'escroto', 'saco escrotal', 'anus', 'ânus', 'cu', 'bunda',
-    'seios', 'peitos', 'mamilos', 'mamilo', 'nude', 'nudes',
-    'transar', 'transa', 'sexo', 'sexual', ' masturbar', 'masturbacao',
-    'gozar', 'gozada', 'esperma', 'porra', 'ejacular', 'ejaculacao',
-  ];
-
-  const words = new Set(normalized.split(/\s+/).filter(Boolean));
-  const compact = normalized.replace(/\s+/g, '');
-  return blockedTerms.some((rawTerm) => {
-    const term = rawTerm.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
-    if (!term) return false;
-    if (term.includes(' ')) return normalized.includes(term);
-    if (words.has(term)) return true;
-    // Também identifica termos escritos com espaços/pontuação entre letras.
-    return compact.includes(term) && term.length >= 4 &&
-      new RegExp('(^|[^a-z0-9])' + term.split('').join('[^a-z0-9]*') + '([^a-z0-9]|$)').test(
-        value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
-          .replace(/0/g, 'o').replace(/1/g, 'i').replace(/3/g, 'e')
-          .replace(/4/g, 'a').replace(/5/g, 's').replace(/7/g, 't')
-      );
-  });
-};
 const friendshipId = (a: string, b: string) => [a, b].sort().join('__');
 
 function formatChatTime(ts?: { toDate?: () => Date }): string {
@@ -462,11 +406,6 @@ export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSec
   const sendGlobal = async () => {
     const text = safeText(globalDraft);
     if (!uid || !text || busy) return;
-    if (containsOffensiveLanguage(text)) {
-      setError('Sua mensagem contém palavrões ou xingamentos. Mantenha o respeito no chat global.');
-      setNotice('');
-      return;
-    }
     if (userAccount?.status !== 'active') {
       setError('Sua conta precisa estar ativa para enviar mensagens no chat global.');
       return;
@@ -944,7 +883,7 @@ export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSec
               Salve, salve, galera! Aqui é o Biel, dono e administrador do site Earn Easy. Para manter o chat organizado e agradável para todos, sigam as regras abaixo:
             </p>
             <ol className="list-decimal pl-4 space-y-1 text-xs text-slate-700 dark:text-zinc-300 leading-relaxed">
-              <li>Respeite todos os membros. Não são permitidos insultos, ameaças, perseguição, xingamentos ou palavrões.</li>
+              <li>Respeite todos os membros. Não são permitidos insultos, ameaças ou perseguição.</li>
               <li>Não faça spam, flood ou envie mensagens repetidas.</li>
               <li>Não publique conteúdo ofensivo, impróprio ou ilegal.</li>
               <li>Não divulgue links, grupos ou serviços sem autorização da administração.</li>
@@ -954,7 +893,7 @@ export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSec
               <li>Avise a administração se encontrar algo suspeito ou uma mensagem que viole as regras.</li>
             </ol>
             <p className="text-[11px] font-bold text-amber-800 dark:text-amber-300 mt-2">
-              Mensagens com palavrões ou xingamentos serão bloqueadas antes do envio. Reincidência poderá gerar aviso, mute ou banimento.
+              Quem descumprir as regras poderá receber aviso, mute ou banimento.
             </p>
             <p className="text-[11px] text-slate-500 dark:text-zinc-400 mt-1">Biel — Dono e administrador do Earn Easy</p>
           </div>
