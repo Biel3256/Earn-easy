@@ -1093,6 +1093,28 @@ service cloud.firestore {
           )
         );
 
+      // Fallback restrito para contas legadas: permite somente registrar a data
+      // de nascimento e concluir a etapa +18, sem exigir que todo o documento
+      // antigo passe novamente pela validação completa do schema.
+      allow update: if isValidId(userId) &&
+        isSignedIn() &&
+        isOwner(userId) &&
+        isActiveUser(userId) &&
+        existing().uid == userId &&
+        incoming().uid == existing().uid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().status == existing().status &&
+        incoming().riskScore == existing().riskScore &&
+        incoming().updatedAt == request.time &&
+        (!('ageVerified' in existing()) || existing().ageVerified == false) &&
+        incoming().birthDate is string &&
+        isValidDateStr(incoming().birthDate) &&
+        incoming().ageVerified == true &&
+        incoming().ageVerifiedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'birthDate', 'ageVerified', 'ageVerifiedAt', 'updatedAt'
+        ]);
+
       allow delete: if isValidId(userId) && isAdmin();
 
       // Isolated PII Subcollection
