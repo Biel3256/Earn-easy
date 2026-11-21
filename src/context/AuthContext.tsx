@@ -2484,9 +2484,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (userAccount.status !== 'active') {
       throw new Error('Sua conta precisa estar ativa para enviar verificação.');
     }
-    if (!userAccount.ageVerified || !userAccount.birthDate) {
-      throw new Error('Conclua a verificação de idade (+18) antes da verificação facial.');
-    }
     if (userAccount.identityVerified) {
       throw new Error('Seu perfil já está verificado!');
     }
@@ -2499,7 +2496,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       batch.set(doc(db, 'faceVerifications', firebaseUser.uid), {
         uid: firebaseUser.uid,
         displayName: userAccount.displayName.slice(0, 80),
-        birthDate: userAccount.birthDate,
+        ...(userAccount.birthDate ? { birthDate: userAccount.birthDate } : {}),
         selfieDataUrl,
         status: 'pending',
         rejectionReason: '',
@@ -2561,6 +2558,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           pointsBalance: nextPoints,
           lifetimePoints: nextLifetime,
           identityVerified: true,
+          ageVerified: true,
+          ageVerifiedAt: serverTimestamp(),
           faceVerificationStatus: 'approved',
           faceVerificationNote: '',
           verifiedAt: serverTimestamp(),
