@@ -57,7 +57,7 @@ const safeText = (value: string) => value.trim().slice(0, 500);
 const containsOffensiveLanguage = (value: string) => {
   const normalized = value
     .normalize('NFD')
-    .replace(/[\\u0300-\\u036f]/g, '')
+    .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
     .replace(/0/g, 'o')
     .replace(/1/g, 'i')
@@ -94,17 +94,17 @@ const containsOffensiveLanguage = (value: string) => {
     'gozar', 'gozada', 'esperma', 'porra', 'ejacular', 'ejaculacao',
   ];
 
-  const words = new Set(normalized.split(/\\s+/).filter(Boolean));
-  const compact = normalized.replace(/\\s+/g, '');
+  const words = new Set(normalized.split(/\s+/).filter(Boolean));
+  const compact = normalized.replace(/\s+/g, '');
   return blockedTerms.some((rawTerm) => {
-    const term = rawTerm.normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').toLowerCase().trim();
+    const term = rawTerm.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
     if (!term) return false;
     if (term.includes(' ')) return normalized.includes(term);
     if (words.has(term)) return true;
     // Também identifica termos escritos com espaços/pontuação entre letras.
     return compact.includes(term) && term.length >= 4 &&
       new RegExp('(^|[^a-z0-9])' + term.split('').join('[^a-z0-9]*') + '([^a-z0-9]|$)').test(
-        value.normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').toLowerCase()
+        value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
           .replace(/0/g, 'o').replace(/1/g, 'i').replace(/3/g, 'e')
           .replace(/4/g, 'a').replace(/5/g, 's').replace(/7/g, 't')
       );
