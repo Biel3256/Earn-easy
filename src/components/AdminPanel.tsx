@@ -265,6 +265,7 @@ export const AdminPanel: React.FC = () => {
   const [banTarget, setBanTarget] = useState<UserAccount | null>(null);
   const [banReason, setBanReason] = useState('');
   const [banExplanation, setBanExplanation] = useState('');
+  const [banDuration, setBanDuration] = useState('24h');
   const [banError, setBanError] = useState<string | null>(null);
   const [banSubmitting, setBanSubmitting] = useState(false);
 
@@ -814,6 +815,7 @@ export const AdminPanel: React.FC = () => {
     setBanTarget(u);
     setBanReason('');
     setBanExplanation('');
+    setBanDuration('24h');
     setBanError(null);
   };
 
@@ -822,6 +824,7 @@ export const AdminPanel: React.FC = () => {
     setBanTarget(null);
     setBanReason('');
     setBanExplanation('');
+    setBanDuration('24h');
     setBanError(null);
   };
 
@@ -842,6 +845,15 @@ export const AdminPanel: React.FC = () => {
 
     const trimmedReason = banReason.trim().slice(0, 120);
     const trimmedExplanation = banExplanation.trim().slice(0, 400);
+    const durationMs: Record<string, number> = {
+      '15m': 15 * 60 * 1000, '1h': 60 * 60 * 1000, '6h': 6 * 60 * 60 * 1000,
+      '12h': 12 * 60 * 60 * 1000, '24h': 24 * 60 * 60 * 1000,
+      '3d': 3 * 24 * 60 * 60 * 1000, '7d': 7 * 24 * 60 * 60 * 1000,
+      '30d': 30 * 24 * 60 * 60 * 1000,
+    };
+    const suspensionUntil = banDuration === 'permanent'
+      ? null
+      : Timestamp.fromMillis(Date.now() + durationMs[banDuration]);
 
     if (trimmedReason.length < 3) {
       setBanError('Informe o motivo do banimento (mínimo 3 caracteres).');
@@ -862,6 +874,7 @@ export const AdminPanel: React.FC = () => {
         banReason: trimmedReason,
         banExplanation: trimmedExplanation,
         bannedBy: adminActor,
+        suspensionUntil,
         updatedAt: serverTimestamp(),
       });
 
@@ -873,12 +886,12 @@ export const AdminPanel: React.FC = () => {
         userId: banTarget.uid,
         eventType: 'admin_ban',
         severity: 'critical',
-        details: `Banimento (${trimmedReason}): ${trimmedExplanation}`.slice(0, 400),
+        details: `Bloqueio ${banDuration === 'permanent' ? 'permanente' : `até ${suspensionUntil?.toDate().toLocaleString('pt-BR')}`} (${trimmedReason}): ${trimmedExplanation}`.slice(0, 400),
         resolved: false,
         createdAt: serverTimestamp(),
       });
 
-      setActionMsg(`Usuário ${banTarget.displayName} banido. Motivo: "${trimmedReason}".`);
+      setActionMsg(`Usuário ${banTarget.displayName} bloqueado ${banDuration === 'permanent' ? 'permanentemente' : 'temporariamente'}. Motivo: "${trimmedReason}".`);
       setBanTarget(null);
       setBanReason('');
       setBanExplanation('');
@@ -897,6 +910,7 @@ export const AdminPanel: React.FC = () => {
         banReason: '',
         banExplanation: '',
         bannedBy: '',
+        suspensionUntil: null,
         updatedAt: serverTimestamp(),
       });
       await setDoc(doc(db, 'leaderboard', u.uid), {
@@ -2109,7 +2123,7 @@ export const AdminPanel: React.FC = () => {
                             : 'bg-red-50 dark:bg-red-950/50 text-red-700 dark:text-red-300'
                         }`}
                       >
-                        {u.status === 'active' ? 'Ativo' : 'Banido'}
+                        {u.status === 'active' ? 'Ativo' : u.suspensionUntil && timestampToMillis(u.suspensionUntil) > Date.now() ? 'Bloqueado temporariamente' : 'Banido'}
                       </span>
                     </div>
 
@@ -3109,7 +3123,7 @@ export const AdminPanel: React.FC = () => {
                     Banir Usuário
                   </h3>
                   <p className="text-xs text-slate-500 dark:text-zinc-400">
-                    Informe o motivo e o porquê antes de confirmar o banimento.
+                    Escolha a duração e informe o motivo do bloqueio.
                   </p>
                 </div>
               </div>
@@ -3132,9 +3146,30 @@ export const AdminPanel: React.FC = () => {
                 </div>
               </div>
 
+              <div className="space-y-1.5">
+                <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300">
+                  Duração do bloqueio
+                </label>
+                <select
+                  value={banDuration}
+                  onChange={(e) => setBanDuration(e.target.value)}
+                  className="w-full min-h-[42px] px-3 py-2 text-sm bg-white dark:bg-[#090d12] border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-xl"
+                >
+                  <option value="15m">15 minutos</option>
+                  <option value="1h">1 hora</option>
+                  <option value="6h">6 horas</option>
+                  <option value="12h">12 horas</option>
+                  <option value="24h">24 horas</option>
+                  <option value="3d">3 dias</option>
+                  <option value="7d">7 dias</option>
+                  <option value="30d">30 dias</option>
+                  <option value="permanent">Permanente</option>
+                </select>
+              </div>
+
               <div className="space-y-2">
                 <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300">
-                  Motivo do banimento <span className="text-red-500">*</span>
+                  Motivo do bloqueio <span className="text-red-500">*</span>
                 </label>
                 <div className="flex flex-wrap gap-1.5">
                   {BAN_REASON_SUGGESTIONS.map((suggestion) => (
@@ -3201,7 +3236,7 @@ export const AdminPanel: React.FC = () => {
                   className="min-h-[40px] inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white rounded-xl cursor-pointer"
                 >
                   <Ban className="w-3.5 h-3.5" />
-                  {banSubmitting ? 'Banindo...' : 'Confirmar Banimento'}
+                  {banSubmitting ? 'Aplicando...' : 'Confirmar Bloqueio'}
                 </button>
               </div>
             </form>
