@@ -8,6 +8,7 @@ import {
   ShieldCheck,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { useToast } from '../context/ToastContext';
 import {
   PixKeyType,
   POINTS_PER_TEN_CENTS,
@@ -25,6 +26,7 @@ const PIX_TYPE_LABELS: Record<PixKeyType, string> = {
 };
 
 export const WalletSection: React.FC = () => {
+  const { showToast } = useToast();
   const {
     firebaseUser,
     userAccount,
@@ -102,24 +104,28 @@ export const WalletSection: React.FC = () => {
       await logFraudAttempt('bot_challenge_failed', 'low', 'Resposta incorreta no desafio humano de conversão diária.');
       setChallenge(createHumanChallenge());
       setChallengeInput('');
-      setConvertFeedback({ type: 'err', msg: 'Verificação humana incorreta. Tente o novo cálculo.' });
+      const msg = 'Verificação humana incorreta. Tente o novo cálculo.';
+      setConvertFeedback({ type: 'err', msg });
+      showToast({ type: 'error', title: 'Verificação incorreta', message: msg });
       return;
     }
 
     setConverting(true);
     try {
       const res = await convertDailyPoints(convertiblePoints);
-      setConvertFeedback({
-        type: 'ok',
-        msg: `Conversão concluída: +${formatBRL(res.brlCentsCredited)} creditados! E-mail de confirmação registrado (${res.emailStatus === 'sent_smtp' ? 'enviado via SMTP' : 'recibo salvo em Notificações'}).`,
+      const msg = `Conversão concluída: +${formatBRL(res.brlCentsCredited)} creditados! E-mail de confirmação registrado (${res.emailStatus === 'sent_smtp' ? 'enviado via SMTP' : 'recibo salvo em Notificações'}).`;
+      setConvertFeedback({ type: 'ok', msg });
+      showToast({
+        type: 'success',
+        title: 'Pontos convertidos!',
+        message: `+${formatBRL(res.brlCentsCredited)} creditados na sua Carteira Pix.`,
       });
       setChallenge(createHumanChallenge());
       setChallengeInput('');
     } catch (err) {
-      setConvertFeedback({
-        type: 'err',
-        msg: extractReadableError(err, 'Erro ao converter pontos.'),
-      });
+      const msg = extractReadableError(err, 'Erro ao converter pontos.');
+      setConvertFeedback({ type: 'err', msg });
+      showToast({ type: 'error', title: 'Falha na conversão', message: msg });
     } finally {
       setConverting(false);
     }
@@ -195,17 +201,19 @@ export const WalletSection: React.FC = () => {
         pixKey: pixCheck.normalized,
         saveAsDefault: saveDefaultPix,
       });
-      setWithdrawFeedback({
-        type: 'ok',
-        msg: `Saque Pix ${res.withdrawalId} solicitado com sucesso! Confirmação enviada para ${privateInfo?.email || firebaseUser.email}.`,
+      const msg = `Saque Pix ${res.withdrawalId} solicitado com sucesso! Confirmação enviada para ${privateInfo?.email || firebaseUser.email}.`;
+      setWithdrawFeedback({ type: 'ok', msg });
+      showToast({
+        type: 'success',
+        title: 'Saque Pix solicitado!',
+        message: `Pedido de ${formatBRL(amountCents)} enviado para análise e pagamento.`,
       });
       setPixChallenge(createHumanChallenge());
       setPixChallengeInput('');
     } catch (err) {
-      setWithdrawFeedback({
-        type: 'err',
-        msg: extractReadableError(err, 'Erro ao solicitar saque Pix.'),
-      });
+      const msg = extractReadableError(err, 'Erro ao solicitar saque Pix.');
+      setWithdrawFeedback({ type: 'err', msg });
+      showToast({ type: 'error', title: 'Erro ao solicitar saque', message: msg });
     } finally {
       setWithdrawing(false);
     }

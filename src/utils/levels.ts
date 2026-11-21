@@ -94,8 +94,8 @@ export function calculatePlayerLevel(
   lifetimePoints: number,
   gamesPlayed: number
 ): PlayerLevelProgress {
-  const safePoints = Math.max(0, Math.round(lifetimePoints));
-  const safeGames = Math.max(0, Math.round(gamesPlayed));
+  const safePoints = Math.max(0, Math.floor(Number.isFinite(lifetimePoints) ? lifetimePoints : 0));
+  const safeGames = Math.max(0, Math.floor(Number.isFinite(gamesPlayed) ? gamesPlayed : 0));
   const xp = safePoints + safeGames * 25;
 
   let currentTier = PLAYER_LEVELS[0];

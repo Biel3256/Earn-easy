@@ -13,6 +13,7 @@ import {
   Users,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { useToast } from '../context/ToastContext';
 import { REFERRAL_SIGNUP_BONUS_POINTS } from '../types/earneasy';
 import {
   extractReadableError,
@@ -23,6 +24,7 @@ import {
 } from '../utils/pix';
 
 export const InvitesAndCodesSection: React.FC = () => {
+  const { showToast } = useToast();
   const {
     userAccount,
     myReferral,
@@ -98,16 +100,14 @@ export const InvitesAndCodesSection: React.FC = () => {
     setRedeeming(true);
     try {
       const res = await redeemPromoCode(rawCode);
-      setRedeemFeedback({
-        type: 'success',
-        text: `Código ${res.code} resgatado! "${res.title}" creditou +${formatPoints(res.pointsAwarded)} pontos no seu saldo.`,
-      });
+      const msg = `Código ${res.code} resgatado! "${res.title}" creditou +${formatPoints(res.pointsAwarded)} pontos no seu saldo.`;
+      setRedeemFeedback({ type: 'success', text: msg });
+      showToast({ type: 'success', title: 'Código resgatado!', message: msg });
       setCodeInput('');
     } catch (err) {
-      setRedeemFeedback({
-        type: 'error',
-        text: extractReadableError(err, 'Não foi possível resgatar este código.'),
-      });
+      const msg = extractReadableError(err, 'Não foi possível resgatar este código.');
+      setRedeemFeedback({ type: 'error', text: msg });
+      showToast({ type: 'error', title: 'Erro no código', message: msg });
     } finally {
       setRedeeming(false);
     }
@@ -136,15 +136,19 @@ export const InvitesAndCodesSection: React.FC = () => {
         type: result.deliveryStatus === 'failed' ? 'error' : 'success',
         text: deliveryDesc,
       });
+      showToast({
+        type: result.deliveryStatus === 'failed' ? 'error' : 'success',
+        title: result.deliveryStatus === 'failed' ? 'Falha no envio SMTP' : 'Convite registrado!',
+        message: deliveryDesc,
+      });
       if (result.deliveryStatus !== 'failed') {
         setInviteEmail('');
         setInviteMessage('');
       }
     } catch (err) {
-      setInviteFeedback({
-        type: 'error',
-        text: err instanceof Error ? err.message : 'Não foi possível enviar o convite.',
-      });
+      const msg = err instanceof Error ? err.message : 'Não foi possível enviar o convite.';
+      setInviteFeedback({ type: 'error', text: msg });
+      showToast({ type: 'error', title: 'Erro ao enviar convite', message: msg });
     } finally {
       setSendingInvite(false);
     }

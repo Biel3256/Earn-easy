@@ -28,6 +28,13 @@ service cloud.firestore {
       );
     }
 
+    function isValidSelfieDataUrl(url) {
+      return url is string &&
+        url.size() >= 64 &&
+        url.size() <= 85000 &&
+        url.matches('^data:image/(jpeg|jpg|png|webp);base64,[A-Za-z0-9+/=]+$');
+    }
+
     function incoming() {
       return request.resource.data;
     }
@@ -204,7 +211,11 @@ service cloud.firestore {
         userAfterData.brlBalanceCents == lbData.brlBalanceCents &&
         userAfterData.pointsBalance == lbData.pointsBalance &&
         (!('lifetimePoints' in lbData) || userAfterData.lifetimePoints == lbData.lifetimePoints) &&
-        userAfterData.gamesPlayed == lbData.gamesPlayed;
+        userAfterData.gamesPlayed == lbData.gamesPlayed &&
+        (!('identityVerified' in lbData) || (
+          (('identityVerified' in userAfterData) && lbData.identityVerified == userAfterData.identityVerified) ||
+          (!('identityVerified' in userAfterData) && lbData.identityVerified == false)
+        ));
     }
 
     function validatePromoRedemptionCreate(promoData, userBeforeData, userAfterData, reqData) {
@@ -225,13 +236,14 @@ service cloud.firestore {
 
     function validateLevelRewardClaim(userBeforeData, userAfterData, reqData) {
       return userBeforeData.status == 'active' &&
-        reqData.xpAtClaim == userXp(userBeforeData) &&
+        reqData.xpAtClaim >= 1000 &&
+        reqData.xpAtClaim <= userXp(userBeforeData) &&
         userAfterData.pointsBalance == userBeforeData.pointsBalance + reqData.rewardPoints && (
-          (reqData.level == 2 && reqData.xpAtClaim >= 1000) ||
-          (reqData.level == 3 && reqData.xpAtClaim >= 3000) ||
-          (reqData.level == 4 && reqData.xpAtClaim >= 7000) ||
-          (reqData.level == 5 && reqData.xpAtClaim >= 15000) ||
-          (reqData.level == 6 && reqData.xpAtClaim >= 30000)
+          (reqData.level == 2 && userXp(userBeforeData) >= 1000) ||
+          (reqData.level == 3 && userXp(userBeforeData) >= 3000) ||
+          (reqData.level == 4 && userXp(userBeforeData) >= 7000) ||
+          (reqData.level == 5 && userXp(userBeforeData) >= 15000) ||
+          (reqData.level == 6 && userXp(userBeforeData) >= 30000)
         );
     }
 
@@ -252,7 +264,10 @@ service cloud.firestore {
         'uid', 'displayName', 'photoURL', 'pointsBalance', 'lifetimePoints',
         'brlBalanceCents', 'totalWithdrawnCents', 'lastConversionDate',
         'status', 'riskScore', 'gamesPlayed', 'banReason', 'banExplanation',
-        'bannedBy', 'suspensionUntil', 'lastPromoCode', 'firstWithdrawalUsed', 'createdAt', 'updatedAt'
+        'bannedBy', 'suspensionUntil', 'lastPromoCode', 'firstWithdrawalUsed', 'lastMpMatchId',
+        'birthDate', 'ageVerified', 'ageVerifiedAt', 'identityVerified',
+        'faceVerificationStatus', 'faceVerificationNote', 'verifiedAt',
+        'createdAt', 'updatedAt'
       ]) &&
       isValidId(data.uid) &&
       data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80 &&
@@ -271,6 +286,14 @@ service cloud.firestore {
       (!('suspensionUntil' in data) || data.suspensionUntil == null || data.suspensionUntil is timestamp) &&
       (!('lastPromoCode' in data) || isValidPromoCodeId(data.lastPromoCode)) &&
       (!('firstWithdrawalUsed' in data) || data.firstWithdrawalUsed is bool) &&
+      (!('lastMpMatchId' in data) || isValidId(data.lastMpMatchId)) &&
+      (!('birthDate' in data) || isValidOptionalDateStr(data.birthDate)) &&
+      (!('ageVerified' in data) || data.ageVerified is bool) &&
+      (!('ageVerifiedAt' in data) || data.ageVerifiedAt == null || data.ageVerifiedAt is timestamp) &&
+      (!('identityVerified' in data) || data.identityVerified is bool) &&
+      (!('faceVerificationStatus' in data) || data.faceVerificationStatus in ['none', 'pending', 'approved', 'rejected']) &&
+      (!('faceVerificationNote' in data) || (data.faceVerificationNote is string && data.faceVerificationNote.size() <= 240)) &&
+      (!('verifiedAt' in data) || data.verifiedAt == null || data.verifiedAt is timestamp) &&
       data.createdAt is timestamp &&
       data.updatedAt is timestamp;
     }
@@ -312,7 +335,7 @@ service cloud.firestore {
       ]) &&
       isValidId(data.sessionId) &&
       isValidId(data.userId) &&
-      data.gameCategory in ['tic_tac_toe', 'dot_link', 'word_search', 'math_sprint', 'memory_match', 'quick_reflex', 'high_low_cards'] &&
+      data.gameCategory in ['tic_tac_toe', 'dot_link', 'word_search', 'math_sprint', 'memory_match', 'quick_reflex', 'high_low_cards', 'block_britz', 'domino_solo', 'stop_solo', 'draw_guess_solo', 'battleship_solo', 'connect4_solo', 'quiz_solo', 'rps_solo', 'guess_number_solo'] &&
       data.scoreEarned is number && data.scoreEarned >= 0 && data.scoreEarned <= 500 &&
       data.durationMs is number && data.durationMs >= 3000 &&
       data.movesCount is number && data.movesCount >= 1 &&
@@ -437,7 +460,7 @@ service cloud.firestore {
       ]) &&
       data.keys().hasOnly([
         'uid', 'displayName', 'photoURL', 'brlBalanceCents',
-        'pointsBalance', 'lifetimePoints', 'gamesPlayed', 'status', 'updatedAt'
+        'pointsBalance', 'lifetimePoints', 'gamesPlayed', 'status', 'identityVerified', 'updatedAt'
       ]) &&
       isValidId(data.uid) &&
       data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80 &&
@@ -447,6 +470,7 @@ service cloud.firestore {
       (!('lifetimePoints' in data) || (data.lifetimePoints is number && data.lifetimePoints >= 0)) &&
       data.gamesPlayed is number && data.gamesPlayed >= 0 &&
       data.status in ['active', 'suspended', 'flagged'] &&
+      (!('identityVerified' in data) || data.identityVerified is bool) &&
       data.updatedAt is timestamp;
     }
 
@@ -665,11 +689,72 @@ service cloud.firestore {
 
     function isValidSocialMessage(data) {
       return data.keys().hasAll(['senderUid', 'senderName', 'text', 'createdAt']) &&
-      data.keys().hasOnly(['senderUid', 'senderName', 'text', 'createdAt']) &&
+      data.keys().hasOnly(['senderUid', 'senderName', 'text', 'readAt', 'readBy', 'createdAt']) &&
       isValidId(data.senderUid) &&
       data.senderName is string && data.senderName.size() >= 1 && data.senderName.size() <= 80 &&
       data.text is string && data.text.size() >= 1 && data.text.size() <= 500 &&
+      (!('readAt' in data) || data.readAt == null || data.readAt is timestamp) &&
+      (!('readBy' in data) || isValidId(data.readBy)) &&
       data.createdAt is timestamp;
+    }
+
+    function isValidMultiplayerMatch(data) {
+      return data.keys().hasAll([
+        'matchId', 'roomCode', 'gameId', 'participantUids',
+        'winnerUid', 'loserUid', 'stakePoints', 'settledByUid',
+        'integrityHash', 'createdAt'
+      ]) &&
+      data.keys().hasOnly([
+        'matchId', 'roomCode', 'gameId', 'participantUids',
+        'winnerUid', 'loserUid', 'stakePoints', 'settledByUid',
+        'integrityHash', 'createdAt'
+      ]) &&
+      isValidId(data.matchId) &&
+      data.roomCode is string && data.roomCode.size() >= 3 && data.roomCode.size() <= 20 &&
+      data.gameId in [
+        'domino', 'stop', 'draw_guess', 'battleship', 'connect4',
+        'quiz', 'rps', 'tictactoe_mp', 'guess_number', 'memory_mp', 'reflex_mp'
+      ] &&
+      data.participantUids is list &&
+      data.participantUids.size() == 2 &&
+      isValidId(data.participantUids[0]) &&
+      isValidId(data.participantUids[1]) &&
+      data.participantUids[0] != data.participantUids[1] &&
+      data.winnerUid is string && data.winnerUid.size() <= 128 &&
+      data.loserUid is string && data.loserUid.size() <= 128 &&
+      data.stakePoints is number && data.stakePoints >= 0 && data.stakePoints <= 50000 &&
+      isValidId(data.settledByUid) &&
+      data.integrityHash is string && data.integrityHash.size() >= 16 && data.integrityHash.size() <= 128 &&
+      data.createdAt is timestamp;
+    }
+
+    function validatePvpMatchUserUpdate(userId, existingUser, incomingUser, m) {
+      return m.stakePoints > 0 &&
+        userId in m.participantUids &&
+        request.auth.uid in m.participantUids &&
+        m.winnerUid != '' &&
+        m.loserUid != '' &&
+        m.winnerUid != m.loserUid && (
+          (
+            userId == m.winnerUid &&
+            incomingUser.diff(existingUser).affectedKeys().hasOnly([
+              'pointsBalance', 'lifetimePoints', 'gamesPlayed', 'lastMpMatchId', 'updatedAt'
+            ]) &&
+            (incomingUser.pointsBalance - existingUser.pointsBalance) == m.stakePoints &&
+            incomingUser.lifetimePoints == existingUser.lifetimePoints + m.stakePoints &&
+            incomingUser.gamesPlayed == existingUser.gamesPlayed + 1 &&
+            getAfter(/databases/$(database)/documents/users/$(m.loserUid)).data.lastMpMatchId == incomingUser.lastMpMatchId
+          ) || (
+            userId == m.loserUid &&
+            incomingUser.diff(existingUser).affectedKeys().hasOnly([
+              'pointsBalance', 'gamesPlayed', 'lastMpMatchId', 'updatedAt'
+            ]) &&
+            (existingUser.pointsBalance - incomingUser.pointsBalance) == m.stakePoints &&
+            incomingUser.pointsBalance >= 0 &&
+            incomingUser.gamesPlayed == existingUser.gamesPlayed + 1 &&
+            getAfter(/databases/$(database)/documents/users/$(m.winnerUid)).data.lastMpMatchId == incomingUser.lastMpMatchId
+          )
+        );
     }
 
     function isValidSupportTicket(data) {
@@ -737,6 +822,27 @@ service cloud.firestore {
       data.deletedAt is timestamp;
     }
 
+    function isValidFaceVerification(data) {
+      return data.keys().hasAll([
+        'uid', 'displayName', 'birthDate', 'selfieDataUrl', 'status',
+        'rejectionReason', 'bonusAwarded', 'reviewedBy', 'submittedAt', 'reviewedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'uid', 'displayName', 'birthDate', 'selfieDataUrl', 'status',
+        'rejectionReason', 'bonusAwarded', 'reviewedBy', 'submittedAt', 'reviewedAt'
+      ]) &&
+      isValidId(data.uid) &&
+      data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80 &&
+      isValidDateStr(data.birthDate) &&
+      isValidSelfieDataUrl(data.selfieDataUrl) &&
+      data.status in ['pending', 'approved', 'rejected'] &&
+      data.rejectionReason is string && data.rejectionReason.size() <= 240 &&
+      data.bonusAwarded is bool &&
+      data.reviewedBy is string && data.reviewedBy.size() <= 160 &&
+      data.submittedAt is timestamp &&
+      (data.reviewedAt == null || data.reviewedAt is timestamp);
+    }
+
     // --- Collection Rules ---
 
     // 1. Users Collection
@@ -759,6 +865,20 @@ service cloud.firestore {
         !('bannedBy' in incoming()) &&
         !('lastPromoCode' in incoming()) &&
         !('firstWithdrawalUsed' in incoming()) &&
+        !('lastMpMatchId' in incoming()) &&
+        (!('identityVerified' in incoming()) || incoming().identityVerified == false) &&
+        (!('faceVerificationStatus' in incoming()) || incoming().faceVerificationStatus == 'none') &&
+        !('faceVerificationNote' in incoming()) &&
+        (!('verifiedAt' in incoming()) || incoming().verifiedAt == null) &&
+        (
+          (!('ageVerified' in incoming()) || incoming().ageVerified == false) ||
+          (
+            incoming().ageVerified == true &&
+            ('birthDate' in incoming()) &&
+            isValidDateStr(incoming().birthDate) &&
+            incoming().ageVerifiedAt == request.time
+          )
+        ) &&
         incoming().createdAt == request.time &&
         incoming().updatedAt == request.time && (
           (incoming().status == 'active' && incoming().riskScore == 0) ||
@@ -771,7 +891,7 @@ service cloud.firestore {
         incoming().uid == existing().uid &&
         incoming().createdAt == existing().createdAt &&
         incoming().updatedAt == request.time && (
-          (
+          isAdmin() || (
             isOwner(userId) &&
             isActiveUser(userId) &&
             incoming().totalWithdrawnCents == existing().totalWithdrawnCents && (
@@ -887,6 +1007,29 @@ service cloud.firestore {
                   getAfter(/databases/$(database)/documents/promoRedemptions/$(promoRedemptionDocId(userId, incoming().lastPromoCode))).data,
                   incoming().pointsBalance - existing().pointsBalance
                 )
+              ) ||
+              // Action L: Mandatory +18 Age Verification
+              (
+                (!('ageVerified' in existing()) || existing().ageVerified == false) &&
+                incoming().status == existing().status &&
+                incoming().riskScore == existing().riskScore &&
+                incoming().diff(existing()).affectedKeys().hasOnly(['birthDate', 'ageVerified', 'ageVerifiedAt', 'updatedAt']) &&
+                isValidDateStr(incoming().birthDate) &&
+                incoming().ageVerified == true &&
+                incoming().ageVerifiedAt == request.time
+              ) ||
+              // Action M: Facial Identity Verification Submission (synced atomically with /faceVerifications/{uid})
+              (
+                (!('identityVerified' in existing()) || existing().identityVerified == false) &&
+                ('ageVerified' in existing()) && existing().ageVerified == true &&
+                incoming().status == existing().status &&
+                incoming().riskScore == existing().riskScore &&
+                incoming().diff(existing()).affectedKeys().hasOnly(['faceVerificationStatus', 'faceVerificationNote', 'updatedAt']) &&
+                incoming().faceVerificationStatus == 'pending' &&
+                incoming().faceVerificationNote == '' &&
+                existsAfter(/databases/$(database)/documents/faceVerifications/$(userId)) &&
+                getAfter(/databases/$(database)/documents/faceVerifications/$(userId)).data.status == 'pending' &&
+                getAfter(/databases/$(database)/documents/faceVerifications/$(userId)).data.bonusAwarded == false
               )
             )
           ) || (
@@ -930,7 +1073,24 @@ service cloud.firestore {
               'status', 'riskScore', 'suspensionUntil', 'banReason',
               'banExplanation', 'bannedBy', 'updatedAt'
             ])
-          ) || isAdmin()
+          ) || (
+            // Action K: Atomic PvP Wager Settlement (winner receives stake, loser pays stake, never negative)
+            existing().status == 'active' &&
+            incoming().status == existing().status &&
+            incoming().riskScore == existing().riskScore &&
+            incoming().totalWithdrawnCents == existing().totalWithdrawnCents &&
+            ('lastMpMatchId' in incoming()) &&
+            isValidId(incoming().lastMpMatchId) &&
+            (!('lastMpMatchId' in existing()) || incoming().lastMpMatchId != existing().lastMpMatchId) &&
+            !exists(/databases/$(database)/documents/multiplayerMatches/$(incoming().lastMpMatchId)) &&
+            existsAfter(/databases/$(database)/documents/multiplayerMatches/$(incoming().lastMpMatchId)) &&
+            validatePvpMatchUserUpdate(
+              userId,
+              existing(),
+              incoming(),
+              getAfter(/databases/$(database)/documents/multiplayerMatches/$(incoming().lastMpMatchId)).data
+            )
+          )
         );
 
       allow delete: if isValidId(userId) && isAdmin();
@@ -1114,7 +1274,7 @@ service cloud.firestore {
         isValidLeaderboardEntry(incoming()) &&
         incoming().uid == userId &&
         incoming().updatedAt == request.time && (
-          (
+          isAdmin() || (
             isOwner(userId) &&
             incoming().status in ['active', 'suspended'] &&
             matchesUserLeaderboard(
@@ -1122,7 +1282,17 @@ service cloud.firestore {
               getAfter(/databases/$(database)/documents/users/$(userId)).data,
               incoming()
             )
-          ) || isAdmin()
+          ) || (
+            'lastMpMatchId' in getAfter(/databases/$(database)/documents/users/$(userId)).data &&
+            existsAfter(/databases/$(database)/documents/multiplayerMatches/$(getAfter(/databases/$(database)/documents/users/$(userId)).data.lastMpMatchId)) &&
+            request.auth.uid in getAfter(/databases/$(database)/documents/multiplayerMatches/$(getAfter(/databases/$(database)/documents/users/$(userId)).data.lastMpMatchId)).data.participantUids &&
+            incoming().status in ['active', 'suspended'] &&
+            matchesUserLeaderboard(
+              userId,
+              getAfter(/databases/$(database)/documents/users/$(userId)).data,
+              incoming()
+            )
+          )
         );
 
       allow delete: if isValidId(userId) && isAdmin();
@@ -1486,9 +1656,20 @@ service cloud.firestore {
           isActiveUser(request.auth.uid) &&
           request.auth.uid in get(/databases/$(database)/documents/friendships/$(chatId)).data.memberUids &&
           isValidSocialMessage(incoming()) &&
+          !('readAt' in incoming()) &&
+          !('readBy' in incoming()) &&
           incoming().senderUid == request.auth.uid &&
           incoming().createdAt == request.time;
-        allow update: if false;
+        allow update: if isValidId(chatId) &&
+          isValidId(messageId) &&
+          isSignedIn() &&
+          request.auth.uid in get(/databases/$(database)/documents/friendships/$(chatId)).data.memberUids &&
+          request.auth.uid != existing().senderUid &&
+          (!('readAt' in existing()) || existing().readAt == null) &&
+          isValidSocialMessage(incoming()) &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['readAt', 'readBy']) &&
+          incoming().readAt == request.time &&
+          incoming().readBy == request.auth.uid;
         allow delete: if isValidId(chatId) && isValidId(messageId) && isAdmin();
       }
     }
@@ -1501,6 +1682,8 @@ service cloud.firestore {
         isSignedIn() &&
         isActiveUser(request.auth.uid) &&
         isValidSocialMessage(incoming()) &&
+        !('readAt' in incoming()) &&
+        !('readBy' in incoming()) &&
         incoming().senderUid == request.auth.uid &&
         incoming().createdAt == request.time;
       allow update: if false;
@@ -1581,6 +1764,94 @@ service cloud.firestore {
           );
         allow update, delete: if false;
       }
+    }
+
+    // 23. Authoritative Online Multiplayer Matches & Wager Settlement
+    match /multiplayerMatches/{matchId} {
+      allow get: if isValidId(matchId) && isSignedIn() && (
+        isAdmin() || resource == null || request.auth.uid in existing().participantUids
+      );
+      allow list: if isSignedIn() && (
+        isAdmin() || request.auth.uid in resource.data.participantUids
+      );
+      allow create: if isValidId(matchId) &&
+        isSignedIn() &&
+        isValidMultiplayerMatch(incoming()) &&
+        incoming().matchId == matchId &&
+        incoming().settledByUid == request.auth.uid &&
+        request.auth.uid in incoming().participantUids &&
+        incoming().createdAt == request.time && (
+          incoming().stakePoints == 0 || (
+            incoming().winnerUid != '' &&
+            incoming().loserUid != '' &&
+            incoming().winnerUid in incoming().participantUids &&
+            incoming().loserUid in incoming().participantUids &&
+            incoming().winnerUid != incoming().loserUid &&
+            getAfter(/databases/$(database)/documents/users/$(incoming().winnerUid)).data.lastMpMatchId == matchId &&
+            getAfter(/databases/$(database)/documents/users/$(incoming().loserUid)).data.lastMpMatchId == matchId
+          )
+        );
+      allow update, delete: if isValidId(matchId) && isAdmin();
+    }
+
+    // 24. Facial Identity Verification Submissions (Private PII: Owner + Admin only)
+    match /faceVerifications/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isAdmin();
+
+      allow create: if isValidId(userId) &&
+        isOwner(userId) &&
+        isActiveUser(userId) &&
+        isValidFaceVerification(incoming()) &&
+        incoming().uid == userId &&
+        incoming().status == 'pending' &&
+        incoming().rejectionReason == '' &&
+        incoming().bonusAwarded == false &&
+        incoming().reviewedBy == '' &&
+        incoming().submittedAt == request.time &&
+        incoming().reviewedAt == null &&
+        get(/databases/$(database)/documents/users/$(userId)).data.ageVerified == true &&
+        (!('identityVerified' in get(/databases/$(database)/documents/users/$(userId)).data) || get(/databases/$(database)/documents/users/$(userId)).data.identityVerified == false) &&
+        existsAfter(/databases/$(database)/documents/users/$(userId)) &&
+        getAfter(/databases/$(database)/documents/users/$(userId)).data.faceVerificationStatus == 'pending';
+
+      allow update: if isValidId(userId) &&
+        isSignedIn() &&
+        isValidFaceVerification(incoming()) &&
+        incoming().uid == existing().uid && (
+          (
+            isOwner(userId) &&
+            isActiveUser(userId) &&
+            existing().status != 'approved' &&
+            existing().bonusAwarded == false &&
+            incoming().status == 'pending' &&
+            incoming().rejectionReason == '' &&
+            incoming().bonusAwarded == false &&
+            incoming().reviewedBy == '' &&
+            incoming().submittedAt == request.time &&
+            incoming().reviewedAt == null &&
+            get(/databases/$(database)/documents/users/$(userId)).data.ageVerified == true &&
+            (!('identityVerified' in get(/databases/$(database)/documents/users/$(userId)).data) || get(/databases/$(database)/documents/users/$(userId)).data.identityVerified == false) &&
+            existsAfter(/databases/$(database)/documents/users/$(userId)) &&
+            getAfter(/databases/$(database)/documents/users/$(userId)).data.faceVerificationStatus == 'pending'
+          ) || (
+            isAdmin() &&
+            incoming().submittedAt == existing().submittedAt &&
+            incoming().reviewedAt == request.time && (
+              (
+                incoming().status == 'approved' &&
+                existing().bonusAwarded == false &&
+                incoming().bonusAwarded == true
+              ) || (
+                incoming().status == 'rejected' &&
+                incoming().bonusAwarded == existing().bonusAwarded &&
+                incoming().rejectionReason.size() >= 3
+              )
+            )
+          )
+        );
+
+      allow delete: if isValidId(userId) && isAdmin();
     }
   }
 }

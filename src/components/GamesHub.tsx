@@ -7,6 +7,7 @@ import {
   Clock,
   Coins,
   Copy,
+  Dices,
   Gamepad2,
   Inbox,
   Layers,
@@ -23,6 +24,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { useToast } from '../context/ToastContext';
 import { GAME_LABELS, GameCategory, LeaderboardEntry } from '../types/earneasy';
 import { GAME_THUMBNAILS, heroGamingBannerImg } from '../utils/gameArt';
 import { calculatePlayerLevel } from '../utils/levels';
@@ -36,11 +38,20 @@ import {
 } from '../utils/pix';
 import { DailyCheckinCard } from './DailyCheckinCard';
 import { HomeRankingCard } from './HomeRankingCard';
+import { BattleshipSoloGame } from './games/BattleshipSoloGame';
+import { BlockBritzGame } from './games/BlockBritzGame';
+import { Connect4SoloGame } from './games/Connect4SoloGame';
+import { DominoSoloGame } from './games/DominoSoloGame';
 import { DotLinkGame } from './games/DotLinkGame';
+import { DrawGuessSoloGame } from './games/DrawGuessSoloGame';
+import { GuessNumberSoloGame } from './games/GuessNumberSoloGame';
 import { HighLowCardsGame } from './games/HighLowCardsGame';
 import { MathSprintGame } from './games/MathSprintGame';
 import { MemoryMatchGame } from './games/MemoryMatchGame';
 import { QuickReflexGame } from './games/QuickReflexGame';
+import { QuizSoloGame } from './games/QuizSoloGame';
+import { RpsSoloGame } from './games/RpsSoloGame';
+import { StopSoloGame } from './games/StopSoloGame';
 import { TicTacToeGame } from './games/TicTacToeGame';
 import { WordSearchGame } from './games/WordSearchGame';
 
@@ -131,6 +142,78 @@ const GAME_CATALOG: GameCatalogItem[] = [
     avgTime: '30 seg',
     groups: ['reflexo'],
   },
+  {
+    id: 'block_britz',
+    title: GAME_LABELS.block_britz,
+    subtitle: 'Encaixe blocos no tabuleiro 8×8 e ganhe +30 moedas a cada 1.000 pts no jogo.',
+    rewardRange: '30 pts / 1.000',
+    avgTime: '2 min',
+    groups: ['estrategia', 'raciocinio'],
+  },
+  {
+    id: 'domino_solo',
+    title: GAME_LABELS.domino_solo,
+    subtitle: 'Dominó Duplo-6 com carroças verticais, modo Mestre, soma de pontos e dica tática.',
+    rewardRange: 'Até 350 pts',
+    avgTime: '2 min',
+    groups: ['estrategia', 'raciocinio'],
+  },
+  {
+    id: 'stop_solo',
+    title: GAME_LABELS.stop_solo,
+    subtitle: 'Modos Clássico ou Turbo, troca de letra 1x, validação ao vivo e duelo contra a IA.',
+    rewardRange: 'Até 360 pts',
+    avgTime: '1 min',
+    groups: ['palavras', 'reflexo'],
+  },
+  {
+    id: 'draw_guess_solo',
+    title: GAME_LABELS.draw_guess_solo,
+    subtitle: '16 desenhos inéditos em tempo real com cronômetro e opção de 4 alternativas.',
+    rewardRange: 'Até 360 pts',
+    avgTime: '1 min',
+    groups: ['palavras', 'raciocinio'],
+  },
+  {
+    id: 'battleship_solo',
+    title: GAME_LABELS.battleship_solo,
+    subtitle: 'Posicione navios manualmente, dispare o Sonar 3×3 e afunde a frota inimiga.',
+    rewardRange: 'Até 380 pts',
+    avgTime: '2 min',
+    groups: ['estrategia'],
+  },
+  {
+    id: 'connect4_solo',
+    title: GAME_LABELS.connect4_solo,
+    subtitle: 'Modo Normal ou Estrategista (Minimax), prévia de disco, alerta e desfazer 1x.',
+    rewardRange: 'Até 320 pts',
+    avgTime: '1 min',
+    groups: ['estrategia', 'raciocinio'],
+  },
+  {
+    id: 'quiz_solo',
+    title: GAME_LABELS.quiz_solo,
+    subtitle: '54 perguntas por tema sem repetição, ajudas 50/50 e +10s com combo multiplicador.',
+    rewardRange: 'Até 360 pts',
+    avgTime: '1 min',
+    groups: ['raciocinio', 'palavras'],
+  },
+  {
+    id: 'rps_solo',
+    title: GAME_LABELS.rps_solo,
+    subtitle: 'Melhor de 5 ou 7 rodadas contra IA Analista, Carta 2x e histórico ao vivo.',
+    rewardRange: 'Até 280 pts',
+    avgTime: '30 seg',
+    groups: ['reflexo', 'estrategia'],
+  },
+  {
+    id: 'guess_number_solo',
+    title: GAME_LABELS.guess_number_solo,
+    subtitle: '3 cofres (1–100 até 1–500), medidor visual, atalhos rápidos e Scanner Par/Ímpar.',
+    rewardRange: 'Até 300 pts',
+    avgTime: '45 seg',
+    groups: ['raciocinio'],
+  },
 ];
 
 interface GamesHubProps {
@@ -142,10 +225,11 @@ interface GamesHubProps {
   onNavigateMailbox?: () => void;
   onNavigateRanking?: () => void;
   onNavigateFriends?: () => void;
+  onNavigatePlayFriends?: () => void;
   onInspectPlayer?: (player: LeaderboardEntry, rank: number) => void;
 }
 
-export const GamesHub: React.FC<GamesHubProps> = ({
+export const GamesHub: React.FC<GamesHubProps> = React.memo(({
   searchQuery = '',
   onSearchQueryChange,
   onNavigateWallet,
@@ -153,8 +237,10 @@ export const GamesHub: React.FC<GamesHubProps> = ({
   onNavigateMailbox,
   onNavigateRanking,
   onNavigateFriends,
+  onNavigatePlayFriends,
   onInspectPlayer,
 }) => {
+  const { showToast } = useToast();
   const {
     firebaseUser,
     userAccount,
@@ -196,6 +282,15 @@ export const GamesHub: React.FC<GamesHubProps> = ({
       memory_match: 1,
       quick_reflex: 1,
       high_low_cards: 1,
+      block_britz: 1,
+      domino_solo: 1,
+      stop_solo: 1,
+      draw_guess_solo: 1,
+      battleship_solo: 1,
+      connect4_solo: 1,
+      quiz_solo: 1,
+      rps_solo: 1,
+      guess_number_solo: 1,
     };
     mySessions.forEach((s) => {
       if (s.verificationStatus === 'verified' && map[s.gameCategory] !== undefined) {
@@ -265,15 +360,19 @@ export const GamesHub: React.FC<GamesHubProps> = ({
     setRedeemingCode(code);
     try {
       const res = await redeemPromoCode(code);
+      const msg = `Código ${res.code} resgatado! +${formatPoints(res.pointsAwarded)} moedas adicionadas ao seu saldo.`;
       setHighlightFeedback({
         type: 'success',
-        text: `Código ${res.code} resgatado! +${formatPoints(res.pointsAwarded)} moedas adicionadas ao seu saldo.`,
+        text: msg,
       });
+      showToast({ type: 'success', title: 'Código resgatado!', message: msg });
     } catch (err) {
+      const msg = extractReadableError(err, 'Não foi possível resgatar o código.');
       setHighlightFeedback({
         type: 'error',
-        text: extractReadableError(err, 'Não foi possível resgatar o código.'),
+        text: msg,
       });
+      showToast({ type: 'error', title: 'Falha no resgate', message: msg });
     } finally {
       setRedeemingCode(null);
     }
@@ -346,6 +445,60 @@ export const GamesHub: React.FC<GamesHubProps> = ({
             onExit={() => setActiveGame(null)}
           />
         )}
+        {activeGame === 'block_britz' && (
+          <BlockBritzGame
+            onComplete={(s, d, m) => handleGameComplete('block_britz', s, d, m)}
+            onExit={() => setActiveGame(null)}
+          />
+        )}
+        {activeGame === 'domino_solo' && (
+          <DominoSoloGame
+            onComplete={(s, d, m) => handleGameComplete('domino_solo', s, d, m)}
+            onExit={() => setActiveGame(null)}
+          />
+        )}
+        {activeGame === 'stop_solo' && (
+          <StopSoloGame
+            onComplete={(s, d, m) => handleGameComplete('stop_solo', s, d, m)}
+            onExit={() => setActiveGame(null)}
+          />
+        )}
+        {activeGame === 'draw_guess_solo' && (
+          <DrawGuessSoloGame
+            onComplete={(s, d, m) => handleGameComplete('draw_guess_solo', s, d, m)}
+            onExit={() => setActiveGame(null)}
+          />
+        )}
+        {activeGame === 'battleship_solo' && (
+          <BattleshipSoloGame
+            onComplete={(s, d, m) => handleGameComplete('battleship_solo', s, d, m)}
+            onExit={() => setActiveGame(null)}
+          />
+        )}
+        {activeGame === 'connect4_solo' && (
+          <Connect4SoloGame
+            onComplete={(s, d, m) => handleGameComplete('connect4_solo', s, d, m)}
+            onExit={() => setActiveGame(null)}
+          />
+        )}
+        {activeGame === 'quiz_solo' && (
+          <QuizSoloGame
+            onComplete={(s, d, m) => handleGameComplete('quiz_solo', s, d, m)}
+            onExit={() => setActiveGame(null)}
+          />
+        )}
+        {activeGame === 'rps_solo' && (
+          <RpsSoloGame
+            onComplete={(s, d, m) => handleGameComplete('rps_solo', s, d, m)}
+            onExit={() => setActiveGame(null)}
+          />
+        )}
+        {activeGame === 'guess_number_solo' && (
+          <GuessNumberSoloGame
+            onComplete={(s, d, m) => handleGameComplete('guess_number_solo', s, d, m)}
+            onExit={() => setActiveGame(null)}
+          />
+        )}
       </div>
     );
   }
@@ -382,7 +535,7 @@ export const GamesHub: React.FC<GamesHubProps> = ({
             </h1>
 
             <p className="text-xs sm:text-sm text-zinc-200/90 leading-relaxed max-w-md">
-              7 jogos gratuitos, fases infinitas e recompensas reais com saque direto via Pix!
+              16 jogos solo gratuitos, fases infinitas, arenas multiplayer com amigos e saque direto via Pix!
             </p>
           </div>
 
@@ -395,6 +548,16 @@ export const GamesHub: React.FC<GamesHubProps> = ({
               <Play className="w-4 h-4 fill-current" />
               {firebaseUser ? 'Jogar Agora' : 'Entrar e Jogar'}
             </button>
+            {onNavigatePlayFriends && (
+              <button
+                type="button"
+                onClick={onNavigatePlayFriends}
+                className="inline-flex items-center gap-1.5 min-h-[44px] px-4 py-2.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 border border-lime-400/40 text-lime-300 text-xs sm:text-sm font-bold transition-colors cursor-pointer backdrop-blur-sm"
+              >
+                <Users className="w-4 h-4" />
+                Jogar com Amigos
+              </button>
+            )}
             <button
               type="button"
               onClick={onNavigateInvites}
@@ -508,10 +671,14 @@ export const GamesHub: React.FC<GamesHubProps> = ({
             </div>
           </div>
 
-          {/* 6 Filter Tabs matching Reference Screenshot */}
+          {/* 6 Filter Tabs + Jogo Aleatório */}
           <div className="flex flex-wrap items-center gap-1.5">
             {FILTER_TABS.map(({ id, label, Icon }) => {
               const active = selectedGroup === id;
+              const count =
+                id === 'all'
+                  ? GAME_CATALOG.length
+                  : GAME_CATALOG.filter((g) => g.groups.includes(id)).length;
               return (
                 <button
                   key={id}
@@ -525,9 +692,22 @@ export const GamesHub: React.FC<GamesHubProps> = ({
                 >
                   <Icon className="w-3.5 h-3.5 shrink-0" />
                   <span>{label}</span>
+                  <span className="font-mono text-[10px] opacity-70">{count}</span>
                 </button>
               );
             })}
+            <button
+              type="button"
+              onClick={() => {
+                const pool = filteredGames.length > 0 ? filteredGames : GAME_CATALOG;
+                const randomGame = pool[Math.floor(Math.random() * pool.length)];
+                handlePlayClick(randomGame.id);
+              }}
+              className="inline-flex items-center gap-1.5 min-h-[38px] px-3 py-1.5 rounded-xl text-xs font-extrabold border border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-lime-300 hover:bg-emerald-500/20 transition-colors cursor-pointer"
+            >
+              <Dices className="w-3.5 h-3.5 shrink-0" />
+              <span>Aleatório</span>
+            </button>
           </div>
         </div>
 
@@ -544,7 +724,7 @@ export const GamesHub: React.FC<GamesHubProps> = ({
               }}
               className="min-h-[42px] px-4 py-2 rounded-xl bg-lime-400 hover:bg-lime-300 text-slate-950 text-xs font-bold cursor-pointer"
             >
-              Mostrar Todos os 7 Jogos
+              Mostrar Todos os {GAME_CATALOG.length} Jogos
             </button>
           </div>
         ) : (
@@ -843,4 +1023,6 @@ export const GamesHub: React.FC<GamesHubProps> = ({
       </section>
     </div>
   );
-};
+});
+
+GamesHub.displayName = 'GamesHub';

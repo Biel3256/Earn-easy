@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   collection,
   deleteDoc,
@@ -17,9 +17,11 @@ import {
 } from 'firebase/firestore';
 import {
   Ban,
+  Camera,
   CheckCircle2,
   Clock,
   Copy,
+  Eye,
   Headset,
   History,
   Inbox,
@@ -47,6 +49,8 @@ import { useAuth } from '../context/AuthContext';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import {
   EnterpriseIntegration,
+  FACE_VERIFICATION_BONUS_POINTS,
+  FaceVerificationRequest,
   FraudEvent,
   GAME_LABELS,
   GameSession,
@@ -63,6 +67,7 @@ import {
   WithdrawalAttemptLog,
   WithdrawalAttemptStatus,
 } from '../types/earneasy';
+import { calculateAgeFromBirthDate, formatBirthDateBr } from '../utils/age';
 import { generateId, sha256Hex } from '../utils/antifraud';
 import {
   extractReadableError,
@@ -72,8 +77,9 @@ import {
   formatScheduleTime,
   timestampToMillis,
 } from '../utils/pix';
+import { VerifiedBadge } from './VerifiedBadge';
 
-type AdminTab = 'overview' | 'payouts' | 'users' | 'codes' | 'support' | 'chat' | 'antifraud' | 'api';
+type AdminTab = 'overview' | 'verification' | 'payouts' | 'users' | 'codes' | 'support' | 'chat' | 'antifraud' | 'api';
 
 const ATTEMPT_STATUS_META: Record<
   WithdrawalAttemptStatus,
@@ -155,7 +161,7 @@ function buildRandomPromoCode(): string {
 
 const ADMIN_QUICK_AMOUNT_CHOICES = [1, 5, 10, 25, 50, 100, 200, 500, 1000, 2000];
 
-export const AdminPanel: React.FC = () => {
+export const AdminPanel: React.FC = React.memo(() => {
   const {
     firebaseUser,
     userAccount,
@@ -163,6 +169,8 @@ export const AdminPanel: React.FC = () => {
     withdrawalSettings,
     maintenanceSettings,
     updateMaintenanceSettings,
+    approveFaceVerification,
+    rejectFaceVerification,
   } = useAuth();
 
   const [tab, setTab] = useState<AdminTab>('overview');
@@ -183,6 +191,11 @@ export const AdminPanel: React.FC = () => {
   const [supportReplyDraft, setSupportReplyDraft] = useState('');
   const [supportBusy, setSupportBusy] = useState(false);
   const [globalChatMessages, setGlobalChatMessages] = useState<Array<{ id: string; senderName?: string; senderUid?: string; text?: string; createdAt?: Timestamp }>>([]);
+  const [faceVerifications, setFaceVerifications] = useState<FaceVerificationRequest[]>([]);
+  const [faceFilter, setFaceFilter] = useState<'pending' | 'approved' | 'rejected' | 'all'>('pending');
+  const [faceRejectReasons, setFaceRejectReasons] = useState<Record<string, string>>({});
+  const [faceBusyUid, setFaceBusyUid] = useState<string | null>(null);
+  const [zoomSelfie, setZoomSelfie] = useState<FaceVerificationRequest | null>(null);
 
   const [payoutFilter, setPayoutFilter] = useState<'all' | 'pending' | 'approved' | 'paid' | 'rejected'>('all');
   const [attemptFilter, setAttemptFilter] = useState<
@@ -393,6 +406,12 @@ export const AdminPanel: React.FC = () => {
       (err) => handleFirestoreError(err, OperationType.LIST, 'supportTickets')
     );
 
+    const u10 = onSnapshot(
+      query(collection(db, 'faceVerifications'), orderBy('submittedAt', 'desc')),
+      (snap) => setFaceVerifications(snap.docs.map((d) => d.data() as FaceVerificationRequest)),
+      (err) => handleFirestoreError(err, OperationType.LIST, 'faceVerifications')
+    );
+
     return () => {
       uAdmins();
       u1();
@@ -404,6 +423,7 @@ export const AdminPanel: React.FC = () => {
       u7();
       u8();
       u9();
+      u10();
     };
   }, [firebaseUser, isAdmin]);
 
@@ -684,8 +704,10 @@ export const AdminPanel: React.FC = () => {
               photoURL: uData.photoURL,
               brlBalanceCents: uData.brlBalanceCents + w.amountCents,
               pointsBalance: uData.pointsBalance,
+              lifetimePoints: uData.lifetimePoints,
               gamesPlayed: uData.gamesPlayed,
               status: uData.status,
+              identityVerified: Boolean(uData.identityVerified),
               updatedAt: serverTimestamp(),
             });
           }
@@ -990,8 +1012,10 @@ export const AdminPanel: React.FC = () => {
         photoURL: u.photoURL,
         brlBalanceCents: u.brlBalanceCents,
         pointsBalance: u.pointsBalance,
+        lifetimePoints: u.lifetimePoints,
         gamesPlayed: u.gamesPlayed,
         status: 'active',
+        identityVerified: Boolean(u.identityVerified),
         updatedAt: serverTimestamp(),
       });
       setActionMsg(`Usuário ${u.displayName} reativado com sucesso.`);
@@ -1279,36 +1303,74 @@ export const AdminPanel: React.FC = () => {
     }
   };
 
-  const filteredWithdrawals = withdrawals.filter((w) =>
-    payoutFilter === 'all' ? true : w.status === payoutFilter
+  const filteredWithdrawals = useMemo(
+    () =>
+      withdrawals.filter((w) =>
+        payoutFilter === 'all' ? true : w.status === payoutFilter
+      ),
+    [withdrawals, payoutFilter]
   );
 
-  const filteredUsers = users.filter((u) => {
+  const filteredUsers = useMemo(() => {
     const q = userSearch.trim().toLowerCase();
-    if (!q) return true;
-    const email = (privateMap[u.uid]?.email || '').toLowerCase();
-    return u.displayName.toLowerCase().includes(q) || email.includes(q) || u.uid.toLowerCase().includes(q);
-  });
+    if (!q) return users;
+    return users.filter((u) => {
+      const email = (privateMap[u.uid]?.email || '').toLowerCase();
+      return (
+        u.displayName.toLowerCase().includes(q) ||
+        email.includes(q) ||
+        u.uid.toLowerCase().includes(q)
+      );
+    });
+  }, [users, userSearch, privateMap]);
 
   // Only withdrawals explicitly confirmed as paid count as real money already sent.
-  const totalPaidWithdrawalsCents = withdrawals
-    .filter((w) => w.status === 'paid')
-    .reduce((acc, w) => acc + (Number.isFinite(w.amountCents) ? w.amountCents : 0), 0);
-  const paidWithdrawalsCount = withdrawals.filter((w) => w.status === 'paid').length;
-
-  const pendingTotalCents = withdrawals
-    .filter((w) => w.status === 'pending' || w.status === 'approved')
-    .reduce((acc, w) => acc + w.amountCents, 0);
-
-  const waitingSupportCount = supportTickets.filter((t) => t.status === 'waiting_human').length;
-  const filteredSupportTickets = supportTickets.filter((t) =>
-    supportFilter === 'all' ? true : t.status === supportFilter
+  const totalPaidWithdrawalsCents = useMemo(
+    () =>
+      withdrawals
+        .filter((w) => w.status === 'paid')
+        .reduce((acc, w) => acc + (Number.isFinite(w.amountCents) ? w.amountCents : 0), 0),
+    [withdrawals]
   );
-  const selectedSupportTicket =
-    supportTickets.find((t) => t.ticketId === selectedTicketId) || null;
-  const selectedTicketUser = selectedSupportTicket
-    ? users.find((u) => u.uid === selectedSupportTicket.userId) || null
-    : null;
+
+  const paidWithdrawalsCount = useMemo(
+    () => withdrawals.filter((w) => w.status === 'paid').length,
+    [withdrawals]
+  );
+
+  const pendingTotalCents = useMemo(
+    () =>
+      withdrawals
+        .filter((w) => w.status === 'pending' || w.status === 'approved')
+        .reduce((acc, w) => acc + w.amountCents, 0),
+    [withdrawals]
+  );
+
+  const waitingSupportCount = useMemo(
+    () => supportTickets.filter((t) => t.status === 'waiting_human').length,
+    [supportTickets]
+  );
+
+  const filteredSupportTickets = useMemo(
+    () =>
+      supportTickets.filter((t) =>
+        supportFilter === 'all' ? true : t.status === supportFilter
+      ),
+    [supportTickets, supportFilter]
+  );
+
+  const selectedSupportTicket = useMemo(
+    () => supportTickets.find((t) => t.ticketId === selectedTicketId) || null,
+    [supportTickets, selectedTicketId]
+  );
+
+  const selectedTicketUser = useMemo(
+    () =>
+      selectedSupportTicket
+        ? users.find((u) => u.uid === selectedSupportTicket.userId) || null
+        : null,
+    [selectedSupportTicket, users]
+  );
 
   const acceptSupportTicket = async (ticket: SupportTicket) => {
     if (!firebaseUser || supportBusy) return;
@@ -1411,6 +1473,55 @@ export const AdminPanel: React.FC = () => {
   startOfToday.setHours(0, 0, 0, 0);
   const newUsersToday = users.filter((user) => timestampToMillis(user.createdAt) >= startOfToday.getTime()).length;
 
+  const handleApproveFace = async (req: FaceVerificationRequest) => {
+    if (faceBusyUid) return;
+    setActionErr(null);
+    setActionMsg(null);
+    setFaceBusyUid(req.uid);
+    try {
+      await approveFaceVerification(req.uid);
+      setActionMsg(
+        `Verificação facial de ${req.displayName} aprovada! Selo ativado e +${formatPoints(FACE_VERIFICATION_BONUS_POINTS)} pontos creditados na hora.`
+      );
+    } catch (err) {
+      setActionErr(extractReadableError(err, 'Erro ao aprovar verificação facial.'));
+    } finally {
+      setFaceBusyUid(null);
+    }
+  };
+
+  const handleRejectFace = async (req: FaceVerificationRequest) => {
+    if (faceBusyUid) return;
+    const reason = (faceRejectReasons[req.uid] || '').trim();
+    if (reason.length < 3) {
+      setActionErr('Informe o motivo da recusa antes de recusar a verificação facial.');
+      return;
+    }
+    setActionErr(null);
+    setActionMsg(null);
+    setFaceBusyUid(req.uid);
+    try {
+      await rejectFaceVerification(req.uid, reason);
+      setFaceRejectReasons((prev) => ({ ...prev, [req.uid]: '' }));
+      setActionMsg(`Verificação facial de ${req.displayName} recusada.`);
+    } catch (err) {
+      setActionErr(extractReadableError(err, 'Erro ao recusar verificação facial.'));
+    } finally {
+      setFaceBusyUid(null);
+    }
+  };
+
+  const pendingFaceCount = useMemo(
+    () => faceVerifications.filter((f) => f.status === 'pending').length,
+    [faceVerifications]
+  );
+
+  const filteredFaceVerifications = useMemo(
+    () =>
+      faceVerifications.filter((f) => (faceFilter === 'all' ? true : f.status === faceFilter)),
+    [faceVerifications, faceFilter]
+  );
+
   const ADMIN_TABS: Array<{
     id: AdminTab;
     label: string;
@@ -1418,6 +1529,12 @@ export const AdminPanel: React.FC = () => {
     badge?: number;
   }> = [
     { id: 'overview', label: 'Visão Geral & Manutenção', Icon: LayoutDashboard },
+    {
+      id: 'verification',
+      label: 'Verificação Facial',
+      Icon: Camera,
+      badge: pendingFaceCount || undefined,
+    },
     {
       id: 'payouts',
       label: 'Saques Pix & Logs',
@@ -2197,6 +2314,7 @@ export const AdminPanel: React.FC = () => {
                       <span className="text-sm font-bold text-slate-900 dark:text-white break-words">
                         {u.displayName}
                       </span>
+                      {u.identityVerified && <VerifiedBadge showLabel size="xs" />}
                       {adminUids.includes(u.uid) && (
                         <span className="px-2 py-0.5 rounded-lg text-[11px] font-bold bg-lime-100 dark:bg-lime-500/15 text-lime-800 dark:text-lime-300">
                           Administrador
@@ -2244,7 +2362,7 @@ export const AdminPanel: React.FC = () => {
                             <strong>Por quê:</strong> {u.banExplanation}
                           </div>
                         )}
-                        {u.suspensionUntil && timestampToMillis(u.suspensionUntil) > Date.now() && (
+                        {Boolean(u.suspensionUntil) && timestampToMillis(u.suspensionUntil) > Date.now() && (
                           <div>
                             <strong>Bloqueado até:</strong> {formatAttemptTimestamp(u.suspensionUntil)}
                           </div>
@@ -3202,6 +3320,197 @@ export const AdminPanel: React.FC = () => {
         </div>
       )}
 
+      {/* TAB: VERIFICAÇÃO FACIAL (+30.000 pts) */}
+      {tab === 'verification' && (
+        <div className="bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 sm:p-6 space-y-5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-zinc-800 pb-4">
+            <div>
+              <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                <Camera className="w-5 h-5 text-sky-500" />
+                Análise de Verificação Facial ({filteredFaceVerifications.length})
+              </h3>
+              <p className="text-xs text-slate-500 dark:text-zinc-400 mt-0.5">
+                Confira a selfie e os dados (+18). Ao aprovar, o perfil ganha o selo Verificado e +{formatPoints(FACE_VERIFICATION_BONUS_POINTS)} pontos imediatos (único por conta).
+              </p>
+            </div>
+
+            <div className="flex flex-wrap gap-1.5">
+              {(
+                [
+                  { id: 'pending', label: `Pendentes (${pendingFaceCount})` },
+                  { id: 'approved', label: 'Aprovados' },
+                  { id: 'rejected', label: 'Recusados' },
+                  { id: 'all', label: 'Todos' },
+                ] as const
+              ).map((f) => (
+                <button
+                  key={f.id}
+                  type="button"
+                  onClick={() => setFaceFilter(f.id)}
+                  className={`px-3 py-1.5 text-[11px] font-bold rounded-xl border transition-colors cursor-pointer ${
+                    faceFilter === f.id
+                      ? 'bg-slate-900 dark:bg-lime-400 text-white dark:text-slate-950 border-transparent'
+                      : 'bg-slate-50 dark:bg-[#090d12] text-slate-600 dark:text-zinc-300 border-slate-200 dark:border-zinc-800'
+                  }`}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {filteredFaceVerifications.length === 0 ? (
+            <p className="text-xs text-slate-500 dark:text-zinc-400 py-10 text-center">
+              Nenhuma solicitação de verificação facial neste filtro.
+            </p>
+          ) : (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {filteredFaceVerifications.map((req) => {
+                const age = calculateAgeFromBirthDate(req.birthDate);
+                const email = privateMap[req.uid]?.email || '';
+                const busy = faceBusyUid === req.uid;
+                return (
+                  <div
+                    key={req.uid}
+                    className="rounded-2xl border border-slate-200 dark:border-zinc-800 bg-slate-50/70 dark:bg-[#090d12] p-4 flex flex-col sm:flex-row gap-4"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setZoomSelfie(req)}
+                      className="relative w-28 h-28 sm:w-32 sm:h-32 rounded-2xl overflow-hidden border border-slate-300 dark:border-zinc-700 bg-black shrink-0 group cursor-pointer self-start"
+                      title="Clique para ampliar a foto"
+                    >
+                      <img
+                        src={req.selfieDataUrl}
+                        alt={`Selfie de ${req.displayName}`}
+                        className="w-full h-full object-cover"
+                      />
+                      <span className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-[11px] font-bold gap-1">
+                        <Eye className="w-3.5 h-3.5" /> Ampliar
+                      </span>
+                    </button>
+
+                    <div className="flex-1 min-w-0 space-y-2.5 text-xs">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span className="text-sm font-extrabold text-slate-900 dark:text-white truncate">
+                            {req.displayName}
+                          </span>
+                          {req.status === 'approved' && <VerifiedBadge size="xs" />}
+                        </div>
+                        <span
+                          className={`px-2 py-0.5 rounded-lg text-[11px] font-bold ${
+                            req.status === 'approved'
+                              ? 'bg-sky-500/15 text-sky-600 dark:text-sky-400'
+                              : req.status === 'rejected'
+                                ? 'bg-red-500/15 text-red-600 dark:text-red-400'
+                                : 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
+                          }`}
+                        >
+                          {req.status === 'approved'
+                            ? 'Aprovado'
+                            : req.status === 'rejected'
+                              ? 'Recusado'
+                              : 'Pendente'}
+                        </span>
+                      </div>
+
+                      <div className="space-y-0.5 text-[11px] text-slate-600 dark:text-zinc-400 font-mono break-all">
+                        {email && <div>{email}</div>}
+                        <div>UID: {req.uid}</div>
+                        <div>
+                          Nascimento: <strong className="text-slate-900 dark:text-zinc-200">{formatBirthDateBr(req.birthDate)}</strong>
+                          {age !== null ? ` (${age} anos)` : ''}
+                        </div>
+                        <div>Enviado em: {formatAttemptTimestamp(req.submittedAt)}</div>
+                      </div>
+
+                      {req.status === 'rejected' && req.rejectionReason && (
+                        <div className="p-2 rounded-xl bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900 text-[11px] text-red-700 dark:text-red-300">
+                          <strong>Motivo da recusa:</strong> {req.rejectionReason}
+                        </div>
+                      )}
+
+                      {req.status === 'pending' && (
+                        <div className="space-y-2 pt-1">
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              disabled={busy || req.bonusAwarded}
+                              onClick={() => handleApproveFace(req)}
+                              className="flex-1 min-h-[40px] inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-lime-400 hover:bg-lime-300 disabled:opacity-45 text-slate-950 text-xs font-black cursor-pointer"
+                            >
+                              <CheckCircle2 className="w-4 h-4" />
+                              {busy ? 'Processando...' : `Aprovar (+${formatPoints(FACE_VERIFICATION_BONUS_POINTS)} pts)`}
+                            </button>
+                          </div>
+
+                          <div className="flex gap-1.5">
+                            <input
+                              type="text"
+                              maxLength={200}
+                              value={faceRejectReasons[req.uid] || ''}
+                              onChange={(e) =>
+                                setFaceRejectReasons((prev) => ({ ...prev, [req.uid]: e.target.value }))
+                              }
+                              placeholder="Motivo da recusa (ex: foto escura / rosto cortado)"
+                              className="flex-1 min-h-[38px] px-3 py-1.5 text-xs bg-white dark:bg-[#0e1319] border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-xl"
+                            />
+                            <button
+                              type="button"
+                              disabled={busy || (faceRejectReasons[req.uid] || '').trim().length < 3}
+                              onClick={() => handleRejectFace(req)}
+                              className="min-h-[38px] inline-flex items-center gap-1 px-3 py-1.5 rounded-xl bg-red-50 dark:bg-red-950/50 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 text-xs font-bold disabled:opacity-40 cursor-pointer shrink-0"
+                            >
+                              <XCircle className="w-3.5 h-3.5" />
+                              Recusar
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* MODAL: AMPLIAR SELFIE FACIAL */}
+      {zoomSelfie && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setZoomSelfie(null);
+          }}
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm"
+        >
+          <div className="bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-3xl max-w-md w-full overflow-hidden shadow-2xl">
+            <div className="px-5 py-3.5 border-b border-slate-100 dark:border-zinc-800 flex items-center justify-between">
+              <div className="text-sm font-extrabold text-slate-900 dark:text-white truncate">
+                Selfie de {zoomSelfie.displayName}
+              </div>
+              <button
+                type="button"
+                onClick={() => setZoomSelfie(null)}
+                className="p-1.5 rounded-lg text-slate-500 hover:text-slate-900 dark:hover:text-white cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-4 bg-black flex justify-center">
+              <img
+                src={zoomSelfie.selfieDataUrl}
+                alt={`Selfie ampliada de ${zoomSelfie.displayName}`}
+                className="max-h-[70vh] w-auto rounded-2xl object-contain"
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* MODAL: BANIR USUÁRIO */}
       {banTarget && (
         <div
@@ -3384,4 +3693,6 @@ export const AdminPanel: React.FC = () => {
 
     </div>
   );
-};
+});
+
+AdminPanel.displayName = 'AdminPanel';

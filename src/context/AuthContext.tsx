@@ -35,6 +35,8 @@ import {
   DEFAULT_MAINTENANCE_SETTINGS,
   DEFAULT_WITHDRAWAL_SETTINGS,
   EmailNotification,
+  FACE_VERIFICATION_BONUS_POINTS,
+  FaceVerificationRequest,
   FraudEvent,
   GameCategory,
   GameSession,
@@ -43,6 +45,8 @@ import {
   MaintenanceSettings,
   MAX_CONFIGURABLE_WITHDRAWAL_CENTS,
   MIN_CONFIGURABLE_WITHDRAWAL_CENTS,
+  MultiplayerMatchRecord,
+  MultiplayerSettlementPayload,
   PixKeyType,
   PixWithdrawal,
   POINTS_PER_TEN_CENTS,
@@ -66,6 +70,8 @@ import {
   sha256Hex,
   verifyGameSessionWithServer,
 } from '../utils/antifraud';
+import { validateBirthDateInput } from '../utils/age';
+import { isValidSelfieDataUrl } from '../utils/camera';
 import {
   BrowserNotificationPermissionState,
   getBrowserNotificationPermission,
@@ -99,6 +105,44 @@ import {
   syncServerUtcClock,
   timestampToMillis,
 } from '../utils/pix';
+
+function buildLeaderboardPayload(
+  userData: Pick<
+    UserAccount,
+    | 'uid'
+    | 'displayName'
+    | 'photoURL'
+    | 'brlBalanceCents'
+    | 'pointsBalance'
+    | 'lifetimePoints'
+    | 'gamesPlayed'
+    | 'status'
+    | 'identityVerified'
+  >,
+  overrides: Partial<{
+    displayName: string;
+    photoURL: string;
+    brlBalanceCents: number;
+    pointsBalance: number;
+    lifetimePoints: number;
+    gamesPlayed: number;
+    status: UserAccount['status'];
+    identityVerified: boolean;
+  }> = {}
+) {
+  return {
+    uid: userData.uid,
+    displayName: overrides.displayName ?? userData.displayName,
+    photoURL: overrides.photoURL ?? userData.photoURL,
+    brlBalanceCents: overrides.brlBalanceCents ?? userData.brlBalanceCents,
+    pointsBalance: overrides.pointsBalance ?? userData.pointsBalance,
+    lifetimePoints: overrides.lifetimePoints ?? userData.lifetimePoints,
+    gamesPlayed: overrides.gamesPlayed ?? userData.gamesPlayed,
+    status: overrides.status ?? userData.status,
+    identityVerified: overrides.identityVerified ?? Boolean(userData.identityVerified),
+    updatedAt: serverTimestamp(),
+  };
+}
 
 function isFirestoreSdkError(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
@@ -183,7 +227,13 @@ interface AuthContextValue {
     displayName: string;
     photoURL: string;
     referralCode?: string;
+    birthDate?: string;
   }) => Promise<{ status: 'active' | 'suspended'; message?: string; referralApplied?: boolean }>;
+  myFaceVerification: FaceVerificationRequest | null;
+  verifyUserAge: (birthDate: string) => Promise<void>;
+  submitFaceVerification: (selfieDataUrl: string) => Promise<void>;
+  approveFaceVerification: (targetUid: string) => Promise<void>;
+  rejectFaceVerification: (targetUid: string, reason: string) => Promise<void>;
   recordGameReward: (params: {
     gameCategory: GameCategory;
     scoreEarned: number;
@@ -248,6 +298,10 @@ interface AuthContextValue {
     deliveryStatus: EmailNotification['deliveryStatus'];
     referenceId: string;
   }>;
+  myMultiplayerMatches: MultiplayerMatchRecord[];
+  settleMultiplayerMatch: (
+    settlement: MultiplayerSettlementPayload
+  ) => Promise<{ alreadySettled: boolean; transferredPoints: number }>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -335,6 +389,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [myInvitedReferrals, setMyInvitedReferrals] = useState<Referral[]>([]);
   const [publicPromoEvents, setPublicPromoEvents] = useState<PromoCode[]>([]);
   const [myPromoRedemptions, setMyPromoRedemptions] = useState<PromoRedemption[]>([]);
+  const [myMultiplayerMatches, setMyMultiplayerMatches] = useState<MultiplayerMatchRecord[]>([]);
+  const [myFaceVerification, setMyFaceVerification] = useState<FaceVerificationRequest | null>(null);
   const [rawMailboxMessages, setRawMailboxMessages] = useState<MailboxMessage[]>([]);
   const [deletedMailboxIds, setDeletedMailboxIds] = useState<string[]>([]);
   const [readMailboxIds, setReadMailboxIds] = useState<string[]>([]);
@@ -407,6 +463,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setMyInvitedReferrals([]);
         setPublicPromoEvents([]);
         setMyPromoRedemptions([]);
+        setMyMultiplayerMatches([]);
+        setMyFaceVerification(null);
         setRawMailboxMessages([]);
         setDeletedMailboxIds([]);
         setReadMailboxIds([]);
@@ -464,19 +522,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               lbData.gamesPlayed !== userData.gamesPlayed ||
               lbData.displayName !== userData.displayName ||
               lbData.photoURL !== userData.photoURL ||
-              lbData.status !== userData.status
+              lbData.status !== userData.status ||
+              Boolean(lbData.identityVerified) !== Boolean(userData.identityVerified)
             ) {
-              await setDoc(lbRef, {
-                uid: userData.uid,
-                displayName: userData.displayName,
-                photoURL: userData.photoURL,
-                brlBalanceCents: userData.brlBalanceCents,
-                pointsBalance: userData.pointsBalance,
-                lifetimePoints: userData.lifetimePoints,
-                gamesPlayed: userData.gamesPlayed,
-                status: userData.status,
-                updatedAt: serverTimestamp(),
-              });
+              await setDoc(lbRef, buildLeaderboardPayload(userData));
             }
           }
         }
@@ -558,17 +607,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           banExplanation: '',
           bannedBy: '',
           updatedAt: serverTimestamp(),
-        }).then(() => setDoc(doc(db, 'leaderboard', firebaseUser.uid), {
-          uid: userAccount.uid,
-          displayName: userAccount.displayName,
-          photoURL: userAccount.photoURL,
-          brlBalanceCents: userAccount.brlBalanceCents,
-          pointsBalance: userAccount.pointsBalance,
-          lifetimePoints: userAccount.lifetimePoints,
-          gamesPlayed: userAccount.gamesPlayed,
-          status: 'active',
-          updatedAt: serverTimestamp(),
-        })).catch(() => {});
+        }).then(() => setDoc(
+          doc(db, 'leaderboard', firebaseUser.uid),
+          buildLeaderboardPayload(userAccount, { status: 'active' })
+        )).catch(() => {});
         return;
       }
       // Browser timers have a ~24.8-day maximum; reschedule longer suspensions safely.
@@ -592,19 +634,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           const uData = snap.data() as UserAccount;
           setUserAccount(uData);
           if (uData.status === 'active') {
-            const sig = `${uData.pointsBalance}|${uData.lifetimePoints}|${uData.brlBalanceCents}|${uData.gamesPlayed}|${uData.displayName}|${uData.photoURL}|${uData.status}`;
+            const sig = `${uData.pointsBalance}|${uData.lifetimePoints}|${uData.brlBalanceCents}|${uData.gamesPlayed}|${uData.displayName}|${uData.photoURL}|${uData.status}|${Boolean(uData.identityVerified)}`;
             if (lastSyncedLbSigRef.current && lastSyncedLbSigRef.current !== sig) {
-              setDoc(doc(db, 'leaderboard', uid), {
-                uid: uData.uid,
-                displayName: uData.displayName,
-                photoURL: uData.photoURL,
-                brlBalanceCents: uData.brlBalanceCents,
-                pointsBalance: uData.pointsBalance,
-                lifetimePoints: uData.lifetimePoints,
-                gamesPlayed: uData.gamesPlayed,
-                status: uData.status,
-                updatedAt: serverTimestamp(),
-              }).catch(() => {});
+              setDoc(doc(db, 'leaderboard', uid), buildLeaderboardPayload(uData)).catch(() => {});
             }
             lastSyncedLbSigRef.current = sig;
           }
@@ -898,6 +930,29 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       (error) => handleFirestoreError(error, OperationType.GET, 'appSettings/withdrawal')
     );
 
+    const unsubMultiplayerMatches = onSnapshot(
+      query(collection(db, 'multiplayerMatches'), where('participantUids', 'array-contains', uid)),
+      (snap) => {
+        const list = snap.docs
+          .map((d) => d.data() as MultiplayerMatchRecord)
+          .sort((a, b) => timestampToMillis(b.createdAt) - timestampToMillis(a.createdAt));
+        setMyMultiplayerMatches(list);
+      },
+      () => {
+        setMyMultiplayerMatches([]);
+      }
+    );
+
+    const unsubFaceVerification = onSnapshot(
+      doc(db, 'faceVerifications', uid),
+      (snap) => {
+        setMyFaceVerification(snap.exists() ? (snap.data() as FaceVerificationRequest) : null);
+      },
+      () => {
+        setMyFaceVerification(null);
+      }
+    );
+
     try {
       const saved = window.localStorage.getItem(`earneasy_read_mail_${uid}`);
       if (saved) {
@@ -945,6 +1000,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       unsubMailbox();
       unsubDeletedMailbox();
       unsubWithdrawalSettings();
+      unsubMultiplayerMatches();
+      unsubFaceVerification();
     };
   }, [authReady, firebaseUser]);
 
@@ -1112,17 +1169,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           });
         }
 
-        tx.set(doc(db, 'leaderboard', firebaseUser.uid), {
-          uid: firebaseUser.uid,
-          displayName: current.displayName,
-          photoURL: current.photoURL,
-          brlBalanceCents: current.brlBalanceCents,
-          pointsBalance: current.pointsBalance + credited,
-          lifetimePoints: current.lifetimePoints + credited,
-          gamesPlayed: current.gamesPlayed + 1,
-          status: current.status,
-          updatedAt: serverTimestamp(),
-        });
+        tx.set(
+          doc(db, 'leaderboard', firebaseUser.uid),
+          buildLeaderboardPayload(current, {
+            pointsBalance: current.pointsBalance + credited,
+            lifetimePoints: current.lifetimePoints + credited,
+            gamesPlayed: current.gamesPlayed + 1,
+          })
+        );
       });
     } catch (error) {
       handleTransactionError(error, OperationType.WRITE, `users/${firebaseUser.uid}`);
@@ -1205,17 +1259,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           createdAt: serverTimestamp(),
         });
 
-        tx.set(doc(db, 'leaderboard', firebaseUser.uid), {
-          uid: firebaseUser.uid,
-          displayName: current.displayName,
-          photoURL: current.photoURL,
-          brlBalanceCents: current.brlBalanceCents + brlCentsCredited,
-          pointsBalance: current.pointsBalance - validPoints,
-          lifetimePoints: current.lifetimePoints,
-          gamesPlayed: current.gamesPlayed,
-          status: current.status,
-          updatedAt: serverTimestamp(),
-        });
+        tx.set(
+          doc(db, 'leaderboard', firebaseUser.uid),
+          buildLeaderboardPayload(current, {
+            brlBalanceCents: current.brlBalanceCents + brlCentsCredited,
+            pointsBalance: current.pointsBalance - validPoints,
+          })
+        );
       });
     } catch (error) {
       handleTransactionError(error, OperationType.WRITE, `conversions/${conversionId}`);
@@ -1397,17 +1447,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           });
         }
 
-        tx.set(doc(db, 'leaderboard', firebaseUser.uid), {
-          uid: firebaseUser.uid,
-          displayName: current.displayName,
-          photoURL: current.photoURL,
-          brlBalanceCents: current.brlBalanceCents - params.amountCents,
-          pointsBalance: current.pointsBalance,
-          lifetimePoints: current.lifetimePoints,
-          gamesPlayed: current.gamesPlayed,
-          status: current.status,
-          updatedAt: serverTimestamp(),
-        });
+        tx.set(
+          doc(db, 'leaderboard', firebaseUser.uid),
+          buildLeaderboardPayload(current, {
+            brlBalanceCents: current.brlBalanceCents - params.amountCents,
+          })
+        );
       });
     } catch (error) {
       const msg = error instanceof Error ? error.message : 'Falha na transação de saque Pix.';
@@ -1441,6 +1486,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     displayName: string;
     photoURL: string;
     referralCode?: string;
+    birthDate?: string;
   }): Promise<{ status: 'active' | 'suspended'; message?: string; referralApplied?: boolean }> => {
     if (!firebaseUser) {
       throw new Error('Autentique-se com sua conta Google primeiro.');
@@ -1449,6 +1495,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const formatCheck = validateUsernameInput(params.displayName);
     if (!formatCheck.valid) {
       throw new Error(formatCheck.error || 'Nome de usuário inválido.');
+    }
+
+    let verifiedBirthDate = '';
+    let isAdultVerified = false;
+    if (params.birthDate && params.birthDate.trim()) {
+      const ageCheck = validateBirthDateInput(params.birthDate);
+      if (!ageCheck.valid || !ageCheck.isAdult) {
+        throw new Error(
+          ageCheck.error || 'É necessário ter 18 anos ou mais para criar uma conta no Earn Easy.'
+        );
+      }
+      verifiedBirthDate = ageCheck.clean;
+      isAdultVerified = true;
     }
 
     const cleanName = formatCheck.clean;
@@ -1492,6 +1551,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           status: 'suspended',
           riskScore: 100,
           gamesPlayed: 0,
+          identityVerified: false,
+          faceVerificationStatus: 'none',
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         });
@@ -1532,6 +1593,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         status: 'active',
         riskScore: 0,
         gamesPlayed: 0,
+        birthDate: verifiedBirthDate,
+        ageVerified: isAdultVerified,
+        ...(isAdultVerified ? { ageVerifiedAt: serverTimestamp() } : {}),
+        identityVerified: false,
+        faceVerificationStatus: 'none',
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
@@ -1552,6 +1618,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         lifetimePoints: 0,
         gamesPlayed: 0,
         status: 'active',
+        identityVerified: false,
         updatedAt: serverTimestamp(),
       });
 
@@ -1630,17 +1697,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           riskScore: 100,
           updatedAt: serverTimestamp(),
         });
-        batch.set(doc(db, 'leaderboard', firebaseUser.uid), {
-          uid: firebaseUser.uid,
-          displayName: userAccount.displayName,
-          photoURL: userAccount.photoURL,
-          brlBalanceCents: userAccount.brlBalanceCents,
-          pointsBalance: userAccount.pointsBalance,
-          lifetimePoints: userAccount.lifetimePoints,
-          gamesPlayed: userAccount.gamesPlayed,
-          status: 'suspended',
-          updatedAt: serverTimestamp(),
-        });
+        batch.set(
+          doc(db, 'leaderboard', firebaseUser.uid),
+          buildLeaderboardPayload(userAccount, { status: 'suspended' })
+        );
         batch.set(doc(db, 'fraudLogs', logId), {
           logId,
           userId: firebaseUser.uid,
@@ -1665,17 +1725,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         updatedAt: serverTimestamp(),
       });
       if (userAccount.status === 'active') {
-        batch.set(doc(db, 'leaderboard', firebaseUser.uid), {
-          uid: firebaseUser.uid,
-          displayName: cleanName,
-          photoURL: cleanPhoto,
-          brlBalanceCents: userAccount.brlBalanceCents,
-          pointsBalance: userAccount.pointsBalance,
-          lifetimePoints: userAccount.lifetimePoints,
-          gamesPlayed: userAccount.gamesPlayed,
-          status: userAccount.status,
-          updatedAt: serverTimestamp(),
-        });
+        batch.set(
+          doc(db, 'leaderboard', firebaseUser.uid),
+          buildLeaderboardPayload(userAccount, {
+            displayName: cleanName,
+            photoURL: cleanPhoto,
+          })
+        );
       }
       await batch.commit();
     } catch (error) {
@@ -1800,17 +1856,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           });
         }
 
-        tx.set(doc(db, 'leaderboard', firebaseUser.uid), {
-          uid: firebaseUser.uid,
-          displayName: current.displayName,
-          photoURL: current.photoURL,
-          brlBalanceCents: current.brlBalanceCents + brlBonusCents,
-          pointsBalance: current.pointsBalance + pointsAwarded,
-          lifetimePoints: current.lifetimePoints + pointsAwarded,
-          gamesPlayed: current.gamesPlayed,
-          status: current.status,
-          updatedAt: serverTimestamp(),
-        });
+        tx.set(
+          doc(db, 'leaderboard', firebaseUser.uid),
+          buildLeaderboardPayload(current, {
+            brlBalanceCents: current.brlBalanceCents + brlBonusCents,
+            pointsBalance: current.pointsBalance + pointsAwarded,
+            lifetimePoints: current.lifetimePoints + pointsAwarded,
+          })
+        );
       });
     } catch (error) {
       handleTransactionError(error, OperationType.WRITE, `dailyCheckins/${checkinId}`);
@@ -1875,7 +1928,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           throw new Error('Sua conta está suspensa.');
         }
 
-        const currentXp = Math.max(0, Math.round(current.lifetimePoints)) + Math.max(0, Math.round(current.gamesPlayed)) * 25;
+        const rawLifetime =
+          typeof current.lifetimePoints === 'number' && Number.isFinite(current.lifetimePoints)
+            ? current.lifetimePoints
+            : 0;
+        const rawGames =
+          typeof current.gamesPlayed === 'number' && Number.isFinite(current.gamesPlayed)
+            ? current.gamesPlayed
+            : 0;
+        const currentXp = Math.max(0, Math.floor(rawLifetime)) + Math.max(0, Math.floor(rawGames)) * 25;
         if (currentXp < tier.minXp) {
           throw new Error(`Você precisa de ${tier.minXp.toLocaleString('pt-BR')} XP para desbloquear o Nível ${level}.`);
         }
@@ -1894,17 +1955,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           updatedAt: serverTimestamp(),
         });
 
-        tx.set(doc(db, 'leaderboard', firebaseUser.uid), {
-          uid: firebaseUser.uid,
-          displayName: current.displayName,
-          photoURL: current.photoURL,
-          brlBalanceCents: current.brlBalanceCents,
-          pointsBalance: current.pointsBalance + tier.rewardPoints,
-          lifetimePoints: current.lifetimePoints,
-          gamesPlayed: current.gamesPlayed,
-          status: current.status,
-          updatedAt: serverTimestamp(),
-        });
+        tx.set(
+          doc(db, 'leaderboard', firebaseUser.uid),
+          buildLeaderboardPayload(current, {
+            pointsBalance: current.pointsBalance + tier.rewardPoints,
+          })
+        );
       });
     } catch (error) {
       handleTransactionError(error, OperationType.WRITE, `levelRewards/${rewardId}`);
@@ -1998,17 +2054,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           updatedAt: serverTimestamp(),
         });
 
-        tx.set(doc(db, 'leaderboard', firebaseUser.uid), {
-          uid: firebaseUser.uid,
-          displayName: current.displayName,
-          photoURL: current.photoURL,
-          brlBalanceCents: current.brlBalanceCents,
-          pointsBalance: current.pointsBalance + promo.pointsValue,
-          lifetimePoints: current.lifetimePoints,
-          gamesPlayed: current.gamesPlayed,
-          status: current.status,
-          updatedAt: serverTimestamp(),
-        });
+        tx.set(
+          doc(db, 'leaderboard', firebaseUser.uid),
+          buildLeaderboardPayload(current, {
+            pointsBalance: current.pointsBalance + promo.pointsValue,
+          })
+        );
       });
     } catch (error) {
       handleTransactionError(error, OperationType.WRITE, `promoRedemptions/${redemptionId}`);
@@ -2266,6 +2317,300 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     });
   };
 
+  const settleMultiplayerMatch = async (
+    settlement: MultiplayerSettlementPayload
+  ): Promise<{ alreadySettled: boolean; transferredPoints: number }> => {
+    if (!firebaseUser) {
+      throw new Error('Faça login para confirmar o resultado da partida.');
+    }
+    if (!settlement.participantUids.includes(firebaseUser.uid)) {
+      throw new Error('Somente participantes da partida podem confirmar o resultado.');
+    }
+
+    // Validate server HMAC proof first to prevent forged match results
+    const verifyRes = await fetch('/api/multiplayer/verify-settlement', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(settlement),
+    });
+    if (!verifyRes.ok) {
+      const errData = await verifyRes.json().catch(() => ({}));
+      throw new Error(errData?.error || 'Não foi possível validar o comprovante da partida no servidor.');
+    }
+    const verifyJson = await verifyRes.json();
+    if (!verifyJson?.valid) {
+      throw new Error('Comprovante criptográfico da partida inválido.');
+    }
+
+    const matchRef = doc(db, 'multiplayerMatches', settlement.matchId);
+
+    try {
+      return await runTransaction(db, async (tx) => {
+        const matchSnap = await tx.get(matchRef);
+        if (matchSnap.exists()) {
+          const existingMatch = matchSnap.data() as MultiplayerMatchRecord;
+          return {
+            alreadySettled: true,
+            transferredPoints: existingMatch.stakePoints || 0,
+          };
+        }
+
+        const rawStake = Math.max(0, Math.floor(Number(settlement.stakePoints || 0)));
+        const hasDeclaredWinner =
+          !settlement.isDraw &&
+          Boolean(settlement.winnerUid) &&
+          Boolean(settlement.loserUid) &&
+          settlement.winnerUid !== settlement.loserUid &&
+          rawStake > 0;
+
+        const winnerRef = hasDeclaredWinner ? doc(db, 'users', settlement.winnerUid) : null;
+        const loserRef = hasDeclaredWinner ? doc(db, 'users', settlement.loserUid) : null;
+
+        const [winnerSnap, loserSnap] = hasDeclaredWinner && winnerRef && loserRef
+          ? await Promise.all([tx.get(winnerRef), tx.get(loserRef)])
+          : [null, null];
+
+        let effectiveStake = 0;
+        let winnerData: UserAccount | null = null;
+        let loserData: UserAccount | null = null;
+
+        if (hasDeclaredWinner && winnerSnap?.exists() && loserSnap?.exists()) {
+          winnerData = winnerSnap.data() as UserAccount;
+          loserData = loserSnap.data() as UserAccount;
+          if (
+            winnerData.status === 'active' &&
+            loserData.status === 'active' &&
+            loserData.pointsBalance >= rawStake
+          ) {
+            effectiveStake = rawStake;
+          }
+        }
+
+        tx.set(matchRef, {
+          matchId: settlement.matchId,
+          roomCode: settlement.roomCode,
+          gameId: settlement.gameId,
+          participantUids: settlement.participantUids,
+          winnerUid: effectiveStake > 0 || !settlement.isDraw ? settlement.winnerUid : '',
+          loserUid: effectiveStake > 0 || !settlement.isDraw ? settlement.loserUid : '',
+          stakePoints: effectiveStake,
+          settledByUid: firebaseUser.uid,
+          integrityHash: settlement.settlementProof,
+          createdAt: serverTimestamp(),
+        });
+
+        if (effectiveStake > 0 && winnerRef && loserRef && winnerData && loserData) {
+          const nextWinnerPoints = winnerData.pointsBalance + effectiveStake;
+          const nextWinnerLifetime = winnerData.lifetimePoints + effectiveStake;
+          const nextWinnerGames = winnerData.gamesPlayed + 1;
+
+          const nextLoserPoints = loserData.pointsBalance - effectiveStake;
+          const nextLoserGames = loserData.gamesPlayed + 1;
+
+          tx.update(winnerRef, {
+            pointsBalance: nextWinnerPoints,
+            lifetimePoints: nextWinnerLifetime,
+            gamesPlayed: nextWinnerGames,
+            lastMpMatchId: settlement.matchId,
+            updatedAt: serverTimestamp(),
+          });
+
+          tx.update(loserRef, {
+            pointsBalance: nextLoserPoints,
+            gamesPlayed: nextLoserGames,
+            lastMpMatchId: settlement.matchId,
+            updatedAt: serverTimestamp(),
+          });
+
+          tx.set(
+            doc(db, 'leaderboard', winnerData.uid),
+            buildLeaderboardPayload(winnerData, {
+              pointsBalance: nextWinnerPoints,
+              lifetimePoints: nextWinnerLifetime,
+              gamesPlayed: nextWinnerGames,
+            })
+          );
+
+          tx.set(
+            doc(db, 'leaderboard', loserData.uid),
+            buildLeaderboardPayload(loserData, {
+              pointsBalance: nextLoserPoints,
+              gamesPlayed: nextLoserGames,
+            })
+          );
+        }
+
+        return {
+          alreadySettled: false,
+          transferredPoints: effectiveStake,
+        };
+      });
+    } catch (error) {
+      handleTransactionError(error, OperationType.WRITE, `multiplayerMatches/${settlement.matchId}`);
+    }
+  };
+
+  const verifyUserAge = async (birthDate: string) => {
+    if (!firebaseUser || !userAccount) {
+      throw new Error('Faça login para confirmar sua idade.');
+    }
+    if (userAccount.status !== 'active') {
+      throw new Error('Sua conta precisa estar ativa para concluir esta etapa.');
+    }
+    const check = validateBirthDateInput(birthDate);
+    if (!check.valid || !check.isAdult) {
+      throw new Error(
+        check.error || 'Acesso permitido somente para usuários com 18 anos ou mais.'
+      );
+    }
+
+    try {
+      await updateDoc(doc(db, 'users', firebaseUser.uid), {
+        birthDate: check.clean,
+        ageVerified: true,
+        ageVerifiedAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `users/${firebaseUser.uid}`);
+      throw error;
+    }
+  };
+
+  const submitFaceVerification = async (selfieDataUrl: string) => {
+    if (!firebaseUser || !userAccount) {
+      throw new Error('Faça login para enviar sua verificação facial.');
+    }
+    if (userAccount.status !== 'active') {
+      throw new Error('Sua conta precisa estar ativa para enviar verificação.');
+    }
+    if (!userAccount.ageVerified || !userAccount.birthDate) {
+      throw new Error('Conclua a verificação de idade (+18) antes da verificação facial.');
+    }
+    if (userAccount.identityVerified) {
+      throw new Error('Seu perfil já está verificado!');
+    }
+    if (!isValidSelfieDataUrl(selfieDataUrl)) {
+      throw new Error('Selfie inválida ou acima do limite permitido. Tire uma nova foto.');
+    }
+
+    try {
+      const batch = writeBatch(db);
+      batch.set(doc(db, 'faceVerifications', firebaseUser.uid), {
+        uid: firebaseUser.uid,
+        displayName: userAccount.displayName.slice(0, 80),
+        birthDate: userAccount.birthDate,
+        selfieDataUrl,
+        status: 'pending',
+        rejectionReason: '',
+        bonusAwarded: false,
+        reviewedBy: '',
+        submittedAt: serverTimestamp(),
+        reviewedAt: null,
+      });
+      batch.update(doc(db, 'users', firebaseUser.uid), {
+        faceVerificationStatus: 'pending',
+        faceVerificationNote: '',
+        updatedAt: serverTimestamp(),
+      });
+      await batch.commit();
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, `faceVerifications/${firebaseUser.uid}`);
+      throw error;
+    }
+  };
+
+  const approveFaceVerification = async (targetUid: string) => {
+    if (!firebaseUser || !isAdmin) {
+      throw new Error('Somente administradores podem aprovar verificações faciais.');
+    }
+
+    const reviewerLabel = (firebaseUser.email || firebaseUser.uid).slice(0, 160);
+    const fvRef = doc(db, 'faceVerifications', targetUid);
+    const userRef = doc(db, 'users', targetUid);
+    const lbRef = doc(db, 'leaderboard', targetUid);
+
+    try {
+      await runTransaction(db, async (tx) => {
+        const [fvSnap, userSnap] = await Promise.all([tx.get(fvRef), tx.get(userRef)]);
+        if (!fvSnap.exists()) {
+          throw new Error('Solicitação de verificação facial não encontrada.');
+        }
+        if (!userSnap.exists()) {
+          throw new Error('Usuário alvo não encontrado.');
+        }
+
+        const fv = fvSnap.data() as FaceVerificationRequest;
+        const current = userSnap.data() as UserAccount;
+        if (fv.bonusAwarded) {
+          throw new Error('O bônus de 30.000 pontos já foi creditado para este usuário.');
+        }
+
+        const nextPoints = current.pointsBalance + FACE_VERIFICATION_BONUS_POINTS;
+        const nextLifetime = current.lifetimePoints + FACE_VERIFICATION_BONUS_POINTS;
+
+        tx.update(fvRef, {
+          status: 'approved',
+          rejectionReason: '',
+          bonusAwarded: true,
+          reviewedBy: reviewerLabel,
+          reviewedAt: serverTimestamp(),
+        });
+
+        tx.update(userRef, {
+          pointsBalance: nextPoints,
+          lifetimePoints: nextLifetime,
+          identityVerified: true,
+          faceVerificationStatus: 'approved',
+          faceVerificationNote: '',
+          verifiedAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+
+        tx.set(
+          lbRef,
+          buildLeaderboardPayload(current, {
+            pointsBalance: nextPoints,
+            lifetimePoints: nextLifetime,
+            identityVerified: true,
+          })
+        );
+      });
+    } catch (error) {
+      handleTransactionError(error, OperationType.WRITE, `faceVerifications/${targetUid}`);
+    }
+  };
+
+  const rejectFaceVerification = async (targetUid: string, reason: string) => {
+    if (!firebaseUser || !isAdmin) {
+      throw new Error('Somente administradores podem recusar verificações faciais.');
+    }
+    const cleanReason = reason.trim().slice(0, 240);
+    if (cleanReason.length < 3) {
+      throw new Error('Informe o motivo da recusa com pelo menos 3 caracteres.');
+    }
+
+    const reviewerLabel = (firebaseUser.email || firebaseUser.uid).slice(0, 160);
+    try {
+      const batch = writeBatch(db);
+      batch.update(doc(db, 'faceVerifications', targetUid), {
+        status: 'rejected',
+        rejectionReason: cleanReason,
+        reviewedBy: reviewerLabel,
+        reviewedAt: serverTimestamp(),
+      });
+      batch.update(doc(db, 'users', targetUid), {
+        faceVerificationStatus: 'rejected',
+        faceVerificationNote: cleanReason,
+        updatedAt: serverTimestamp(),
+      });
+      await batch.commit();
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `faceVerifications/${targetUid}`);
+      throw error;
+    }
+  };
+
   const unreadMailboxCount = mailboxMessages.filter(
     (m) => !readMailboxIds.includes(m.messageId)
   ).length;
@@ -2291,6 +2636,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         myInvitedReferrals,
         publicPromoEvents,
         myPromoRedemptions,
+        myMultiplayerMatches,
+        myFaceVerification,
         mailboxMessages,
         readMailboxIds,
         unreadMailboxCount,
@@ -2324,6 +2671,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         clearAllMailboxMessages,
         deleteEmailNotification,
         updateMaintenanceSettings,
+        settleMultiplayerMatch,
+        verifyUserAge,
+        submitFaceVerification,
+        approveFaceVerification,
+        rejectFaceVerification,
       }}
     >
       {children}

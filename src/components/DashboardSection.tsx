@@ -150,6 +150,15 @@ export const DashboardSection: React.FC = () => {
       memory_match: { points: 0, matches: 0 },
       quick_reflex: { points: 0, matches: 0 },
       high_low_cards: { points: 0, matches: 0 },
+      block_britz: { points: 0, matches: 0 },
+      domino_solo: { points: 0, matches: 0 },
+      stop_solo: { points: 0, matches: 0 },
+      draw_guess_solo: { points: 0, matches: 0 },
+      battleship_solo: { points: 0, matches: 0 },
+      connect4_solo: { points: 0, matches: 0 },
+      quiz_solo: { points: 0, matches: 0 },
+      rps_solo: { points: 0, matches: 0 },
+      guess_number_solo: { points: 0, matches: 0 },
     };
     filteredSessions.forEach((s) => {
       if (counts[s.gameCategory]) {

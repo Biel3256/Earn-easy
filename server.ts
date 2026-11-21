@@ -1,4 +1,5 @@
 import express from 'express';
+import http from 'http';
 import crypto from 'crypto';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -11,6 +12,7 @@ import {
   sendTransactionalEmail,
   verifySmtpConnection,
 } from './server/mailer';
+import { MultiplayerEngine } from './server/multiplayerEngine';
 
 dotenv.config();
 
@@ -66,6 +68,15 @@ const CATEGORY_BOUNDS: Record<string, { minDurationMs: number; maxScore: number;
   memory_match: { minDurationMs: 6000, maxScore: 400, maxPtsPerSec: 35 },
   quick_reflex: { minDurationMs: 5000, maxScore: 400, maxPtsPerSec: 45 },
   high_low_cards: { minDurationMs: 5000, maxScore: 380, maxPtsPerSec: 40 },
+  block_britz: { minDurationMs: 5000, maxScore: 450, maxPtsPerSec: 35 },
+  domino_solo: { minDurationMs: 6000, maxScore: 350, maxPtsPerSec: 35 },
+  stop_solo: { minDurationMs: 6000, maxScore: 360, maxPtsPerSec: 35 },
+  draw_guess_solo: { minDurationMs: 6000, maxScore: 360, maxPtsPerSec: 35 },
+  battleship_solo: { minDurationMs: 6000, maxScore: 380, maxPtsPerSec: 35 },
+  connect4_solo: { minDurationMs: 5000, maxScore: 320, maxPtsPerSec: 40 },
+  quiz_solo: { minDurationMs: 6000, maxScore: 360, maxPtsPerSec: 35 },
+  rps_solo: { minDurationMs: 5000, maxScore: 280, maxPtsPerSec: 45 },
+  guess_number_solo: { minDurationMs: 4000, maxScore: 300, maxPtsPerSec: 45 },
 };
 
 function validateEnterpriseApiKey(req: express.Request): boolean {
@@ -86,6 +97,7 @@ function validateEnterpriseApiKey(req: express.Request): boolean {
 async function startServer() {
   const app = express();
   app.use(express.json({ limit: '1mb' }));
+  const multiplayerEngine = new MultiplayerEngine(SIGNING_SECRET);
 
   // 1. Anti-Fraud Game Session Verification
   app.post('/api/antifraud/verify-session', (req, res) => {
@@ -480,6 +492,16 @@ async function startServer() {
     });
   });
 
+  // 6. Multiplayer Server Settlement Verification
+  app.post('/api/multiplayer/verify-settlement', (req, res) => {
+    const result = multiplayerEngine.verifySettlement(req.body ?? {});
+    if (!result.valid) {
+      res.status(400).json({ valid: false, error: result.reason || 'Liquidação multiplayer inválida.' });
+      return;
+    }
+    res.json({ valid: true, settlement: result.settlement });
+  });
+
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -494,7 +516,10 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  const httpServer = http.createServer(app);
+  multiplayerEngine.attachToServer(httpServer);
+
+  httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`Earn Easy server listening on http://0.0.0.0:${PORT}`);
   });
 }

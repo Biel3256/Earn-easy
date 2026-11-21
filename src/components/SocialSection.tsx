@@ -17,6 +17,7 @@ import {
 } from 'firebase/firestore';
 import {
   Check,
+  CheckCheck,
   Clock,
   Copy,
   Eye,
@@ -30,9 +31,12 @@ import {
 } from 'lucide-react';
 import { db } from '../firebase';
 import { useAuth } from '../context/AuthContext';
+import { useToast } from '../context/ToastContext';
 import { LeaderboardEntry } from '../types/earneasy';
+import { checkTextProfanity } from '../utils/moderation';
 import { extractReadableError } from '../utils/pix';
 import { ProfileAvatar } from './PlayerProfile';
+import { VerifiedBadge } from './VerifiedBadge';
 
 type PublicProfile = LeaderboardEntry;
 
@@ -42,6 +46,8 @@ type SocialMessage = {
   senderName: string;
   text: string;
   createdAt?: { toDate?: () => Date };
+  readAt?: { toDate?: () => Date; toMillis?: () => number } | null;
+  readBy?: string;
 };
 
 type FriendRequest = {
@@ -56,13 +62,33 @@ type FriendRequest = {
 const safeText = (value: string) => value.trim().slice(0, 500);
 const friendshipId = (a: string, b: string) => [a, b].sort().join('__');
 
-function formatChatTime(ts?: { toDate?: () => Date }): string {
+function formatChatTime(ts?: { toDate?: () => Date } | null): string {
   if (!ts || typeof ts.toDate !== 'function') return '';
   try {
     return ts.toDate().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
   } catch {
     return '';
   }
+}
+
+function formatLastSeenStatus(lastSeenMs?: number): { label: string; isOnlineNow: boolean } {
+  if (!lastSeenMs) {
+    return { label: 'Offline · Sem atividade recente', isOnlineNow: false };
+  }
+  const diffSec = Math.max(0, Math.floor((Date.now() - lastSeenMs) / 1000));
+  if (diffSec < 90) {
+    return { label: 'Online agora', isOnlineNow: true };
+  }
+  if (diffSec < 3600) {
+    const mins = Math.max(1, Math.floor(diffSec / 60));
+    return { label: `Offline · Visto por último há ${mins} min`, isOnlineNow: false };
+  }
+  if (diffSec < 86400) {
+    const hrs = Math.floor(diffSec / 3600);
+    return { label: `Offline · Visto por último há ${hrs} h`, isOnlineNow: false };
+  }
+  const days = Math.floor(diffSec / 86400);
+  return { label: `Offline · Visto por último há ${days} d`, isOnlineNow: false };
 }
 
 export function SocialPresence() {
@@ -76,7 +102,17 @@ export function SocialPresence() {
       setDoc(presenceRef, { uid, lastSeen: serverTimestamp() }, { merge: true }).catch(() => {});
     beat();
     const timer = window.setInterval(beat, 45_000);
-    return () => window.clearInterval(timer);
+    const handleFocus = () => beat();
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') beat();
+    };
+    window.addEventListener('focus', handleFocus);
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
   }, [uid]);
 
   return null;
@@ -89,6 +125,7 @@ interface SocialSectionProps {
 
 export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSectionProps = {}) {
   const { firebaseUser, userAccount } = useAuth();
+  const { showToast } = useToast();
   const uid = firebaseUser?.uid || '';
   const myName = (userAccount?.displayName || firebaseUser?.displayName || 'Jogador').slice(0, 80);
 
@@ -235,6 +272,25 @@ export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSec
     privateEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [privateMessages.length, selectedFriend?.uid]);
 
+  // Mark incoming private messages as read with serverTimestamp when chat is open
+  useEffect(() => {
+    if (!uid || !selectedFriend || tab !== 'friends' || privateMessages.length === 0) return;
+    const unreadIncoming = privateMessages.filter(
+      (msg) => msg.senderUid !== uid && !msg.readAt
+    );
+    if (unreadIncoming.length === 0) return;
+
+    const chatId = friendshipId(uid, selectedFriend.uid);
+    const batch = writeBatch(db);
+    unreadIncoming.slice(0, 30).forEach((msg) => {
+      batch.update(doc(db, 'friendships', chatId, 'messages', msg.id), {
+        readAt: serverTimestamp(),
+        readBy: uid,
+      });
+    });
+    batch.commit().catch(() => {});
+  }, [uid, selectedFriend?.uid, tab, privateMessages]);
+
   useEffect(() => {
     if (tab === 'global') {
       globalEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -366,8 +422,15 @@ export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSec
         });
       }
       setNotice(`Solicitação de amizade enviada para ${profile.displayName}.`);
+      showToast({
+        type: 'success',
+        title: 'Convite de amizade enviado',
+        message: `Solicitação enviada para ${profile.displayName}.`,
+      });
     } catch (err) {
-      setError(extractReadableError(err, 'Não foi possível enviar a solicitação agora.'));
+      const msg = extractReadableError(err, 'Não foi possível enviar a solicitação agora.');
+      setError(msg);
+      showToast({ type: 'error', title: 'Erro na solicitação', message: msg });
     } finally {
       setBusy(false);
     }
@@ -391,13 +454,19 @@ export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSec
         });
       }
       await batch.commit();
-      setNotice(
-        accept
-          ? `${request.senderName} adicionado à sua lista de amigos!`
-          : `Solicitação de ${request.senderName} recusada.`
-      );
+      const msg = accept
+        ? `${request.senderName} adicionado à sua lista de amigos!`
+        : `Solicitação de ${request.senderName} recusada.`;
+      setNotice(msg);
+      showToast({
+        type: accept ? 'success' : 'info',
+        title: accept ? 'Novo amigo adicionado' : 'Solicitação recusada',
+        message: msg,
+      });
     } catch (err) {
-      setError(extractReadableError(err, 'Não foi possível responder à solicitação.'));
+      const msg = extractReadableError(err, 'Não foi possível responder à solicitação.');
+      setError(msg);
+      showToast({ type: 'error', title: 'Erro ao responder', message: msg });
     } finally {
       setBusy(false);
     }
@@ -408,6 +477,14 @@ export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSec
     if (!uid || !text || busy) return;
     if (userAccount?.status !== 'active') {
       setError('Sua conta precisa estar ativa para enviar mensagens no chat global.');
+      return;
+    }
+    const profanity = checkTextProfanity(text);
+    if (profanity.blocked) {
+      const msg =
+        'Mensagem bloqueada pelas Regras do Global: não é permitido enviar palavrões ou termos ofensivos.';
+      setError(msg);
+      showToast({ type: 'error', title: 'Regras do Global', message: msg });
       return;
     }
     setBusy(true);
@@ -452,8 +529,22 @@ export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSec
     }
   };
 
-  const isOnline = (profileUid: string) =>
-    Boolean(presence[profileUid] && Date.now() - presence[profileUid] < 90_000);
+  const sortedFriends = useMemo(() => {
+    return [...friends].sort((a, b) => {
+      const aLast = presence[a.uid] || 0;
+      const bLast = presence[b.uid] || 0;
+      const aOnline = formatLastSeenStatus(aLast).isOnlineNow;
+      const bOnline = formatLastSeenStatus(bLast).isOnlineNow;
+      if (aOnline !== bOnline) return aOnline ? -1 : 1;
+      if (bLast !== aLast) return bLast - aLast;
+      return (a.displayName || '').localeCompare(b.displayName || '', 'pt-BR');
+    });
+  }, [friends, presence]);
+
+  const onlineFriendsCount = useMemo(
+    () => friends.filter((f) => formatLastSeenStatus(presence[f.uid]).isOnlineNow).length,
+    [friends, presence]
+  );
 
   return (
     <section className="space-y-6">
@@ -585,18 +676,38 @@ export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSec
                     onClick={() => onInspectPlayer?.(profile, null)}
                     className="flex items-center gap-3 min-w-0 text-left hover:opacity-85 transition-opacity cursor-pointer"
                   >
-                    <ProfileAvatar
-                      name={profile.displayName}
-                      photoURL={profile.photoURL || ''}
-                      sizeClass="w-9 h-9"
-                      textSizeClass="text-xs"
-                    />
+                    <div className="relative shrink-0">
+                      <ProfileAvatar
+                        name={profile.displayName}
+                        photoURL={profile.photoURL || ''}
+                        sizeClass="w-9 h-9"
+                        textSizeClass="text-xs"
+                      />
+                      <span
+                        title={formatLastSeenStatus(presence[profile.uid]).label}
+                        className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full ring-2 ring-white dark:ring-zinc-900 ${
+                          formatLastSeenStatus(presence[profile.uid]).isOnlineNow
+                            ? 'bg-emerald-400'
+                            : 'bg-zinc-400 dark:bg-zinc-600'
+                        }`}
+                      />
+                    </div>
                     <div className="min-w-0">
-                      <p className="truncate text-sm font-semibold text-slate-900 dark:text-zinc-100">
-                        {profile.displayName}
+                      <p className="truncate text-sm font-semibold text-slate-900 dark:text-zinc-100 flex items-center gap-1.5">
+                        <span className="truncate">{profile.displayName}</span>
+                        {profile.identityVerified && <VerifiedBadge size="xs" />}
                       </p>
                       <p className="truncate text-[11px] font-mono text-slate-500 dark:text-zinc-400">
-                        {profile.uid} · {isOnline(profile.uid) ? 'Online agora' : 'Offline'}
+                        {profile.uid} ·{' '}
+                        <span
+                          className={
+                            formatLastSeenStatus(presence[profile.uid]).isOnlineNow
+                              ? 'text-emerald-600 dark:text-emerald-400 font-semibold'
+                              : ''
+                          }
+                        >
+                          {formatLastSeenStatus(presence[profile.uid]).label}
+                        </span>
                       </p>
                     </div>
                   </button>
@@ -712,9 +823,16 @@ export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSec
             </div>
 
             <div className="border-t border-slate-100 dark:border-zinc-800 pt-4 space-y-2.5">
-              <h2 className="text-xs font-bold text-slate-900 dark:text-zinc-100">
-                Meus Amigos ({friends.length})
-              </h2>
+              <div className="flex items-center justify-between gap-2">
+                <h2 className="text-xs font-bold text-slate-900 dark:text-zinc-100">
+                  Meus Amigos ({friends.length})
+                </h2>
+                {friends.length > 0 && (
+                  <span className="text-[11px] font-medium text-emerald-600 dark:text-emerald-400 tabular-nums">
+                    {onlineFriendsCount} online
+                  </span>
+                )}
+              </div>
 
               {friends.length === 0 ? (
                 <p className="text-xs text-slate-500 dark:text-zinc-400">
@@ -722,9 +840,9 @@ export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSec
                 </p>
               ) : (
                 <div className="space-y-1.5">
-                  {friends.map((friend) => {
+                  {sortedFriends.map((friend) => {
                     const active = selectedFriend?.uid === friend.uid;
-                    const friendOnline = isOnline(friend.uid);
+                    const friendStatus = formatLastSeenStatus(presence[friend.uid]);
                     return (
                       <button
                         key={friend.uid}
@@ -737,22 +855,34 @@ export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSec
                         }`}
                       >
                         <div className="flex items-center gap-2.5 min-w-0">
-                          <ProfileAvatar
-                            name={friend.displayName}
-                            photoURL={friend.photoURL || ''}
-                            sizeClass="w-8 h-8"
-                            textSizeClass="text-[11px]"
-                          />
+                          <div className="relative shrink-0">
+                            <ProfileAvatar
+                              name={friend.displayName}
+                              photoURL={friend.photoURL || ''}
+                              sizeClass="w-8 h-8"
+                              textSizeClass="text-[11px]"
+                            />
+                            <span
+                              className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full ring-2 ring-white dark:ring-zinc-900 ${
+                                friendStatus.isOnlineNow
+                                  ? 'bg-emerald-400'
+                                  : 'bg-zinc-400 dark:bg-zinc-600'
+                              }`}
+                            />
+                          </div>
                           <div className="min-w-0">
-                            <div className="truncate text-xs font-semibold">{friend.displayName}</div>
+                            <div className="truncate text-xs font-semibold flex items-center gap-1">
+                              <span className="truncate">{friend.displayName}</span>
+                              {friend.identityVerified && <VerifiedBadge size="xs" />}
+                            </div>
                             <div
-                              className={`text-[11px] ${
-                                friendOnline
+                              className={`text-[11px] truncate ${
+                                friendStatus.isOnlineNow
                                   ? 'text-emerald-600 dark:text-emerald-400 font-medium'
                                   : 'text-slate-400 dark:text-zinc-500'
                               }`}
                             >
-                              {friendOnline ? 'Online' : 'Offline'}
+                              {friendStatus.label}
                             </div>
                           </div>
                         </div>
@@ -767,16 +897,34 @@ export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSec
           {/* Coluna Direita: Chat Privado */}
           <div className="bg-white/90 dark:bg-zinc-900/90 backdrop-blur-md border border-slate-200/90 dark:border-zinc-800 rounded-3xl p-5 flex min-h-[420px] max-h-[560px] flex-col shadow-sm">
             <div className="pb-3 border-b border-slate-100 dark:border-zinc-800 flex items-center justify-between gap-3">
-              <div>
-                <h2 className="text-sm font-bold text-slate-900 dark:text-zinc-50">
-                  {selectedFriend ? `Conversa com ${selectedFriend.displayName}` : 'Chat Privado'}
+              <div className="min-w-0">
+                <h2 className="text-sm font-bold text-slate-900 dark:text-zinc-50 flex items-center gap-1.5 min-w-0">
+                  <span className="truncate">
+                    {selectedFriend ? `Conversa com ${selectedFriend.displayName}` : 'Chat Privado'}
+                  </span>
+                  {selectedFriend?.identityVerified && <VerifiedBadge size="xs" />}
                 </h2>
-                <p className="text-[11px] text-slate-500 dark:text-zinc-400">
-                  {selectedFriend
-                    ? isOnline(selectedFriend.uid)
-                      ? 'Online agora'
-                      : 'Offline no momento'
-                    : 'Selecione um amigo na lista ao lado para conversar'}
+                <p
+                  className={`text-[11px] flex items-center gap-1.5 ${
+                    selectedFriend && formatLastSeenStatus(presence[selectedFriend.uid]).isOnlineNow
+                      ? 'text-emerald-600 dark:text-emerald-400 font-medium'
+                      : 'text-slate-500 dark:text-zinc-400'
+                  }`}
+                >
+                  {selectedFriend && (
+                    <span
+                      className={`inline-block w-2 h-2 rounded-full shrink-0 ${
+                        formatLastSeenStatus(presence[selectedFriend.uid]).isOnlineNow
+                          ? 'bg-emerald-400'
+                          : 'bg-zinc-400 dark:bg-zinc-600'
+                      }`}
+                    />
+                  )}
+                  <span className="truncate">
+                    {selectedFriend
+                      ? formatLastSeenStatus(presence[selectedFriend.uid]).label
+                      : 'Selecione um amigo na lista ao lado para conversar'}
+                  </span>
                 </p>
               </div>
               {selectedFriend && onInspectPlayer && (
@@ -802,6 +950,7 @@ export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSec
                     privateMessages.map((message) => {
                       const mine = message.senderUid === uid;
                       const timeLabel = formatChatTime(message.createdAt);
+                      const readLabel = formatChatTime(message.readAt);
                       return (
                         <div
                           key={message.id}
@@ -816,9 +965,32 @@ export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSec
                           >
                             <p className="leading-relaxed break-words">{message.text}</p>
                           </div>
-                          <span className="mt-1 text-[10px] text-slate-400 dark:text-zinc-500 font-mono">
-                            {mine ? 'Você' : message.senderName}
-                            {timeLabel ? ` · ${timeLabel}` : ''}
+                          <span className="mt-1 text-[10px] text-slate-400 dark:text-zinc-500 font-mono inline-flex items-center gap-1">
+                            <span>
+                              {mine ? 'Você' : message.senderName}
+                              {timeLabel ? ` · ${timeLabel}` : ''}
+                            </span>
+                            {mine && (
+                              <span
+                                className={`inline-flex items-center gap-0.5 ml-1 ${
+                                  message.readAt
+                                    ? 'text-emerald-600 dark:text-lime-400 font-semibold'
+                                    : 'text-slate-400 dark:text-zinc-500'
+                                }`}
+                              >
+                                {message.readAt ? (
+                                  <>
+                                    <CheckCheck className="w-3 h-3" />
+                                    {readLabel ? `Visualizado às ${readLabel}` : 'Visualizado'}
+                                  </>
+                                ) : (
+                                  <>
+                                    <Check className="w-3 h-3" />
+                                    Enviada
+                                  </>
+                                )}
+                              </span>
+                            )}
                           </span>
                         </div>
                       );

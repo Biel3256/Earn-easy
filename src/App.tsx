@@ -19,6 +19,7 @@ import {
   ShieldAlert,
   ShieldCheck,
   Sun,
+  Swords,
   Ticket,
   Trophy,
   User,
@@ -29,6 +30,9 @@ import {
 } from 'lucide-react';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { ToastProvider } from './context/ToastContext';
+import { AppFooter } from './components/AppFooter';
+import { AgeVerificationGate } from './components/AgeVerificationGate';
 import { AuthGateScreen } from './components/AuthGateScreen';
 import { BrandLogo } from './components/BrandLogo';
 import { FloatingSupportWidget } from './components/FloatingSupportWidget';
@@ -39,6 +43,8 @@ import { MaintenanceScreen } from './components/MaintenanceScreen';
 import { ParticleBackdrop } from './components/ParticleBackdrop';
 import { PlayerInspectorModal } from './components/PlayerInspectorModal';
 import { PlayerProfile, ProfileAvatar } from './components/PlayerProfile';
+import { PlayWithFriendsSection } from './components/multiplayer/PlayWithFriendsSection';
+import { VerifiedBadge } from './components/VerifiedBadge';
 import { WalletSection } from './components/WalletSection';
 import { DashboardSection } from './components/DashboardSection';
 import { NotificationsSection } from './components/NotificationsSection';
@@ -56,6 +62,7 @@ const AdminPanel = lazy(() =>
 
 type NavTab =
   | 'games'
+  | 'play_friends'
   | 'ranking'
   | 'friends'
   | 'invites'
@@ -88,6 +95,7 @@ function isPrivateBackofficeUrl(): boolean {
 
 const TAB_TITLES: Record<NavTab, string> = {
   games: 'Início & Jogos',
+  play_friends: 'Jogar com Amigos',
   ranking: 'Ranking Global',
   friends: 'Amigos & Comunidade',
   invites: 'Convites & Códigos',
@@ -270,6 +278,16 @@ function MainShell() {
     );
   }
 
+  // Gate 3: Mandatory +18 Age Verification before using the app
+  if (
+    !isBackofficeRoute &&
+    userAccount &&
+    userAccount.status !== 'suspended' &&
+    !userAccount.ageVerified
+  ) {
+    return <AgeVerificationGate theme={theme} onChangeTheme={setTheme} />;
+  }
+
   const sidebarItems: Array<{
     id: NavTab;
     label: string;
@@ -279,6 +297,7 @@ function MainShell() {
   }> = [
     { id: 'games', label: 'Início', Icon: Home },
     { id: 'games', label: 'Jogos', Icon: Gamepad2, onClickOverride: handleGoToCatalog },
+    { id: 'play_friends', label: 'Jogar com Amigos', Icon: Swords },
     { id: 'ranking', label: 'Ranking', Icon: Trophy },
     { id: 'invites', label: 'Missões & Check-in', Icon: CalendarCheck2, onClickOverride: handleGoToMissions },
     { id: 'wallet', label: 'Carteira & Pix', Icon: Wallet },
@@ -292,6 +311,7 @@ function MainShell() {
   ];
 
   const isSecondaryMobileTabActive = [
+    'play_friends',
     'invites',
     'notifications',
     'dashboard',
@@ -536,8 +556,9 @@ function MainShell() {
                     textSizeClass="text-[11px]"
                   />
                   <div className="text-left min-w-0">
-                    <div className="text-xs font-bold text-slate-900 dark:text-white leading-tight max-w-[120px] truncate">
-                      {userAccount?.displayName || 'Perfil'}
+                    <div className="text-xs font-bold text-slate-900 dark:text-white leading-tight max-w-[140px] flex items-center gap-1">
+                      <span className="truncate">{userAccount?.displayName || 'Perfil'}</span>
+                      {userAccount?.identityVerified && <VerifiedBadge size="xs" />}
                     </div>
                     {levelInfo && (
                       <div className="flex items-center gap-1.5 mt-0.5">
@@ -683,9 +704,11 @@ function MainShell() {
                   onNavigateMailbox={() => handleSelectTab('notifications')}
                   onNavigateRanking={() => handleSelectTab('ranking')}
                   onNavigateFriends={() => handleSelectTab('friends')}
+                  onNavigatePlayFriends={() => handleSelectTab('play_friends')}
                   onInspectPlayer={(player, rank) => setInspectedPlayer({ player, rank })}
                 />
               )}
+              {activeTab === 'play_friends' && <PlayWithFriendsSection />}
               {activeTab === 'ranking' && (
                 <GlobalRanking
                   onGoToGames={() => handleSelectTab('games')}
@@ -715,6 +738,7 @@ function MainShell() {
               )}
             </>
           )}
+          <AppFooter />
         </main>
       </div>
 
@@ -793,8 +817,9 @@ function MainShell() {
                       textSizeClass="text-xs"
                     />
                     <div className="min-w-0">
-                      <div className="text-sm font-bold text-slate-900 dark:text-white leading-snug">
-                        {userAccount.displayName}
+                      <div className="text-sm font-bold text-slate-900 dark:text-white leading-snug flex items-center gap-1.5">
+                        <span className="truncate">{userAccount.displayName}</span>
+                        {userAccount.identityVerified && <VerifiedBadge size="sm" />}
                       </div>
                       <button
                         type="button"
@@ -819,6 +844,14 @@ function MainShell() {
             </div>
 
             <div className="grid grid-cols-2 gap-2.5">
+              <button
+                type="button"
+                onClick={() => handleSelectTab('play_friends')}
+                className="col-span-2 min-h-[48px] px-3.5 py-2.5 rounded-2xl bg-lime-400/15 border border-lime-400/40 flex items-center justify-center gap-2.5 text-xs font-extrabold text-emerald-800 dark:text-lime-300 cursor-pointer"
+              >
+                <Swords className="w-4 h-4 text-emerald-600 dark:text-lime-400 shrink-0" />
+                <span>Jogar com Amigos (11 Jogos Online)</span>
+              </button>
               <button
                 type="button"
                 onClick={() => handleSelectTab('invites')}
@@ -947,7 +980,9 @@ export default function App() {
   return (
     <ErrorBoundary>
       <AuthProvider>
-        <MainShell />
+        <ToastProvider>
+          <MainShell />
+        </ToastProvider>
       </AuthProvider>
     </ErrorBoundary>
   );

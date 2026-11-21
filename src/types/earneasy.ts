@@ -5,7 +5,16 @@ export type GameCategory =
   | 'math_sprint'
   | 'memory_match'
   | 'quick_reflex'
-  | 'high_low_cards';
+  | 'high_low_cards'
+  | 'block_britz'
+  | 'domino_solo'
+  | 'stop_solo'
+  | 'draw_guess_solo'
+  | 'battleship_solo'
+  | 'connect4_solo'
+  | 'quiz_solo'
+  | 'rps_solo'
+  | 'guess_number_solo';
 
 export type AccountStatus = 'active' | 'suspended' | 'flagged';
 export type PixKeyType = 'cpf' | 'email' | 'phone' | 'random';
@@ -28,9 +37,32 @@ export interface UserAccount {
   bannedBy?: string;
   suspensionUntil?: unknown;
   lastPromoCode?: string;
+  lastMpMatchId?: string;
   firstWithdrawalUsed?: boolean;
+  birthDate?: string;
+  ageVerified?: boolean;
+  ageVerifiedAt?: unknown;
+  identityVerified?: boolean;
+  faceVerificationStatus?: FaceVerificationStatus;
+  faceVerificationNote?: string;
+  verifiedAt?: unknown;
   createdAt: unknown;
   updatedAt: unknown;
+}
+
+export type FaceVerificationStatus = 'none' | 'pending' | 'approved' | 'rejected';
+
+export interface FaceVerificationRequest {
+  uid: string;
+  displayName: string;
+  birthDate: string;
+  selfieDataUrl: string;
+  status: 'pending' | 'approved' | 'rejected';
+  rejectionReason: string;
+  bonusAwarded: boolean;
+  reviewedBy: string;
+  submittedAt: unknown;
+  reviewedAt: unknown;
 }
 
 export interface UserPrivateInfo {
@@ -145,6 +177,7 @@ export interface LeaderboardEntry {
   lifetimePoints?: number;
   gamesPlayed: number;
   status: AccountStatus;
+  identityVerified?: boolean;
   updatedAt: unknown;
 }
 
@@ -260,7 +293,116 @@ export const GAME_LABELS: Record<GameCategory, string> = {
   memory_match: 'Memória de Cartas',
   quick_reflex: 'Reflexo Rápido',
   high_low_cards: 'Maior ou Menor',
+  block_britz: 'Block Britz',
+  domino_solo: 'Dominó',
+  stop_solo: 'Stop',
+  draw_guess_solo: 'Desenhe e Adivinhe',
+  battleship_solo: 'Batalha Naval',
+  connect4_solo: 'Ligue 4',
+  quiz_solo: 'Quiz',
+  rps_solo: 'Pedra, Papel e Tesoura',
+  guess_number_solo: 'Adivinhe o Número',
 };
+
+export type MultiplayerGameId =
+  | 'domino'
+  | 'stop'
+  | 'draw_guess'
+  | 'battleship'
+  | 'connect4'
+  | 'quiz'
+  | 'rps'
+  | 'tictactoe_mp'
+  | 'guess_number'
+  | 'memory_mp'
+  | 'reflex_mp';
+
+export const MULTIPLAYER_GAME_LABELS: Record<MultiplayerGameId, string> = {
+  domino: 'Dominó Online',
+  stop: 'Stop Online',
+  draw_guess: 'Desenhe e Adivinhe',
+  battleship: 'Batalha Naval',
+  connect4: 'Ligue 4',
+  quiz: 'Quiz Multiplayer',
+  rps: 'Pedra, Papel e Tesoura',
+  tictactoe_mp: 'Jogo da Velha Online',
+  guess_number: 'Adivinhe o Número',
+  memory_mp: 'Jogo da Memória Multiplayer',
+  reflex_mp: 'Teste de Reflexo',
+};
+
+export type RoomStakeStatus = 'agreed' | 'pending_opponent' | 'counter_proposed' | 'rejected';
+export type RoomVisibility = 'private' | 'public';
+
+export interface MultiplayerPlayerInfo {
+  uid: string;
+  displayName: string;
+  photoURL: string;
+  pointsBalance: number;
+  connected: boolean;
+  isHost: boolean;
+  acceptedRules: boolean;
+  score: number;
+  verified?: boolean;
+}
+
+export interface GlobalMatchListing {
+  roomCode: string;
+  hostUid: string;
+  hostName: string;
+  hostPhotoURL: string;
+  hostVerified: boolean;
+  gameId: MultiplayerGameId;
+  totalRounds: number;
+  stakePoints: number;
+  createdAt: number;
+}
+
+export interface MultiplayerSettlementPayload {
+  matchId: string;
+  roomCode: string;
+  gameId: MultiplayerGameId;
+  participantUids: string[];
+  winnerUid: string;
+  loserUid: string;
+  isDraw: boolean;
+  stakePoints: number;
+  scoresByUid: Record<string, number>;
+  settlementProof: string;
+  settledAt: string;
+}
+
+export interface MultiplayerMatchRecord {
+  matchId: string;
+  roomCode: string;
+  gameId: MultiplayerGameId;
+  participantUids: string[];
+  winnerUid: string;
+  loserUid: string;
+  stakePoints: number;
+  settledByUid: string;
+  integrityHash: string;
+  createdAt: unknown;
+}
+
+export interface MultiplayerRoomSnapshot {
+  roomCode: string;
+  hostUid: string;
+  gameId: MultiplayerGameId;
+  visibility: RoomVisibility;
+  postedToGlobal: boolean;
+  totalRounds: number;
+  currentRound: number;
+  status: 'lobby' | 'playing' | 'finished';
+  stakePoints: number;
+  proposedCounterPoints: number | null;
+  counterProposedByUid: string | null;
+  stakeStatus: RoomStakeStatus;
+  players: MultiplayerPlayerInfo[];
+  gameState: Record<string, unknown> | null;
+  settlement: MultiplayerSettlementPayload | null;
+  updatedAt: number;
+}
 
 export interface MaintenanceSettings {
   settingId: 'maintenance';
@@ -338,4 +480,5 @@ export const STREAK_REWARD_CENTS = 1000;
 export const REFERRAL_SIGNUP_BONUS_POINTS = 500;
 export const REFERRAL_COMMISSION_RATE = 0.12;
 export const MAX_PROMO_CODE_POINTS = 100000;
-
+export const FACE_VERIFICATION_BONUS_POINTS = 30000;
+export const MIN_VERIFIED_AGE = 18;

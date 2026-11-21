@@ -21,6 +21,14 @@
         "bannedBy": { "type": "string", "maxLength": 160 },
         "lastPromoCode": { "type": "string", "maxLength": 128 },
         "firstWithdrawalUsed": { "type": "boolean" },
+        "lastMpMatchId": { "type": "string", "maxLength": 128 },
+        "birthDate": { "type": "string", "maxLength": 10, "pattern": "^$|^\\d{4}-\\d{2}-\\d{2}$" },
+        "ageVerified": { "type": "boolean" },
+        "ageVerifiedAt": { "type": "string", "format": "date-time" },
+        "identityVerified": { "type": "boolean" },
+        "faceVerificationStatus": { "type": "string", "enum": ["none", "pending", "approved", "rejected"] },
+        "faceVerificationNote": { "type": "string", "maxLength": 240 },
+        "verifiedAt": { "type": "string", "format": "date-time" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -73,7 +81,7 @@
       "properties": {
         "sessionId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "gameCategory": { "type": "string", "enum": ["tic_tac_toe", "dot_link", "word_search", "math_sprint", "memory_match", "quick_reflex", "high_low_cards"] },
+        "gameCategory": { "type": "string", "enum": ["tic_tac_toe", "dot_link", "word_search", "math_sprint", "memory_match", "quick_reflex", "high_low_cards", "block_britz", "domino_solo", "stop_solo", "draw_guess_solo", "battleship_solo", "connect4_solo", "quiz_solo", "rps_solo", "guess_number_solo"] },
         "scoreEarned": { "type": "number" },
         "durationMs": { "type": "number" },
         "movesCount": { "type": "number" },
@@ -243,6 +251,7 @@
         "lifetimePoints": { "type": "number" },
         "gamesPlayed": { "type": "number" },
         "status": { "type": "string", "enum": ["active", "suspended", "flagged"] },
+        "identityVerified": { "type": "boolean" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": [
@@ -507,6 +516,8 @@
         "senderUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "senderName": { "type": "string", "minLength": 1, "maxLength": 80 },
         "text": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "readAt": { "type": "string", "format": "date-time" },
+        "readBy": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["senderUid", "senderName", "text", "createdAt"]
@@ -597,6 +608,42 @@
         "deletedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["messageId", "deletedAt"]
+    },
+    "MultiplayerMatchRecord": {
+      "title": "MultiplayerMatchRecord",
+      "description": "Server-signed online multiplayer match result and atomic wager settlement record.",
+      "type": "object",
+      "properties": {
+        "matchId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "roomCode": { "type": "string", "minLength": 3, "maxLength": 20 },
+        "gameId": { "type": "string", "enum": ["domino", "stop", "draw_guess", "battleship", "connect4", "quiz", "rps", "tictactoe_mp", "guess_number", "memory_mp", "reflex_mp"] },
+        "participantUids": { "type": "array" },
+        "winnerUid": { "type": "string", "maxLength": 128 },
+        "loserUid": { "type": "string", "maxLength": 128 },
+        "stakePoints": { "type": "number" },
+        "settledByUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "integrityHash": { "type": "string", "minLength": 16, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["matchId", "roomCode", "gameId", "participantUids", "winnerUid", "loserUid", "stakePoints", "settledByUid", "integrityHash", "createdAt"]
+    },
+    "FaceVerification": {
+      "title": "FaceVerification",
+      "description": "Facial selfie verification submission reviewed by an administrator for verified profile badge and 30,000 bonus points.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "birthDate": { "type": "string", "maxLength": 10, "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+        "selfieDataUrl": { "type": "string", "minLength": 64, "maxLength": 85000 },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+        "rejectionReason": { "type": "string", "maxLength": 240 },
+        "bonusAwarded": { "type": "boolean" },
+        "reviewedBy": { "type": "string", "maxLength": 160 },
+        "submittedAt": { "type": "string", "format": "date-time" },
+        "reviewedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "displayName", "birthDate", "selfieDataUrl", "status", "rejectionReason", "bonusAwarded", "reviewedBy", "submittedAt", "reviewedAt"]
     }
   },
   "firestore": {
@@ -703,6 +750,14 @@
     "/supportTickets/{ticketId}/messages/{messageId}": {
       "schema": { "$ref": "#/entities/SupportMessage" },
       "description": "Live messages exchanged inside a support ticket."
+    },
+    "/multiplayerMatches/{matchId}": {
+      "schema": { "$ref": "#/entities/MultiplayerMatchRecord" },
+      "description": "Authoritative multiplayer match results and atomic points settlements."
+    },
+    "/faceVerifications/{userId}": {
+      "schema": { "$ref": "#/entities/FaceVerification" },
+      "description": "Private facial verification selfie submissions reviewed by admins for verified status and +30,000 bonus points."
     }
   }
 }
