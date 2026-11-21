@@ -1290,6 +1290,12 @@ export const AdminPanel: React.FC = () => {
     return u.displayName.toLowerCase().includes(q) || email.includes(q) || u.uid.toLowerCase().includes(q);
   });
 
+  // Only withdrawals explicitly confirmed as paid count as real money already sent.
+  const totalPaidWithdrawalsCents = withdrawals
+    .filter((w) => w.status === 'paid')
+    .reduce((acc, w) => acc + (Number.isFinite(w.amountCents) ? w.amountCents : 0), 0);
+  const paidWithdrawalsCount = withdrawals.filter((w) => w.status === 'paid').length;
+
   const pendingTotalCents = withdrawals
     .filter((w) => w.status === 'pending' || w.status === 'approved')
     .reduce((acc, w) => acc + w.amountCents, 0);
@@ -1522,6 +1528,15 @@ export const AdminPanel: React.FC = () => {
               <div className="text-xs text-slate-500 dark:text-zinc-400">Total de Jogadores</div>
               <div className="text-2xl font-mono font-extrabold text-slate-900 dark:text-white tabular-nums mt-1">
                 {users.length}
+              </div>
+            </div>
+            <div className="bg-white dark:bg-[#0e1319] border border-emerald-200 dark:border-emerald-900/60 rounded-2xl p-4 sm:p-5">
+              <div className="text-xs text-slate-500 dark:text-zinc-400">Total Efetivamente Sacado</div>
+              <div className="text-2xl font-mono font-extrabold text-emerald-700 dark:text-lime-400 tabular-nums mt-1">
+                {formatBRL(totalPaidWithdrawalsCents)}
+              </div>
+              <div className="text-[11px] text-slate-500 dark:text-zinc-500 mt-1">
+                {paidWithdrawalsCount.toLocaleString('pt-BR')} saques pagos confirmados
               </div>
             </div>
             <div className="bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-2xl p-4 sm:p-5">
