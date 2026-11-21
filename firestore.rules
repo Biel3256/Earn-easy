@@ -1391,28 +1391,12 @@ service cloud.firestore {
     match /socialPresence/{userId} {
       allow get: if isValidId(userId) && isSignedIn();
       allow list: if isSignedIn();
-      allow create: if isValidId(userId) &&
+      allow create, update: if isValidId(userId) &&
         isOwner(userId) &&
-        incoming().keys().hasAll(['uid', 'lastSeen', 'sessionStartedAt']) &&
-        incoming().keys().hasOnly(['uid', 'lastSeen', 'sessionStartedAt']) &&
+        incoming().keys().hasAll(['uid', 'lastSeen']) &&
+        incoming().keys().hasOnly(['uid', 'lastSeen']) &&
         incoming().uid == userId &&
-        incoming().lastSeen == request.time &&
-        incoming().sessionStartedAt == request.time;
-      allow update: if isValidId(userId) &&
-        isOwner(userId) &&
-        incoming().keys().hasAll(['uid', 'lastSeen', 'sessionStartedAt']) &&
-        incoming().keys().hasOnly(['uid', 'lastSeen', 'sessionStartedAt']) &&
-        incoming().uid == userId &&
-        incoming().lastSeen == request.time &&
-        (
-          (('sessionStartedAt' in existing()) &&
-            incoming().sessionStartedAt == existing().sessionStartedAt) ||
-          (!('sessionStartedAt' in existing()) &&
-            incoming().sessionStartedAt == request.time) ||
-          (existing().lastSeen is timestamp &&
-            existing().lastSeen <= request.time - duration.value(90, 's') &&
-            incoming().sessionStartedAt == request.time)
-        );
+        incoming().lastSeen == request.time;
       allow delete: if isValidId(userId) && isAdmin();
     }
 
