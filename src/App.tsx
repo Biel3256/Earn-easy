@@ -277,8 +277,6 @@ function MainShell() {
     );
   }
 
-  // Gate 3: Mandatory +18 Age Verification before using the app
-  if (
   const sidebarItems: Array<{
     id: NavTab;
     label: string;
