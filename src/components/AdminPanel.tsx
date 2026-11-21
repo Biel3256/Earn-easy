@@ -268,6 +268,12 @@ export const AdminPanel: React.FC = () => {
   const [banDuration, setBanDuration] = useState('24h');
   const [banError, setBanError] = useState<string | null>(null);
   const [banSubmitting, setBanSubmitting] = useState(false);
+  const [pointsTarget, setPointsTarget] = useState<UserAccount | null>(null);
+  const [pointsOperation, setPointsOperation] = useState<'add' | 'remove'>('add');
+  const [pointsAmount, setPointsAmount] = useState('100');
+  const [pointsReason, setPointsReason] = useState('');
+  const [pointsSubmitting, setPointsSubmitting] = useState(false);
+  const [pointsError, setPointsError] = useState<string | null>(null);
 
   // Enterprise API form state
   const [apiName, setApiName] = useState('');
@@ -899,6 +905,71 @@ export const AdminPanel: React.FC = () => {
       setBanError(extractReadableError(err, 'Erro ao aplicar banimento.'));
     } finally {
       setBanSubmitting(false);
+    }
+  };
+
+
+  const openPointsModal = (u: UserAccount) => {
+    setPointsTarget(u);
+    setPointsOperation('add');
+    setPointsAmount('100');
+    setPointsReason('');
+    setPointsError(null);
+  };
+
+  const closePointsModal = () => {
+    if (pointsSubmitting) return;
+    setPointsTarget(null);
+    setPointsError(null);
+  };
+
+  const confirmPointsAdjustment = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!pointsTarget || !firebaseUser) return;
+    const amount = Math.floor(Number(pointsAmount));
+    const reason = pointsReason.trim().slice(0, 180);
+    if (!Number.isFinite(amount) || amount < 1 || amount > 1000000) {
+      setPointsError('Informe uma quantidade entre 1 e 1.000.000 pontos.');
+      return;
+    }
+    if (reason.length < 4) {
+      setPointsError('Informe o motivo do ajuste (mínimo 4 caracteres).');
+      return;
+    }
+    setPointsSubmitting(true);
+    setPointsError(null);
+    try {
+      await runTransaction(db, async (tx) => {
+        const userRef = doc(db, 'users', pointsTarget.uid);
+        const userSnap = await tx.get(userRef);
+        if (!userSnap.exists()) throw new Error('Usuário não encontrado.');
+        const current = userSnap.data() as UserAccount;
+        const nextBalance = pointsOperation === 'add'
+          ? current.pointsBalance + amount
+          : current.pointsBalance - amount;
+        if (nextBalance < 0) throw new Error('O usuário não possui pontos suficientes para essa retirada.');
+        tx.update(userRef, {
+          pointsBalance: nextBalance,
+          ...(pointsOperation === 'add' ? { lifetimePoints: current.lifetimePoints + amount } : {}),
+          updatedAt: serverTimestamp(),
+        });
+        const logId = generateId('pts');
+        tx.set(doc(db, 'fraudLogs', logId), {
+          logId,
+          userId: pointsTarget.uid,
+          eventType: 'manual_flag',
+          severity: 'medium',
+          details: `Ajuste manual do administrador: ${pointsOperation === 'add' ? '+' : '-'}${amount} pontos. Motivo: ${reason}`.slice(0, 400),
+          resolved: false,
+          createdAt: serverTimestamp(),
+        });
+      });
+      setActionMsg(`${pointsOperation === 'add' ? 'Adicionados' : 'Retirados'} ${formatPoints(amount)} pontos de ${pointsTarget.displayName}.`);
+      setPointsTarget(null);
+    } catch (err) {
+      setPointsError(extractReadableError(err, 'Não foi possível ajustar os pontos.'));
+    } finally {
+      setPointsSubmitting(false);
     }
   };
 
@@ -2158,6 +2229,11 @@ export const AdminPanel: React.FC = () => {
                             <strong>Por quê:</strong> {u.banExplanation}
                           </div>
                         )}
+                        {u.suspensionUntil && timestampToMillis(u.suspensionUntil) > Date.now() && (
+                          <div>
+                            <strong>Bloqueado até:</strong> {formatAttemptTimestamp(u.suspensionUntil)}
+                          </div>
+                        )}
                       </div>
                     )}
 
@@ -2169,6 +2245,13 @@ export const AdminPanel: React.FC = () => {
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => openPointsModal(u)}
+                      className="min-h-[40px] px-3 py-1.5 bg-sky-50 dark:bg-sky-950/40 text-sky-700 dark:text-sky-300 border border-sky-200 dark:border-sky-800 rounded-xl font-bold cursor-pointer"
+                    >
+                      Ajustar pontos
+                    </button>
                     {u.status === 'active' ? (
                       <button
                         type="button"
@@ -3243,6 +3326,47 @@ export const AdminPanel: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* MODAL: AJUSTE MANUAL DE PONTOS */}
+      {pointsTarget && (
+        <div role="dialog" aria-modal="true" aria-labelledby="points-modal-title" className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-xs">
+          <div className="bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-3xl shadow-2xl max-w-lg w-full overflow-hidden">
+            <div className="px-6 py-4 border-b border-slate-100 dark:border-zinc-800 flex items-center justify-between gap-4">
+              <div>
+                <h3 id="points-modal-title" className="text-base font-bold text-slate-900 dark:text-white">Ajustar pontos do usuário</h3>
+                <p className="text-xs text-slate-500 dark:text-zinc-400">{pointsTarget.displayName} · Saldo atual: {formatPoints(pointsTarget.pointsBalance)}</p>
+              </div>
+              <button type="button" onClick={closePointsModal} disabled={pointsSubmitting} className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-zinc-200"><X className="w-4 h-4" /></button>
+            </div>
+            <form onSubmit={confirmPointsAdjustment} className="p-6 space-y-4">
+              <div className="space-y-1.5">
+                <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300">Operação</label>
+                <select value={pointsOperation} onChange={(e) => setPointsOperation(e.target.value as 'add' | 'remove')} className="w-full min-h-[42px] px-3 py-2 text-sm bg-white dark:bg-[#090d12] border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-xl">
+                  <option value="add">Adicionar pontos</option>
+                  <option value="remove">Retirar pontos</option>
+                </select>
+              </div>
+              <div className="space-y-1.5">
+                <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300">Quantidade</label>
+                <input type="number" min="1" max="1000000" step="1" required value={pointsAmount} onChange={(e) => setPointsAmount(e.target.value)} className="w-full min-h-[42px] px-3 py-2 text-sm bg-white dark:bg-[#090d12] border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-xl" />
+              </div>
+              <div className="space-y-1.5">
+                <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300">Motivo do ajuste</label>
+                <textarea required minLength={4} maxLength={180} rows={3} value={pointsReason} onChange={(e) => setPointsReason(e.target.value)} placeholder="Ex.: correção de saldo, prêmio ou estorno..." className="w-full px-3 py-2 text-sm bg-white dark:bg-[#090d12] border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-xl resize-none" />
+              </div>
+              <p className="text-[11px] text-slate-500 dark:text-zinc-400">Toda alteração será registrada no histórico administrativo. A retirada nunca poderá deixar o saldo negativo.</p>
+              {pointsError && <div className="p-3 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 rounded-xl text-xs text-red-700 dark:text-red-300">{pointsError}</div>}
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-zinc-800">
+                <button type="button" onClick={closePointsModal} disabled={pointsSubmitting} className="min-h-[40px] px-4 py-2 text-xs font-semibold border border-slate-300 dark:border-zinc-700 text-slate-700 dark:text-zinc-200 rounded-xl">Cancelar</button>
+                <button type="submit" disabled={pointsSubmitting || !pointsAmount || pointsReason.trim().length < 4} className="min-h-[40px] px-4 py-2 text-xs font-bold bg-lime-400 hover:bg-lime-300 disabled:opacity-50 text-slate-950 rounded-xl">
+                  {pointsSubmitting ? 'Salvando...' : pointsOperation === 'add' ? 'Adicionar pontos' : 'Retirar pontos'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 };
