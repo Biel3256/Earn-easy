@@ -72,45 +72,11 @@ export function SocialPresence() {
   useEffect(() => {
     if (!uid) return;
     const presenceRef = doc(db, 'socialPresence', uid);
-    let initialized = false;
-    let active = true;
-
-    const beat = async () => {
-      try {
-        if (!initialized) {
-          const current = await getDoc(presenceRef);
-          if (!active) return;
-          const data = current.exists() ? current.data() : {};
-          const lastSeen = data.lastSeen;
-          const sessionIsActive =
-            lastSeen && typeof lastSeen.toMillis === 'function' &&
-            Date.now() - lastSeen.toMillis() < 90_000;
-          const sessionStartedAt =
-            sessionIsActive && data.sessionStartedAt
-              ? data.sessionStartedAt
-              : serverTimestamp();
-
-          await setDoc(
-            presenceRef,
-            { uid, lastSeen: serverTimestamp(), sessionStartedAt },
-            { merge: true }
-          );
-          initialized = true;
-          return;
-        }
-
-        await setDoc(presenceRef, { uid, lastSeen: serverTimestamp() }, { merge: true });
-      } catch {
-        // Presence is best-effort; it must never interrupt the site.
-      }
-    };
-
-    void beat();
-    const timer = window.setInterval(() => void beat(), 45_000);
-    return () => {
-      active = false;
-      window.clearInterval(timer);
-    };
+    const beat = () =>
+      setDoc(presenceRef, { uid, lastSeen: serverTimestamp() }, { merge: true }).catch(() => {});
+    beat();
+    const timer = window.setInterval(beat, 45_000);
+    return () => window.clearInterval(timer);
   }, [uid]);
 
   return null;
@@ -133,7 +99,6 @@ export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSec
   const [requests, setRequests] = useState<FriendRequest[]>([]);
   const [friends, setFriends] = useState<PublicProfile[]>([]);
   const [presence, setPresence] = useState<Record<string, number>>({});
-  const [sessionStarts, setSessionStarts] = useState<Record<string, number>>({});
   const [selectedFriend, setSelectedFriend] = useState<PublicProfile | null>(null);
   const [privateMessages, setPrivateMessages] = useState<SocialMessage[]>([]);
   const [globalMessages, setGlobalMessages] = useState<SocialMessage[]>([]);
@@ -168,27 +133,19 @@ export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSec
   useEffect(() => {
     if (!uid) {
       setPresence({});
-      setSessionStarts({});
       return;
     }
     return onSnapshot(
       collection(db, 'socialPresence'),
       (snap) => {
         const next: Record<string, number> = {};
-        const starts: Record<string, number> = {};
         snap.docs.forEach((item) => {
-          const data = item.data();
-          const lastSeen = data.lastSeen;
-          const sessionStartedAt = data.sessionStartedAt;
+          const lastSeen = item.data().lastSeen;
           if (lastSeen && typeof lastSeen.toMillis === 'function') {
             next[item.id] = lastSeen.toMillis();
           }
-          if (sessionStartedAt && typeof sessionStartedAt.toMillis === 'function') {
-            starts[item.id] = sessionStartedAt.toMillis();
-          }
         });
         setPresence(next);
-        setSessionStarts(starts);
       },
       () => {}
     );
@@ -285,7 +242,7 @@ export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSec
   }, [globalMessages.length, tab]);
 
   useEffect(() => {
-    const timer = window.setInterval(() => refreshPresenceClock((value) => value + 1), 1_000);
+    const timer = window.setInterval(() => refreshPresenceClock((value) => value + 1), 15_000);
     return () => window.clearInterval(timer);
   }, []);
 
@@ -498,15 +455,6 @@ export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSec
   const isOnline = (profileUid: string) =>
     Boolean(presence[profileUid] && Date.now() - presence[profileUid] < 90_000);
 
-  const formatOnlineDuration = (profileUid: string) => {
-    const startedAt = sessionStarts[profileUid];
-    if (!startedAt || !isOnline(profileUid)) return '';
-    const totalMinutes = Math.max(0, Math.floor((Date.now() - startedAt) / 60_000));
-    const hours = Math.floor(totalMinutes / 60);
-    const minutes = totalMinutes % 60;
-    return hours > 0 ? `${hours}h ${minutes.toString().padStart(2, '0')}min` : `${minutes}min`;
-  };
-
   return (
     <section className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
@@ -648,7 +596,7 @@ export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSec
                         {profile.displayName}
                       </p>
                       <p className="truncate text-[11px] font-mono text-slate-500 dark:text-zinc-400">
-                        {profile.uid} · {isOnline(profile.uid) ? `Online há ${formatOnlineDuration(profile.uid)}` : 'Offline'}
+                        {profile.uid} · {isOnline(profile.uid) ? 'Online agora' : 'Offline'}
                       </p>
                     </div>
                   </button>
@@ -804,7 +752,7 @@ export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSec
                                   : 'text-slate-400 dark:text-zinc-500'
                               }`}
                             >
-                              {friendOnline ? `Online há ${formatOnlineDuration(friend.uid)}` : 'Offline'}
+                              {friendOnline ? 'Online' : 'Offline'}
                             </div>
                           </div>
                         </div>
@@ -826,7 +774,7 @@ export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSec
                 <p className="text-[11px] text-slate-500 dark:text-zinc-400">
                   {selectedFriend
                     ? isOnline(selectedFriend.uid)
-                      ? `Online há ${formatOnlineDuration(selectedFriend.uid)}`
+                      ? 'Online agora'
                       : 'Offline no momento'
                     : 'Selecione um amigo na lista ao lado para conversar'}
                 </p>
