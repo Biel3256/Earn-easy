@@ -33,7 +33,6 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 import { ToastProvider } from './context/ToastContext';
 import { AppFooter } from './components/AppFooter';
 import { AuthGateScreen } from './components/AuthGateScreen';
-import { AgeVerificationGate } from './components/AgeVerificationGate';
 import { BrandLogo } from './components/BrandLogo';
 import { FloatingSupportWidget } from './components/FloatingSupportWidget';
 import { GamesHub } from './components/GamesHub';
@@ -280,14 +279,6 @@ function MainShell() {
 
   // Gate 3: Mandatory +18 Age Verification before using the app
   if (
-    !isBackofficeRoute &&
-    userAccount &&
-    userAccount.status !== 'suspended' &&
-    !userAccount.ageVerified
-  ) {
-    return <AgeVerificationGate theme={theme} onChangeTheme={setTheme} />;
-  }
-
   const sidebarItems: Array<{
     id: NavTab;
     label: string;
