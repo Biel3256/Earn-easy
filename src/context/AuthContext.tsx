@@ -17,6 +17,7 @@ import {
   runTransaction,
   serverTimestamp,
   setDoc,
+  updateDoc,
   where,
   writeBatch,
 } from 'firebase/firestore';
@@ -72,6 +73,20 @@ import {
   sendBrowserNotification,
 } from '../utils/browserNotifications';
 import { PLAYER_LEVELS } from '../utils/levels';
+
+function getSuspensionExpiryMs(account: UserAccount | null | undefined): number | null {
+  if (!account || account.status !== 'suspended' || !account.suspensionUntil) return null;
+  const value = account.suspensionUntil as { toMillis?: () => number } | number | string | Date;
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === 'number') return value;
+  if (typeof value === 'string') {
+    const parsed = Date.parse(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  if (value && typeof value === 'object' && typeof value.toMillis === 'function') return value.toMillis();
+  return null;
+}
+
 import { checkUsernameProfanity, validateUsernameInput } from '../utils/moderation';
 import {
   formatBRL,
@@ -524,6 +539,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     );
     return () => unsubMaintenance();
   }, []);
+
+
+  // Automatically restore access when a temporary suspension reaches its deadline.
+  useEffect(() => {
+    if (!firebaseUser || !userAccount || userAccount.status !== 'suspended') return;
+    const expiresAt = getSuspensionExpiryMs(userAccount);
+    if (expiresAt === null) return;
+    const timer = window.setTimeout(() => {
+      updateDoc(doc(db, 'users', firebaseUser.uid), {
+        status: 'active',
+        riskScore: 0,
+        suspensionUntil: null,
+        banReason: '',
+        banExplanation: '',
+        bannedBy: '',
+        updatedAt: serverTimestamp(),
+      }).catch(() => {});
+    }, Math.max(0, expiresAt - Date.now()));
+    return () => window.clearTimeout(timer);
+  }, [firebaseUser?.uid, userAccount?.uid, userAccount?.status, userAccount?.suspensionUntil]);
 
   // Attach real-time Firestore listeners ONLY when authReady && firebaseUser
   useEffect(() => {
