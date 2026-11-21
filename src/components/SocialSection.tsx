@@ -57,35 +57,58 @@ const safeText = (value: string) => value.trim().slice(0, 500);
 const containsOffensiveLanguage = (value: string) => {
   const normalized = value
     .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[\\u0300-\\u036f]/g, '')
     .toLowerCase()
     .replace(/0/g, 'o')
     .replace(/1/g, 'i')
     .replace(/3/g, 'e')
     .replace(/4/g, 'a')
     .replace(/5/g, 's')
-    .replace(/7/g, 't');
-  const terms = [
-    /\bporra\b/,
-    /\bcaralho\b/,
-    /\bmerda\b/,
-    /\bbosta\b/,
-    /\bbuceta\b/,
-    /\bputa(s)?\b/,
-    /\bputaria\b/,
-    /\bfoda(se|m|mos|ndo|r)?\b/,
-    /\barrombado(a|s)?\b/,
-    /\bdesgraca(do|da)?\b/,
-    /\bidiota(s)?\b/,
-    /\botario(s)?\b/,
-    /\bburro(a|s)?\b/,
-    /\bretardado(a|s)?\b/,
-    /\bfilho da puta\b/,
-    /\bvai tomar no cu\b/,
-    /\bvsf\b/,
-    /\bfdp\b/,
+    .replace(/7/g, 't')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+
+  // Termos explícitos, xingamentos, abreviações e nomes de partes íntimas.
+  // A comparação por palavras evita bloquear palavras comuns que apenas contenham
+  // uma sequência parecida (por exemplo, "disputa").
+  const blockedTerms = [
+    'porra', 'caralho', 'carai', 'krl', 'crl', 'merda', 'bosta', 'bost a',
+    'buceta', 'boceta', ' bucetao', 'xoxota', 'xana', 'xereca', 'ppk',
+    'puta', 'puto', 'putas', 'putos', 'putaria', 'putaquepariu',
+    'foda', 'foder', 'fode', 'fodase', 'foda se', 'fodido', 'fodida',
+    'arrombado', 'arrombada', 'desgraca', 'desgracado', 'desgracada',
+    ' filho da puta', 'filhadaputa', 'vai tomar no cu', 'tomar no cu',
+    'vai se foder', 'vsf', 'vtnc', 'fdp', 'pqp', 'tnc',
+    'cu', 'cuz ao', 'cuzona', 'cuzinho', 'cuzudo', 'cuzuda',
+    'rola', 'pica', 'piroca', 'pau', 'cacete', 'caceta', ' cacete',
+    'porrada', 'bicha', 'viado', 'veado', 'corno', 'corn o',
+    'idiota', 'imbecil', 'otario', 'otaria', 'babaca', 'trouxa',
+    'burro', 'burra', 'retardado', 'retardada', 'nojento', 'nojenta',
+    'desgraça', 'damn', 'fuck', 'shit', 'bitch', 'asshole',
+    // Partes íntimas e termos sexuais explícitos
+    'penis', 'pênis', 'vagina', 'vulva', 'clitoris', 'clitoris',
+    'clitóris', 'testiculo', 'testiculos', 'testículo', 'testículos',
+    'escroto', 'saco escrotal', 'anus', 'ânus', 'cu', 'bunda',
+    'seios', 'peitos', 'mamilos', 'mamilo', 'nude', 'nudes',
+    'transar', 'transa', 'sexo', 'sexual', ' masturbar', 'masturbacao',
+    'gozar', 'gozada', 'esperma', 'porra', 'ejacular', 'ejaculacao',
   ];
-  return terms.some((term) => term.test(normalized));
+
+  const words = new Set(normalized.split(/\\s+/).filter(Boolean));
+  const compact = normalized.replace(/\\s+/g, '');
+  return blockedTerms.some((rawTerm) => {
+    const term = rawTerm.normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').toLowerCase().trim();
+    if (!term) return false;
+    if (term.includes(' ')) return normalized.includes(term);
+    if (words.has(term)) return true;
+    // Também identifica termos escritos com espaços/pontuação entre letras.
+    return compact.includes(term) && term.length >= 4 &&
+      new RegExp('(^|[^a-z0-9])' + term.split('').join('[^a-z0-9]*') + '([^a-z0-9]|$)').test(
+        value.normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').toLowerCase()
+          .replace(/0/g, 'o').replace(/1/g, 'i').replace(/3/g, 'e')
+          .replace(/4/g, 'a').replace(/5/g, 's').replace(/7/g, 't')
+      );
+  });
 };
 const friendshipId = (a: string, b: string) => [a, b].sort().join('__');
 
