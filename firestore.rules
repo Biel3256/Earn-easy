@@ -97,8 +97,15 @@ service cloud.firestore {
     }
 
     function isActiveUser(userId) {
-      return exists(/databases/$(database)/documents/users/$(userId)) &&
-        get(/databases/$(database)/documents/users/$(userId)).data.status == 'active';
+      return exists(/databases/$(database)/documents/users/$(userId)) && (
+        get(/databases/$(database)/documents/users/$(userId)).data.status == 'active' ||
+        (
+          get(/databases/$(database)/documents/users/$(userId)).data.status == 'suspended' &&
+          'suspensionUntil' in get(/databases/$(database)/documents/users/$(userId)).data &&
+          get(/databases/$(database)/documents/users/$(userId)).data.suspensionUntil is timestamp &&
+          get(/databases/$(database)/documents/users/$(userId)).data.suspensionUntil <= request.time
+        )
+      );
     }
 
     function isPromoPublished(promoData) {
@@ -245,7 +252,7 @@ service cloud.firestore {
         'uid', 'displayName', 'photoURL', 'pointsBalance', 'lifetimePoints',
         'brlBalanceCents', 'totalWithdrawnCents', 'lastConversionDate',
         'status', 'riskScore', 'gamesPlayed', 'banReason', 'banExplanation',
-        'bannedBy', 'lastPromoCode', 'firstWithdrawalUsed', 'createdAt', 'updatedAt'
+        'bannedBy', 'suspensionUntil', 'lastPromoCode', 'firstWithdrawalUsed', 'createdAt', 'updatedAt'
       ]) &&
       isValidId(data.uid) &&
       data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80 &&
@@ -261,6 +268,7 @@ service cloud.firestore {
       (!('banReason' in data) || (data.banReason is string && data.banReason.size() <= 120)) &&
       (!('banExplanation' in data) || (data.banExplanation is string && data.banExplanation.size() <= 400)) &&
       (!('bannedBy' in data) || (data.bannedBy is string && data.bannedBy.size() <= 160)) &&
+      (!('suspensionUntil' in data) || data.suspensionUntil == null || data.suspensionUntil is timestamp) &&
       (!('lastPromoCode' in data) || isValidPromoCodeId(data.lastPromoCode)) &&
       (!('firstWithdrawalUsed' in data) || data.firstWithdrawalUsed is bool) &&
       data.createdAt is timestamp &&
@@ -765,7 +773,7 @@ service cloud.firestore {
         incoming().updatedAt == request.time && (
           (
             isOwner(userId) &&
-            existing().status == 'active' &&
+            isActiveUser(userId) &&
             incoming().totalWithdrawnCents == existing().totalWithdrawnCents && (
               // Action A: Profile Update (active status preserved)
               (
@@ -884,7 +892,7 @@ service cloud.firestore {
           ) || (
             // Cross-User Atomic Referral Credits to Referrer Account
             request.auth.uid != userId &&
-            existing().status == 'active' &&
+            isActiveUser(userId) &&
             incoming().status == existing().status &&
             incoming().riskScore == existing().riskScore &&
             incoming().totalWithdrawnCents == existing().totalWithdrawnCents &&
@@ -905,6 +913,23 @@ service cloud.firestore {
                 request.auth.uid
               )
             )
+          ) || (
+            // Permit the account owner to restore access after a temporary suspension expires.
+            isOwner(userId) &&
+            existing().status == 'suspended' &&
+            ('suspensionUntil' in existing()) &&
+            existing().suspensionUntil is timestamp &&
+            existing().suspensionUntil <= request.time &&
+            incoming().status == 'active' &&
+            incoming().riskScore == 0 &&
+            incoming().suspensionUntil == null &&
+            incoming().banReason == '' &&
+            incoming().banExplanation == '' &&
+            incoming().bannedBy == '' &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'status', 'riskScore', 'suspensionUntil', 'banReason',
+              'banExplanation', 'bannedBy', 'updatedAt'
+            ])
           ) || isAdmin()
         );
 
