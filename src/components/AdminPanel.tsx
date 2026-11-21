@@ -3419,8 +3419,11 @@ export const AdminPanel: React.FC = React.memo(() => {
                         {email && <div>{email}</div>}
                         <div>UID: {req.uid}</div>
                         <div>
-                          Nascimento: <strong className="text-slate-900 dark:text-zinc-200">{formatBirthDateBr(req.birthDate)}</strong>
-                          {age !== null ? ` (${age} anos)` : ''}
+                          {req.birthDate ? (
+                            <>Nascimento informado: <strong className="text-slate-900 dark:text-zinc-200">{formatBirthDateBr(req.birthDate)}</strong>{age !== null ? ` (${age} anos)` : ''}</>
+                          ) : (
+                            <strong className="text-amber-700 dark:text-amber-300">Idade não informada — confirmar 18+ por documento oficial antes de aprovar.</strong>
+                          )}
                         </div>
                         <div>Enviado em: {formatAttemptTimestamp(req.submittedAt)}</div>
                       </div>
