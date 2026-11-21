@@ -3366,7 +3366,7 @@ export const AdminPanel: React.FC = React.memo(() => {
           ) : (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               {filteredFaceVerifications.map((req) => {
-                const age = calculateAgeFromBirthDate(req.birthDate);
+                const age = req.birthDate ? calculateAgeFromBirthDate(req.birthDate) : null;
                 const email = privateMap[req.uid]?.email || '';
                 const busy = faceBusyUid === req.uid;
                 return (
