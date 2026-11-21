@@ -26,6 +26,7 @@ export interface UserAccount {
   banReason?: string;
   banExplanation?: string;
   bannedBy?: string;
+  suspensionUntil?: unknown;
   lastPromoCode?: string;
   firstWithdrawalUsed?: boolean;
   createdAt: unknown;
