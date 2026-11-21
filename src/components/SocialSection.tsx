@@ -54,6 +54,39 @@ type FriendRequest = {
 };
 
 const safeText = (value: string) => value.trim().slice(0, 500);
+const containsOffensiveLanguage = (value: string) => {
+  const normalized = value
+    .normalize('NFD')
+    .replace(/[\\u0300-\\u036f]/g, '')
+    .toLowerCase()
+    .replace(/0/g, 'o')
+    .replace(/1/g, 'i')
+    .replace(/3/g, 'e')
+    .replace(/4/g, 'a')
+    .replace(/5/g, 's')
+    .replace(/7/g, 't');
+  const terms = [
+    /\\bporra\\b/,
+    /\\bcaralho\\b/,
+    /\\bmerda\\b/,
+    /\\bbosta\\b/,
+    /\\bbuceta\\b/,
+    /\\bputa(s)?\\b/,
+    /\\bputaria\\b/,
+    /\\bfoda(se|m|mos|ndo|r)?\\b/,
+    /\\barrombado(a|s)?\\b/,
+    /\\bdesgraca(do|da)?\\b/,
+    /\\bidiota(s)?\\b/,
+    /\\botario(s)?\\b/,
+    /\\bburro(a|s)?\\b/,
+    /\\bretardado(a|s)?\\b/,
+    /\\bfilho da puta\\b/,
+    /\\bvai tomar no cu\\b/,
+    /\\bvsf\\b/,
+    /\\bfdp\\b/,
+  ];
+  return terms.some((term) => term.test(normalized));
+};
 const friendshipId = (a: string, b: string) => [a, b].sort().join('__');
 
 function formatChatTime(ts?: { toDate?: () => Date }): string {
@@ -406,6 +439,11 @@ export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSec
   const sendGlobal = async () => {
     const text = safeText(globalDraft);
     if (!uid || !text || busy) return;
+    if (containsOffensiveLanguage(text)) {
+      setError('Sua mensagem contém palavrões ou xingamentos. Mantenha o respeito no chat global.');
+      setNotice('');
+      return;
+    }
     if (userAccount?.status !== 'active') {
       setError('Sua conta precisa estar ativa para enviar mensagens no chat global.');
       return;
@@ -883,7 +921,7 @@ export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSec
               Salve, salve, galera! Aqui é o Biel, dono e administrador do site Earn Easy. Para manter o chat organizado e agradável para todos, sigam as regras abaixo:
             </p>
             <ol className="list-decimal pl-4 space-y-1 text-xs text-slate-700 dark:text-zinc-300 leading-relaxed">
-              <li>Respeite todos os membros. Não são permitidos insultos, ameaças ou perseguição.</li>
+              <li>Respeite todos os membros. Não são permitidos insultos, ameaças, perseguição, xingamentos ou palavrões.</li>
               <li>Não faça spam, flood ou envie mensagens repetidas.</li>
               <li>Não publique conteúdo ofensivo, impróprio ou ilegal.</li>
               <li>Não divulgue links, grupos ou serviços sem autorização da administração.</li>
@@ -893,7 +931,7 @@ export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSec
               <li>Avise a administração se encontrar algo suspeito ou uma mensagem que viole as regras.</li>
             </ol>
             <p className="text-[11px] font-bold text-amber-800 dark:text-amber-300 mt-2">
-              Quem descumprir as regras poderá receber aviso, mute ou banimento.
+              Mensagens com palavrões ou xingamentos serão bloqueadas antes do envio. Reincidência poderá gerar aviso, mute ou banimento.
             </p>
             <p className="text-[11px] text-slate-500 dark:text-zinc-400 mt-1">Biel — Dono e administrador do Earn Easy</p>
           </div>
