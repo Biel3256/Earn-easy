@@ -1312,6 +1312,14 @@ export const AdminPanel: React.FC = () => {
     }
   };
 
+  // Indicadores adicionais do painel: calculados a partir dos dados já existentes no Firestore.
+  const pointsCirculatingTotal = users.reduce((total, user) => total + (Number(user.pointsBalance) || 0), 0);
+  const pointsDistributedTotal = users.reduce((total, user) => total + (Number(user.lifetimePoints) || 0), 0);
+  const gamesPlayedTotal = users.reduce((total, user) => total + (Number(user.gamesPlayed) || 0), 0);
+  const startOfToday = new Date();
+  startOfToday.setHours(0, 0, 0, 0);
+  const newUsersToday = users.filter((user) => timestampToMillis(user.createdAt) >= startOfToday.getTime()).length;
+
   const ADMIN_TABS: Array<{
     id: AdminTab;
     label: string;
@@ -1424,7 +1432,7 @@ export const AdminPanel: React.FC = () => {
       {/* TAB 1: VISÃO GERAL & MODO MANUTENÇÃO */}
       {tab === 'overview' && (
         <div className="space-y-6">
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3.5 sm:gap-4">
+          <div className="grid grid-cols-2 xl:grid-cols-4 gap-3.5 sm:gap-4">
             <div className="bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-2xl p-4 sm:p-5">
               <div className="text-xs text-slate-500 dark:text-zinc-400">Total de Jogadores</div>
               <div className="text-2xl font-mono font-extrabold text-slate-900 dark:text-white tabular-nums mt-1">
@@ -1448,6 +1456,22 @@ export const AdminPanel: React.FC = () => {
               <div className="text-2xl font-mono font-extrabold text-red-600 dark:text-red-400 tabular-nums mt-1">
                 {fraudLogs.filter((f) => !f.resolved).length}
               </div>
+            </div>
+            <div className="bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-2xl p-4 sm:p-5">
+              <div className="text-xs text-slate-500 dark:text-zinc-400">Novos Usuários Hoje</div>
+              <div className="text-2xl font-mono font-extrabold text-slate-900 dark:text-white tabular-nums mt-1">{newUsersToday}</div>
+            </div>
+            <div className="bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-2xl p-4 sm:p-5">
+              <div className="text-xs text-slate-500 dark:text-zinc-400">Partidas Realizadas</div>
+              <div className="text-2xl font-mono font-extrabold text-slate-900 dark:text-white tabular-nums mt-1">{gamesPlayedTotal.toLocaleString('pt-BR')}</div>
+            </div>
+            <div className="bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-2xl p-4 sm:p-5">
+              <div className="text-xs text-slate-500 dark:text-zinc-400">Pontos em Circulação</div>
+              <div className="text-2xl font-mono font-extrabold text-slate-900 dark:text-white tabular-nums mt-1">{formatPoints(pointsCirculatingTotal)}</div>
+            </div>
+            <div className="bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-2xl p-4 sm:p-5">
+              <div className="text-xs text-slate-500 dark:text-zinc-400">Pontos Distribuídos</div>
+              <div className="text-2xl font-mono font-extrabold text-emerald-700 dark:text-lime-400 tabular-nums mt-1">{formatPoints(pointsDistributedTotal)}</div>
             </div>
           </div>
 
