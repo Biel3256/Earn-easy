@@ -152,7 +152,9 @@ function buildLeaderboardPayload(
   const rawName = (
     overrides.displayName !== undefined
       ? overrides.displayName.trim()
-      : (userData.displayName ?? '')
+      : typeof userData.displayName === 'string' && userData.displayName.trim()
+        ? userData.displayName
+        : ''
   ).slice(0, 80);
   const rawPhoto = overrides.photoURL ?? userData.photoURL ?? '';
   const identityVerified = overrides.identityVerified ?? Boolean(userData.identityVerified);
@@ -1439,7 +1441,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const isFirstWithdrawalEligible = Boolean(
     userAccount &&
-      userAccount.totalWithdrawnCents === 0 &&
+      (userAccount.totalWithdrawnCents || 0) === 0 &&
       !userAccount.firstWithdrawalUsed &&
       !myWithdrawals.some((w) => w.status !== 'rejected')
   );
@@ -1539,7 +1541,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           throw new Error('Sua conta está bloqueada para saques no momento.');
         }
 
-        const firstEligibleNow = current.totalWithdrawnCents === 0 && !current.firstWithdrawalUsed;
+        const firstEligibleNow = (current.totalWithdrawnCents || 0) === 0 && !current.firstWithdrawalUsed;
         const requiredMinNow = firstEligibleNow
           ? withdrawalSettings.firstWithdrawalMinCents
           : withdrawalSettings.standardWithdrawalMinCents;
@@ -1761,6 +1763,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           gamesPlayed: 0,
           status: 'active',
           identityVerified: false,
+          verifiedBadge: 'none',
           updatedAt: serverTimestamp(),
         });
 

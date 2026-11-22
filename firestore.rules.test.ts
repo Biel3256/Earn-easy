@@ -1,33 +1,86 @@
-// Phase 0 Security Test Specification for Earn Easy Firestore Rules
-// Verifies the 12 adversarial payloads ("Dirty Dozen") against our ruleset invariants.
+// Security & Regular-User Functional Test Specification for Earn Easy Firestore Rules
+// Verifies both positive regular-user acyclic DAG flows and the 12 adversarial payloads ("Dirty Dozen").
+
+export const REGULAR_USER_FLOW_CASES = [
+  {
+    id: 'R1',
+    name: 'Regular User Account Signup (with & without null Google email)',
+    collections: ['users/{uid}', 'users/{uid}/private/info', 'leaderboard/{uid}'],
+    expected: 'ALLOW',
+    reason: 'createUserAccount writes complete UserAccount, private info, and leaderboard entry without requiring verified email',
+  },
+  {
+    id: 'R2',
+    name: 'Regular User Daily Check-in & Referral Commission',
+    collections: ['dailyCheckins/{chkId}', 'users/{uid}', 'leaderboard/{uid}', 'referrals/{uid}', 'users/{referrerUid}'],
+    expected: 'ALLOW',
+    reason: 'Acyclic DAG: leaderboard -> users -> dailyCheckins; referrer -> referrals -> invited user',
+  },
+  {
+    id: 'R3',
+    name: 'Regular User Double Spin & Mines Deal/Cashout',
+    collections: ['casinoSessions/{sessionId}', 'users/{uid}', 'leaderboard/{uid}'],
+    expected: 'ALLOW',
+    reason: 'Acyclic DAG: leaderboard -> users -> casinoSessions (casinoSessions never reads getAfter(users))',
+  },
+  {
+    id: 'R4',
+    name: 'Regular User Solo Game Score & Level-Up Reward',
+    collections: ['gameSessions/{id}', 'levelRewards/{id}', 'users/{uid}', 'leaderboard/{uid}'],
+    expected: 'ALLOW',
+    reason: 'Acyclic DAG: levelRewards checks pre-tx user doc; users checks existsAfter/getAfter(levelRewards)',
+  },
+  {
+    id: 'R5',
+    name: 'Regular User Promo Code Redemption',
+    collections: ['promoRedemptions/{id}', 'promoCodes/{code}', 'users/{uid}', 'leaderboard/{uid}'],
+    expected: 'ALLOW',
+    reason: 'Acyclic DAG: leaderboard -> users -> promoCodes -> promoRedemptions',
+  },
+  {
+    id: 'R6',
+    name: 'Regular User Multiplayer PvP Wager Settlement',
+    collections: ['multiplayerMatches/{id}', 'users/{winnerUid}', 'users/{loserUid}', 'leaderboard/{winnerUid}', 'leaderboard/{loserUid}'],
+    expected: 'ALLOW',
+    reason: 'Acyclic DAG: leaderboard -> users -> multiplayerMatches; winner reads loser post-state; loser & match never read winner post-state',
+  },
+  {
+    id: 'R7',
+    name: 'Regular User Private Chat Text, Image & Audio',
+    collections: ['friendships/{chatId}/messages/{messageId}'],
+    expected: 'ALLOW',
+    reason: 'isValidPrivateMediaDataUrl accepts compressed JPEG/PNG/WebP/GIF images and browser audio codecs up to 350KB',
+  },
+];
+
 export const DIRTY_DOZEN_CASES = [
   {
     id: 1,
-    name: 'Unverified Email Spoof',
-    collection: 'withdrawals',
+    name: 'Owner Protection Against Regular Admin',
+    collection: 'admins/{uid}, users/{ownerUid}',
     expected: 'PERMISSION_DENIED',
-    reason: 'request.auth.token.email_verified must be true',
+    reason: 'Regular admin blocked from modifying admins registry or protected Owner account',
   },
   {
     id: 2,
     name: 'Self-Admin Escalation',
     collection: 'admins/{uid}',
     expected: 'PERMISSION_DENIED',
-    reason: 'Non-admin cannot create or update admins registry',
+    reason: 'Non-owner cannot create, update, or delete admins registry',
   },
   {
     id: 3,
     name: 'Direct Money Minting',
     collection: 'users/{uid}',
     expected: 'PERMISSION_DENIED',
-    reason: 'brlBalanceCents increase requires Action C conversion math + serverDateStr()',
+    reason: 'brlBalanceCents increase requires Action C conversion math + serverDateStr() or verified 30-day check-in/casino payout',
   },
   {
     id: 4,
     name: 'Below-Minimum Pix Withdrawal',
     collection: 'withdrawals/{id}',
     expected: 'PERMISSION_DENIED',
-    reason: 'amountCents < 500 rejected by isValidWithdrawal',
+    reason: 'amountCents < requiredWithdrawalMinCents rejected by validateWithdrawalCreateUser',
   },
   {
     id: 5,
