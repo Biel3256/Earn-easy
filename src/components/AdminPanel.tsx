@@ -49,14 +49,18 @@ import {
 import { useAuth } from '../context/AuthContext';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import {
+  ADMIN_BOOTSTRAP_EMAIL,
+  AdminRoleRecord,
   EnterpriseIntegration,
   FraudEvent,
   GAME_LABELS,
   GameSession,
+  isOwnerIdentity,
   MAX_CONFIGURABLE_WITHDRAWAL_CENTS,
   MAX_PROMO_CODE_POINTS,
   MIN_CONFIGURABLE_WITHDRAWAL_CENTS,
   PixWithdrawal,
+  PRIMARY_OWNER_UID,
   PromoCode,
   Referral,
   SupportMessage,
@@ -168,6 +172,7 @@ export const AdminPanel: React.FC = React.memo(() => {
     firebaseUser,
     userAccount,
     isAdmin,
+    isOwner,
     withdrawalSettings,
     maintenanceSettings,
     updateMaintenanceSettings,
@@ -178,7 +183,10 @@ export const AdminPanel: React.FC = React.memo(() => {
 
   const [tab, setTab] = useState<AdminTab>('overview');
   const [users, setUsers] = useState<UserAccount[]>([]);
-  const [adminUids, setAdminUids] = useState<string[]>([]);
+  const [adminRecords, setAdminRecords] = useState<AdminRoleRecord[]>([]);
+  const [confirmRevokeUid, setConfirmRevokeUid] = useState<string | null>(null);
+  const [confirmDeleteMsgId, setConfirmDeleteMsgId] = useState<string | null>(null);
+  const [adminActionBusyUid, setAdminActionBusyUid] = useState<string | null>(null);
   const [privateMap, setPrivateMap] = useState<Record<string, UserPrivateInfo>>({});
   const [withdrawals, setWithdrawals] = useState<PixWithdrawal[]>([]);
   const [fraudLogs, setFraudLogs] = useState<FraudEvent[]>([]);
@@ -354,7 +362,18 @@ export const AdminPanel: React.FC = React.memo(() => {
 
     const uAdmins = onSnapshot(
       collection(db, 'admins'),
-      (snap) => setAdminUids(snap.docs.map((adminDoc) => adminDoc.id)),
+      (snap) => {
+        const list = snap.docs.map((adminDoc) => {
+          const data = adminDoc.data() as Partial<AdminRoleRecord>;
+          return {
+            uid: data.uid || adminDoc.id,
+            email: data.email || '',
+            grantedBy: data.grantedBy || 'admin',
+            createdAt: data.createdAt,
+          } as AdminRoleRecord;
+        });
+        setAdminRecords(list);
+      },
       (err) => handleFirestoreError(err, OperationType.LIST, 'admins')
     );
 
@@ -398,26 +417,28 @@ export const AdminPanel: React.FC = React.memo(() => {
       (err) => handleFirestoreError(err, OperationType.LIST, 'gameSessions')
     );
 
-    const u5 = onSnapshot(
-      query(collection(db, 'integrations'), orderBy('createdAt', 'desc')),
-      (snap) => {
-        const list = snap.docs.map((d) => d.data() as EnterpriseIntegration);
-        setIntegrations(list);
-        list.forEach((intg) => {
-          fetch('/api/v1/keys/sync', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              integrationId: intg.integrationId,
-              name: intg.name,
-              keyHash: intg.apiKeyHash,
-              active: intg.active,
-            }),
-          }).catch(() => {});
-        });
-      },
-      (err) => handleFirestoreError(err, OperationType.LIST, 'integrations')
-    );
+    const u5 = isOwner
+      ? onSnapshot(
+          query(collection(db, 'integrations'), orderBy('createdAt', 'desc')),
+          (snap) => {
+            const list = snap.docs.map((d) => d.data() as EnterpriseIntegration);
+            setIntegrations(list);
+            list.forEach((intg) => {
+              fetch('/api/v1/keys/sync', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  integrationId: intg.integrationId,
+                  name: intg.name,
+                  keyHash: intg.apiKeyHash,
+                  active: intg.active,
+                }),
+              }).catch(() => {});
+            });
+          },
+          (err) => handleFirestoreError(err, OperationType.LIST, 'integrations')
+        )
+      : () => {};
 
     const u6 = onSnapshot(
       query(collection(db, 'promoCodes'), orderBy('createdAt', 'desc')),
@@ -462,7 +483,7 @@ export const AdminPanel: React.FC = React.memo(() => {
       u9();
       u10();
     };
-  }, [firebaseUser, isAdmin]);
+  }, [firebaseUser, isAdmin, isOwner]);
 
   useEffect(() => {
     if (!isAdmin || !selectedTicketId) {
@@ -1063,30 +1084,64 @@ export const AdminPanel: React.FC = React.memo(() => {
     }
   };
 
+  const adminUids = useMemo(
+    () => adminRecords.map((record) => record.uid),
+    [adminRecords]
+  );
+
+  const isUserProtectedOwner = (u: UserAccount) => {
+    const email = privateMap[u.uid]?.email || '';
+    return isOwnerIdentity(email, u.uid) || u.verifiedBadge === 'owner';
+  };
+
   const promoteAdmin = async (u: UserAccount) => {
-    const email = privateMap[u.uid]?.email || 'admin@earneasy.app';
+    if (!isOwner) {
+      setActionErr('Somente o Dono da plataforma pode promover administradores.');
+      return;
+    }
+    if (isUserProtectedOwner(u)) {
+      setActionErr('O Dono já possui controle absoluto protegido.');
+      return;
+    }
+    const email = (privateMap[u.uid]?.email || 'admin@earneasy.app').slice(0, 160);
+    setAdminActionBusyUid(u.uid);
+    setActionErr(null);
+    setActionMsg(null);
     try {
       await setDoc(doc(db, 'admins', u.uid), {
         uid: u.uid,
         email,
-        grantedBy: firebaseUser?.uid || 'admin',
+        grantedBy: firebaseUser?.uid || 'owner',
         createdAt: serverTimestamp(),
       });
-      setActionMsg(`${u.displayName} promovido a administrador.`);
+      setActionMsg(`${u.displayName} promovido a administrador limitado.`);
     } catch (err) {
       setActionErr(extractReadableError(err, 'Erro ao promover usuário.'));
+    } finally {
+      setAdminActionBusyUid(null);
     }
   };
 
-  const revokeAdmin = async (u: UserAccount) => {
-    if (!firebaseUser || u.uid === firebaseUser.uid) return;
-    const confirmed = window.confirm(`Retirar o cargo de administrador de ${u.displayName}?`);
-    if (!confirmed) return;
+  const revokeAdminByUid = async (targetUid: string, targetLabel?: string) => {
+    if (!firebaseUser || !isOwner) {
+      setActionErr('Somente o Dono da plataforma pode remover administradores.');
+      return;
+    }
+    if (isOwnerIdentity(null, targetUid) || targetUid === firebaseUser.uid) {
+      setActionErr('A conta do Dono não pode ser rebaixada.');
+      return;
+    }
+    setAdminActionBusyUid(targetUid);
+    setActionErr(null);
+    setActionMsg(null);
     try {
-      await deleteDoc(doc(db, 'admins', u.uid));
-      setActionMsg(`Permissão de administrador removida de ${u.displayName}.`);
+      await deleteDoc(doc(db, 'admins', targetUid));
+      setConfirmRevokeUid(null);
+      setActionMsg(`Permissão de administrador removida de ${targetLabel || targetUid}.`);
     } catch (err) {
       setActionErr(extractReadableError(err, 'Erro ao remover administrador.'));
+    } finally {
+      setAdminActionBusyUid(null);
     }
   };
 
@@ -1494,11 +1549,10 @@ export const AdminPanel: React.FC = React.memo(() => {
 
   const deleteGlobalChatMessage = async (message: { id: string; senderName?: string; text?: string }) => {
     if (!isAdmin) return;
-    const confirmed = window.confirm(`Excluir a mensagem de ${message.senderName || 'jogador'}? Esta ação não pode ser desfeita.`);
-    if (!confirmed) return;
     try {
       await deleteDoc(doc(db, 'globalMessages', message.id));
-      setActionMsg('Mensagem excluída do chat global.');
+      setConfirmDeleteMsgId(null);
+      setActionMsg(`Mensagem de ${message.senderName || 'jogador'} excluída do chat global.`);
     } catch (err) {
       setActionErr(extractReadableError(err, 'Não foi possível excluir a mensagem.'));
     }
@@ -1594,7 +1648,7 @@ export const AdminPanel: React.FC = React.memo(() => {
     Icon: React.FC<{ className?: string }>;
     badge?: number;
   }> = [
-    { id: 'overview', label: 'Visão Geral & Manutenção', Icon: LayoutDashboard },
+    { id: 'overview', label: isOwner ? 'Visão Geral & Manutenção' : 'Visão Geral', Icon: LayoutDashboard },
     {
       id: 'verification',
       label: 'Verificação Azul',
@@ -1622,7 +1676,7 @@ export const AdminPanel: React.FC = React.memo(() => {
       Icon: ShieldCheck,
       badge: fraudLogs.filter((f) => !f.resolved).length || undefined,
     },
-    { id: 'api', label: 'API & SMTP', Icon: Webhook },
+    ...(isOwner ? [{ id: 'api' as AdminTab, label: 'API & SMTP', Icon: Webhook }] : []),
   ];
 
   return (
@@ -1758,10 +1812,11 @@ export const AdminPanel: React.FC = React.memo(() => {
             </div>
           </div>
 
-          <form
-            onSubmit={handleSaveMaintenance}
-            className="bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 sm:p-6 space-y-5 shadow-sm"
-          >
+          {isOwner && (
+            <form
+              onSubmit={handleSaveMaintenance}
+              className="bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 sm:p-6 space-y-5 shadow-sm"
+            >
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 dark:border-zinc-800 pb-4">
               <div className="flex items-start gap-3">
                 <div className="w-10 h-10 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-600 dark:text-lime-400 flex items-center justify-center shrink-0">
@@ -1851,6 +1906,7 @@ export const AdminPanel: React.FC = React.memo(() => {
               </button>
             </div>
           </form>
+          )}
         </div>
       )}
 
@@ -1882,7 +1938,8 @@ export const AdminPanel: React.FC = React.memo(() => {
 
         return (
           <div className="space-y-6">
-            {/* Configurable Pix Withdrawal Minimums */}
+            {/* Configurable Pix Withdrawal Minimums (Exclusivo do Dono) */}
+            {isOwner && (
             <form
               onSubmit={handleSaveWithdrawalSettings}
               className="bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 sm:p-6 space-y-5"
@@ -2004,6 +2061,7 @@ export const AdminPanel: React.FC = React.memo(() => {
                 </div>
               )}
             </form>
+            )}
 
             {/* Solicitações de Saque Pix */}
             <div className="bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 sm:p-6 space-y-4">
@@ -2346,180 +2404,318 @@ export const AdminPanel: React.FC = React.memo(() => {
 
       {/* TAB 3: USUÁRIOS & MODERAÇÃO */}
       {tab === 'users' && (
-        <div className="bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 sm:p-6 space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <h3 className="text-base font-bold text-slate-900 dark:text-white">
-              Controle de Usuários ({filteredUsers.length})
-            </h3>
-            <div className="relative w-full sm:w-72">
-              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-              <input
-                type="text"
-                value={userSearch}
-                onChange={(e) => setUserSearch(e.target.value)}
-                placeholder="Buscar por nome, e-mail ou UID..."
-                className="w-full min-h-[42px] pl-9 pr-3 py-2 text-xs bg-white dark:bg-[#090d12] border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-xl"
-              />
-            </div>
-          </div>
+        <div className="space-y-5">
+          {isOwner && (
+            <div className="bg-amber-50/70 dark:bg-amber-950/20 border border-amber-300/70 dark:border-amber-700/50 rounded-3xl p-5 sm:p-6 space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                    <ShieldCheck className="w-5 h-5 text-amber-500" />
+                    Administradores Ativos (Exclusivo do Dono)
+                  </h3>
+                  <p className="text-xs text-slate-600 dark:text-zinc-400 mt-0.5">
+                    Apenas você ({ADMIN_BOOTSTRAP_EMAIL}) pode conceder ou remover o cargo de administrador. Admins limitados nunca podem alterar o Dono nem promover/remover outros administradores.
+                  </p>
+                </div>
+                <span className="px-2.5 py-1 rounded-xl bg-amber-500/15 border border-amber-500/35 text-[11px] font-mono font-bold text-amber-800 dark:text-amber-300 tabular-nums">
+                  {adminRecords.filter((r) => r.uid !== PRIMARY_OWNER_UID).length} delegados
+                </span>
+              </div>
 
-          <div className="space-y-3">
-            {filteredUsers.map((u) => {
-              const userBanHistory = fraudLogs.filter(
-                (f) =>
-                  f.userId === u.uid &&
-                  (f.eventType === 'admin_ban' || f.eventType === 'profanity_username_ban')
-              );
-              return (
-                <div
-                  key={u.uid}
-                  className="p-4 rounded-2xl border border-slate-200 dark:border-zinc-800 bg-slate-50/70 dark:bg-[#090d12] flex flex-col lg:flex-row lg:items-center justify-between gap-4 text-xs"
-                >
-                  <div className="space-y-1.5 min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-sm font-bold text-slate-900 dark:text-white break-words">
-                        {u.displayName}
-                      </span>
-                      <VerifiedBadge
-                        tier={u.verifiedBadge}
-                        legacyVerified={u.identityVerified}
-                        showLabel
-                        size="xs"
-                      />
-                      {adminUids.includes(u.uid) && (
-                        <span className="px-2 py-0.5 rounded-lg text-[11px] font-bold bg-lime-100 dark:bg-lime-500/15 text-lime-800 dark:text-lime-300">
-                          Administrador
-                        </span>
-                      )}
-                      <span
-                        className={`px-2 py-0.5 rounded-lg text-[11px] font-bold ${
-                          u.status === 'active'
-                            ? 'bg-emerald-50 dark:bg-lime-500/15 text-emerald-700 dark:text-lime-400'
-                            : 'bg-red-50 dark:bg-red-950/50 text-red-700 dark:text-red-300'
-                        }`}
-                      >
-                        {u.status === 'active' ? 'Ativo' : u.suspensionUntil && timestampToMillis(u.suspensionUntil) > Date.now() ? 'Bloqueado temporariamente' : 'Banido'}
-                      </span>
+              <div className="space-y-2">
+                <div className="p-3.5 rounded-2xl bg-white dark:bg-[#0e1319] border border-amber-300/70 dark:border-amber-600/40 flex flex-wrap items-center justify-between gap-3 text-xs">
+                  <div className="min-w-0 space-y-0.5">
+                    <div className="font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                      <span>{userAccount?.displayName || 'Dono Oficial'}</span>
+                      <VerifiedBadge tier="owner" showLabel size="xs" />
                     </div>
-
                     <div className="font-mono text-[11px] text-slate-500 dark:text-zinc-400 break-all">
-                      {privateMap[u.uid]?.email ? `${privateMap[u.uid].email} · ` : ''}UID: {u.uid}
+                      {ADMIN_BOOTSTRAP_EMAIL} · UID: {PRIMARY_OWNER_UID}
                     </div>
-
-                    <div className="flex flex-wrap gap-x-4 gap-y-1 font-mono text-[11px] pt-1">
-                      <span className="text-slate-700 dark:text-zinc-300">
-                        Pontos: <strong>{formatPoints(u.pointsBalance)}</strong>
-                      </span>
-                      <span className="text-emerald-700 dark:text-lime-400">
-                        Saldo: <strong>{formatBRL(u.brlBalanceCents)}</strong>
-                      </span>
-                      <span className="text-slate-700 dark:text-zinc-300">
-                        Sacado: <strong>{formatBRL(u.totalWithdrawnCents)}</strong>
-                      </span>
-                      <span className="text-slate-700 dark:text-zinc-300">
-                        Risco: <strong>{u.riskScore}/100</strong>
-                      </span>
-                    </div>
-
-                    {u.status === 'suspended' && (u.banReason || u.banExplanation) && (
-                      <div className="mt-1.5 text-[11px] text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/70 rounded-xl p-2.5 space-y-0.5">
-                        {u.banReason && (
-                          <div>
-                            <strong>Motivo:</strong> {u.banReason}
-                          </div>
-                        )}
-                        {u.banExplanation && (
-                          <div>
-                            <strong>Por quê:</strong> {u.banExplanation}
-                          </div>
-                        )}
-                        {Boolean(u.suspensionUntil) && timestampToMillis(u.suspensionUntil) > Date.now() && (
-                          <div>
-                            <strong>Bloqueado até:</strong> {formatAttemptTimestamp(u.suspensionUntil)}
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {u.status === 'active' && userBanHistory.length > 0 && (
-                      <div className="text-[11px] text-amber-700 dark:text-amber-300">
-                        Histórico anterior ({userBanHistory.length}): {userBanHistory[0].details}
-                      </div>
-                    )}
                   </div>
+                  <span className="px-2.5 py-1 rounded-xl bg-amber-500/15 text-amber-800 dark:text-amber-300 font-bold text-[11px]">
+                    Controle Permanente Protegido
+                  </span>
+                </div>
 
-                  <div className="flex flex-wrap items-center gap-2 shrink-0">
-                    {resolveVerifiedBadgeTier(u.verifiedBadge, u.identityVerified) !== 'owner' && (
-                      <button
-                        type="button"
-                        disabled={blueToggleBusyUid === u.uid}
-                        onClick={() => handleToggleBlueVerified(u)}
-                        className={`min-h-[40px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border font-bold cursor-pointer disabled:opacity-50 ${
-                          resolveVerifiedBadgeTier(u.verifiedBadge, u.identityVerified) === 'blue'
-                            ? 'bg-sky-600 text-white border-sky-500 hover:bg-sky-700'
-                            : 'bg-sky-50 dark:bg-sky-950/40 text-sky-700 dark:text-sky-300 border-sky-200 dark:border-sky-800 hover:border-sky-400'
-                        }`}
+                {adminRecords
+                  .filter((rec) => !isOwnerIdentity(rec.email, rec.uid))
+                  .map((rec) => {
+                    const matchedUser = users.find((candidate) => candidate.uid === rec.uid);
+                    const displayLabel = matchedUser?.displayName || rec.email || rec.uid;
+                    const resolvedEmail = privateMap[rec.uid]?.email || rec.email || 'Sem e-mail registrado';
+                    const isConfirming = confirmRevokeUid === rec.uid;
+                    const isBusy = adminActionBusyUid === rec.uid;
+                    return (
+                      <div
+                        key={rec.uid}
+                        className="p-3.5 rounded-2xl bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 flex flex-wrap items-center justify-between gap-3 text-xs"
                       >
-                        <BadgeCheck className="w-3.5 h-3.5" />
-                        {blueToggleBusyUid === u.uid
-                          ? 'Salvando...'
-                          : resolveVerifiedBadgeTier(u.verifiedBadge, u.identityVerified) === 'blue'
-                            ? 'Remover Verificado'
-                            : 'Dar Verificado Azul'}
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => openPointsModal(u)}
-                      className="min-h-[40px] px-3 py-1.5 bg-sky-50 dark:bg-sky-950/40 text-sky-700 dark:text-sky-300 border border-sky-200 dark:border-sky-800 rounded-xl font-bold cursor-pointer"
-                    >
-                      Ajustar pontos
-                    </button>
-                    {u.status === 'active' ? (
-                      <button
-                        type="button"
-                        onClick={() => openBanModal(u)}
-                        className="min-h-[40px] inline-flex items-center gap-1.5 px-3 py-1.5 bg-red-50 dark:bg-red-950/50 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800 rounded-xl font-bold cursor-pointer"
-                      >
-                        <Ban className="w-3.5 h-3.5" />
-                        Banir
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => reactivateUser(u)}
-                        className="min-h-[40px] px-3 py-1.5 bg-emerald-50 dark:bg-lime-500/15 text-emerald-700 dark:text-lime-400 border border-emerald-200 dark:border-lime-500/40 rounded-xl font-bold cursor-pointer"
-                      >
-                        Reativar
-                      </button>
-                    )}
-                    {adminUids.includes(u.uid) ? (
-                      u.uid === firebaseUser?.uid ? (
-                        <span className="min-h-[40px] inline-flex items-center px-3 py-1.5 text-slate-500 dark:text-zinc-400 text-[11px] font-semibold">
-                          Seu administrador
+                        <div className="min-w-0 space-y-0.5">
+                          <div className="font-bold text-slate-900 dark:text-white flex items-center gap-2 flex-wrap">
+                            <span>{displayLabel}</span>
+                            <span className="px-2 py-0.5 rounded-lg bg-lime-100 dark:bg-lime-500/15 text-lime-800 dark:text-lime-300 text-[10px] font-bold">
+                              Admin Limitado
+                            </span>
+                          </div>
+                          <div className="font-mono text-[11px] text-slate-500 dark:text-zinc-400 break-all">
+                            {resolvedEmail} · UID: {rec.uid}
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2 shrink-0">
+                          {isConfirming ? (
+                            <>
+                              <button
+                                type="button"
+                                disabled={isBusy}
+                                onClick={() => revokeAdminByUid(rec.uid, displayLabel)}
+                                className="min-h-[38px] px-3 py-1.5 bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white rounded-xl font-bold cursor-pointer"
+                              >
+                                {isBusy ? 'Removendo...' : 'Confirmar Remoção'}
+                              </button>
+                              <button
+                                type="button"
+                                disabled={isBusy}
+                                onClick={() => setConfirmRevokeUid(null)}
+                                className="min-h-[38px] px-3 py-1.5 border border-slate-200 dark:border-zinc-700 text-slate-600 dark:text-zinc-300 rounded-xl font-semibold cursor-pointer"
+                              >
+                                Cancelar
+                              </button>
+                            </>
+                          ) : (
+                            <button
+                              type="button"
+                              disabled={isBusy}
+                              onClick={() => setConfirmRevokeUid(rec.uid)}
+                              className="min-h-[38px] px-3 py-1.5 bg-red-50 dark:bg-red-950/50 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800 rounded-xl font-bold cursor-pointer"
+                            >
+                              Remover Admin
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                {adminRecords.filter((rec) => !isOwnerIdentity(rec.email, rec.uid)).length === 0 && (
+                  <p className="text-xs text-slate-500 dark:text-zinc-400 py-2">
+                    Nenhum administrador delegado ativo no momento. Apenas você possui acesso administrativo.
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+
+          <div className="bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 sm:p-6 space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                Controle de Usuários ({filteredUsers.length})
+              </h3>
+              <div className="relative w-full sm:w-72">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type="text"
+                  value={userSearch}
+                  onChange={(e) => setUserSearch(e.target.value)}
+                  placeholder="Buscar por nome, e-mail ou UID..."
+                  className="w-full min-h-[42px] pl-9 pr-3 py-2 text-xs bg-white dark:bg-[#090d12] border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-xl"
+                />
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              {filteredUsers.map((u) => {
+                const targetIsOwner = isUserProtectedOwner(u);
+                const targetIsDelegatedAdmin = adminUids.includes(u.uid) && !targetIsOwner;
+                const userBanHistory = fraudLogs.filter(
+                  (f) =>
+                    f.userId === u.uid &&
+                    (f.eventType === 'admin_ban' || f.eventType === 'profanity_username_ban')
+                );
+                return (
+                  <div
+                    key={u.uid}
+                    className="p-4 rounded-2xl border border-slate-200 dark:border-zinc-800 bg-slate-50/70 dark:bg-[#090d12] flex flex-col lg:flex-row lg:items-center justify-between gap-4 text-xs"
+                  >
+                    <div className="space-y-1.5 min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-sm font-bold text-slate-900 dark:text-white break-words">
+                          {u.displayName}
+                        </span>
+                        <VerifiedBadge
+                          tier={u.verifiedBadge}
+                          legacyVerified={u.identityVerified}
+                          showLabel
+                          size="xs"
+                        />
+                        {targetIsDelegatedAdmin && (
+                          <span className="px-2 py-0.5 rounded-lg text-[11px] font-bold bg-lime-100 dark:bg-lime-500/15 text-lime-800 dark:text-lime-300">
+                            Administrador
+                          </span>
+                        )}
+                        <span
+                          className={`px-2 py-0.5 rounded-lg text-[11px] font-bold ${
+                            u.status === 'active'
+                              ? 'bg-emerald-50 dark:bg-lime-500/15 text-emerald-700 dark:text-lime-400'
+                              : 'bg-red-50 dark:bg-red-950/50 text-red-700 dark:text-red-300'
+                          }`}
+                        >
+                          {u.status === 'active' ? 'Ativo' : u.suspensionUntil && timestampToMillis(u.suspensionUntil) > Date.now() ? 'Bloqueado temporariamente' : 'Banido'}
+                        </span>
+                      </div>
+
+                      <div className="font-mono text-[11px] text-slate-500 dark:text-zinc-400 break-all">
+                        {privateMap[u.uid]?.email ? `${privateMap[u.uid].email} · ` : ''}UID: {u.uid}
+                      </div>
+
+                      <div className="flex flex-wrap gap-x-4 gap-y-1 font-mono text-[11px] pt-1">
+                        <span className="text-slate-700 dark:text-zinc-300">
+                          Pontos: <strong>{formatPoints(u.pointsBalance)}</strong>
+                        </span>
+                        <span className="text-emerald-700 dark:text-lime-400">
+                          Saldo: <strong>{formatBRL(u.brlBalanceCents)}</strong>
+                        </span>
+                        <span className="text-slate-700 dark:text-zinc-300">
+                          Sacado: <strong>{formatBRL(u.totalWithdrawnCents)}</strong>
+                        </span>
+                        <span className="text-slate-700 dark:text-zinc-300">
+                          Risco: <strong>{u.riskScore}/100</strong>
+                        </span>
+                      </div>
+
+                      {u.status === 'suspended' && (u.banReason || u.banExplanation) && (
+                        <div className="mt-1.5 text-[11px] text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/70 rounded-xl p-2.5 space-y-0.5">
+                          {u.banReason && (
+                            <div>
+                              <strong>Motivo:</strong> {u.banReason}
+                            </div>
+                          )}
+                          {u.banExplanation && (
+                            <div>
+                              <strong>Por quê:</strong> {u.banExplanation}
+                            </div>
+                          )}
+                          {Boolean(u.suspensionUntil) && timestampToMillis(u.suspensionUntil) > Date.now() && (
+                            <div>
+                              <strong>Bloqueado até:</strong> {formatAttemptTimestamp(u.suspensionUntil)}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {u.status === 'active' && userBanHistory.length > 0 && (
+                        <div className="text-[11px] text-amber-700 dark:text-amber-300">
+                          Histórico anterior ({userBanHistory.length}): {userBanHistory[0].details}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2 shrink-0">
+                      {targetIsOwner && !isOwner ? (
+                        <span className="min-h-[40px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/15 border border-amber-500/35 text-amber-800 dark:text-amber-300 text-[11px] font-extrabold">
+                          <ShieldCheck className="w-3.5 h-3.5" />
+                          Dono Protegido
                         </span>
                       ) : (
-                        <button
-                          type="button"
-                          onClick={() => revokeAdmin(u)}
-                          className="min-h-[40px] px-3 py-1.5 bg-red-50 dark:bg-red-950/50 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800 rounded-xl font-bold cursor-pointer"
-                        >
-                          Retirar Admin
-                        </button>
-                      )
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => promoteAdmin(u)}
-                        className="min-h-[40px] px-3 py-1.5 bg-white dark:bg-zinc-800 text-slate-800 dark:text-zinc-200 border border-slate-200 dark:border-zinc-700 rounded-xl font-semibold hover:border-lime-400 cursor-pointer"
-                      >
-                        Tornar Admin
-                      </button>
-                    )}
+                        <>
+                          {!targetIsOwner && (
+                            <button
+                              type="button"
+                              disabled={blueToggleBusyUid === u.uid}
+                              onClick={() => handleToggleBlueVerified(u)}
+                              className={`min-h-[40px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border font-bold cursor-pointer disabled:opacity-50 ${
+                                resolveVerifiedBadgeTier(u.verifiedBadge, u.identityVerified) === 'blue'
+                                  ? 'bg-sky-600 text-white border-sky-500 hover:bg-sky-700'
+                                  : 'bg-sky-50 dark:bg-sky-950/40 text-sky-700 dark:text-sky-300 border-sky-200 dark:border-sky-800 hover:border-sky-400'
+                              }`}
+                            >
+                              <BadgeCheck className="w-3.5 h-3.5" />
+                              {blueToggleBusyUid === u.uid
+                                ? 'Salvando...'
+                                : resolveVerifiedBadgeTier(u.verifiedBadge, u.identityVerified) === 'blue'
+                                  ? 'Remover Verificado'
+                                  : 'Dar Verificado Azul'}
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => openPointsModal(u)}
+                            className="min-h-[40px] px-3 py-1.5 bg-sky-50 dark:bg-sky-950/40 text-sky-700 dark:text-sky-300 border border-sky-200 dark:border-sky-800 rounded-xl font-bold cursor-pointer"
+                          >
+                            Ajustar pontos
+                          </button>
+                          {!targetIsOwner && (
+                            u.status === 'active' ? (
+                              <button
+                                type="button"
+                                onClick={() => openBanModal(u)}
+                                className="min-h-[40px] inline-flex items-center gap-1.5 px-3 py-1.5 bg-red-50 dark:bg-red-950/50 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800 rounded-xl font-bold cursor-pointer"
+                              >
+                                <Ban className="w-3.5 h-3.5" />
+                                Banir
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => reactivateUser(u)}
+                                className="min-h-[40px] px-3 py-1.5 bg-emerald-50 dark:bg-lime-500/15 text-emerald-700 dark:text-lime-400 border border-emerald-200 dark:border-lime-500/40 rounded-xl font-bold cursor-pointer"
+                              >
+                                Reativar
+                              </button>
+                            )
+                          )}
+                          {targetIsOwner ? (
+                            <span className="min-h-[40px] inline-flex items-center px-3 py-1.5 text-amber-600 dark:text-amber-300 text-[11px] font-bold">
+                              Dono da Plataforma
+                            </span>
+                          ) : isOwner ? (
+                            targetIsDelegatedAdmin ? (
+                              confirmRevokeUid === u.uid ? (
+                                <div className="inline-flex items-center gap-1.5">
+                                  <button
+                                    type="button"
+                                    disabled={adminActionBusyUid === u.uid}
+                                    onClick={() => revokeAdminByUid(u.uid, u.displayName)}
+                                    className="min-h-[40px] px-3 py-1.5 bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white rounded-xl font-bold cursor-pointer"
+                                  >
+                                    {adminActionBusyUid === u.uid ? 'Removendo...' : 'Confirmar'}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setConfirmRevokeUid(null)}
+                                    className="min-h-[40px] px-2.5 py-1.5 border border-slate-200 dark:border-zinc-700 text-slate-600 dark:text-zinc-300 rounded-xl font-semibold cursor-pointer"
+                                  >
+                                    Cancelar
+                                  </button>
+                                </div>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => setConfirmRevokeUid(u.uid)}
+                                  className="min-h-[40px] px-3 py-1.5 bg-red-50 dark:bg-red-950/50 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800 rounded-xl font-bold cursor-pointer"
+                                >
+                                  Retirar Admin
+                                </button>
+                              )
+                            ) : (
+                              <button
+                                type="button"
+                                disabled={adminActionBusyUid === u.uid}
+                                onClick={() => promoteAdmin(u)}
+                                className="min-h-[40px] px-3 py-1.5 bg-white dark:bg-zinc-800 text-slate-800 dark:text-zinc-200 border border-slate-200 dark:border-zinc-700 rounded-xl font-semibold hover:border-lime-400 cursor-pointer disabled:opacity-50"
+                              >
+                                {adminActionBusyUid === u.uid ? 'Promovendo...' : 'Tornar Admin'}
+                              </button>
+                            )
+                          ) : null}
+                        </>
+                      )}
+                    </div>
                   </div>
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
           </div>
         </div>
       )}
@@ -3093,14 +3289,33 @@ export const AdminPanel: React.FC = React.memo(() => {
                     <p className="text-sm text-slate-700 dark:text-zinc-300 break-words">{message.text || ''}</p>
                     <div className="text-[10px] text-slate-400 dark:text-zinc-500 font-mono break-all">ID: {message.id}</div>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => deleteGlobalChatMessage(message)}
-                    className="inline-flex items-center justify-center gap-1.5 min-h-[36px] px-3 py-2 rounded-xl bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/60 text-red-700 dark:text-red-300 text-xs font-bold hover:bg-red-100 dark:hover:bg-red-950/50 shrink-0 cursor-pointer"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                    Excluir mensagem
-                  </button>
+                  {confirmDeleteMsgId === message.id ? (
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => deleteGlobalChatMessage(message)}
+                        className="min-h-[36px] px-3 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-bold cursor-pointer"
+                      >
+                        Confirmar Exclusão
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmDeleteMsgId(null)}
+                        className="min-h-[36px] px-2.5 py-2 rounded-xl border border-slate-200 dark:border-zinc-700 text-slate-600 dark:text-zinc-300 text-xs font-semibold cursor-pointer"
+                      >
+                        Cancelar
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setConfirmDeleteMsgId(message.id)}
+                      className="inline-flex items-center justify-center gap-1.5 min-h-[36px] px-3 py-2 rounded-xl bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/60 text-red-700 dark:text-red-300 text-xs font-bold hover:bg-red-100 dark:hover:bg-red-950/50 shrink-0 cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      Excluir mensagem
+                    </button>
+                  )}
                 </div>
               ))}
             </div>
@@ -3189,8 +3404,8 @@ export const AdminPanel: React.FC = React.memo(() => {
         </div>
       )}
 
-      {/* TAB 7: API EMPRESARIAL & SMTP */}
-      {tab === 'api' && (
+      {/* TAB 7: API EMPRESARIAL & SMTP (Exclusivo do Dono) */}
+      {tab === 'api' && isOwner && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           <div className="lg:col-span-5 bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 sm:p-6 space-y-4">
             <div className="flex items-center gap-2">

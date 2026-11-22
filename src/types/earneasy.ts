@@ -482,7 +482,24 @@ export interface SupportMessage {
   createdAt: unknown;
 }
 
-export const ADMIN_BOOTSTRAP_EMAIL = 'anthonysamuel61500@gmail.com';
+export interface AdminRoleRecord {
+  uid: string;
+  email: string;
+  grantedBy: string;
+  createdAt: unknown;
+}
+
+export type SocialMessageType = 'text' | 'image' | 'audio';
+
+export const ADMIN_BOOTSTRAP_EMAIL = 'riel6359@gmail.com';
+export const PRIMARY_OWNER_UID = 'H93H113NSHg0K3ircdUTe7fY0Gt1';
+
+export function isOwnerIdentity(email?: string | null, uid?: string | null): boolean {
+  const cleanEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
+  const cleanUid = typeof uid === 'string' ? uid.trim() : '';
+  return cleanEmail === ADMIN_BOOTSTRAP_EMAIL || cleanUid === PRIMARY_OWNER_UID;
+}
+
 export const POINTS_PER_TEN_CENTS = 1000;
 export const CENTS_PER_BLOCK = 10;
 export const FIRST_PIX_WITHDRAWAL_MIN_CENTS = 10;

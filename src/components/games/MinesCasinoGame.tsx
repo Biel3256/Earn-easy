@@ -7,10 +7,13 @@ import {
   Play,
   ShieldCheck,
   Sparkles,
+  Volume2,
+  VolumeX,
   Wallet,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { CasinoCurrency } from '../../types/earneasy';
+import { casinoSound } from '../../utils/casinoSound';
 import { extractReadableError, formatBRL, formatPoints } from '../../utils/pix';
 
 interface MinesCasinoGameProps {
@@ -19,7 +22,7 @@ interface MinesCasinoGameProps {
 
 const POINTS_CHIPS = [10, 50, 100, 500, 1000];
 const BRL_CHIPS_CENTS = [10, 50, 100, 500, 1000];
-const MINES_PRESETS = [3, 5, 10, 15];
+const MINES_PRESETS = [1, 3, 5, 10, 15];
 
 function previewMinesMultiplier(minesCount: number, safeCount: number): number {
   if (safeCount <= 0) return 1;
@@ -42,6 +45,7 @@ export const MinesCasinoGame: React.FC<MinesCasinoGameProps> = ({ onBack }) => {
   const [stakePoints, setStakePoints] = useState<number>(50);
   const [stakeCents, setStakeCents] = useState<number>(50);
   const [minesCount, setMinesCount] = useState<number>(3);
+  const [muted, setMuted] = useState<boolean>(false);
 
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [activeCurrency, setActiveCurrency] = useState<CasinoCurrency>('points');
@@ -62,6 +66,7 @@ export const MinesCasinoGame: React.FC<MinesCasinoGameProps> = ({ onBack }) => {
   const availableBalance = currency === 'points' ? pointsBalance : brlBalanceCents;
   const minStake = currency === 'points' ? 10 : 1;
   const maxStake = currency === 'points' ? 10000 : 5000;
+  const effectiveMax = Math.min(maxStake, availableBalance);
   const isPlaying = roundOutcome === 'playing';
 
   const mineSet = useMemo(() => new Set(minePositions), [minePositions]);
@@ -69,6 +74,29 @@ export const MinesCasinoGame: React.FC<MinesCasinoGameProps> = ({ onBack }) => {
 
   const formatAmount = (val: number, curr: CasinoCurrency = currency) =>
     curr === 'points' ? `${formatPoints(val)} pts` : formatBRL(val);
+
+  const handleAdjustStake = (factor: number) => {
+    if (isPlaying || busyAction) return;
+    setErrorMsg(null);
+    if (currency === 'points') {
+      const next = Math.max(minStake, Math.min(effectiveMax || minStake, Math.floor(stakePoints * factor)));
+      setStakePoints(next);
+    } else {
+      const next = Math.max(minStake, Math.min(effectiveMax || minStake, Math.floor(stakeCents * factor)));
+      setStakeCents(next);
+    }
+  };
+
+  const handleMaxStake = () => {
+    if (isPlaying || busyAction) return;
+    setErrorMsg(null);
+    const cap = Math.max(minStake, Math.min(maxStake, availableBalance));
+    if (currency === 'points') {
+      setStakePoints(cap);
+    } else {
+      setStakeCents(cap);
+    }
+  };
 
   const handleStartRound = async () => {
     if (busyAction || isPlaying) return;
@@ -141,6 +169,7 @@ export const MinesCasinoGame: React.FC<MinesCasinoGameProps> = ({ onBack }) => {
       }
 
       if (data.busted) {
+        casinoSound.playMinesBomb(muted);
         setBustedTile(tileIndex);
         setMinePositions(Array.isArray(data.minePositions) ? data.minePositions : []);
         setRoundOutcome('lost');
@@ -168,6 +197,7 @@ export const MinesCasinoGame: React.FC<MinesCasinoGameProps> = ({ onBack }) => {
       setNextMultiplier(Number(data.nextMultiplier) || nextMult);
 
       if (data.allSafeCleared) {
+        casinoSound.playMinesCashout(muted);
         setMinePositions(Array.isArray(data.minePositions) ? data.minePositions : []);
         setRoundOutcome('won');
         await finishMinesSession({
@@ -179,6 +209,8 @@ export const MinesCasinoGame: React.FC<MinesCasinoGameProps> = ({ onBack }) => {
           integrityHash: String(data.integrityHash || 'cleared'),
         });
         setSessionId(null);
+      } else {
+        casinoSound.playMinesGem(muted, nextSafe.length);
       }
     } catch (err) {
       setErrorMsg(extractReadableError(err, 'Falha de comunicação ao abrir casa.'));
@@ -208,6 +240,7 @@ export const MinesCasinoGame: React.FC<MinesCasinoGameProps> = ({ onBack }) => {
 
       const finalPayout = Number(data.payoutAmount) || payoutAmount;
       const finalMult = Number(data.multiplier) || currentMultiplier;
+      casinoSound.playMinesCashout(muted);
       setMinePositions(Array.isArray(data.minePositions) ? data.minePositions : []);
       setCurrentMultiplier(finalMult);
       setPayoutAmount(finalPayout);
@@ -229,8 +262,15 @@ export const MinesCasinoGame: React.FC<MinesCasinoGameProps> = ({ onBack }) => {
     }
   };
 
+  const activeTotalSafe = 25 - (isPlaying ? activeMinesCount : minesCount);
+  const currentWinPreview = isPlaying
+    ? revealedSafe.length > 0
+      ? formatAmount(payoutAmount, activeCurrency)
+      : formatAmount(activeStake, activeCurrency)
+    : formatAmount(Math.floor(currentStake * nextMultiplier), currency);
+
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       {/* Header Bar */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <button
@@ -246,29 +286,39 @@ export const MinesCasinoGame: React.FC<MinesCasinoGameProps> = ({ onBack }) => {
             }
             onBack();
           }}
-          className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 text-xs font-bold text-slate-700 dark:text-zinc-200 hover:border-sky-400/60 cursor-pointer"
+          className="min-h-[44px] inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 text-xs font-bold text-slate-700 dark:text-zinc-200 hover:border-sky-400/60 cursor-pointer"
         >
           <ArrowLeft className="w-4 h-4" />
           Voltar aos Jogos
         </button>
 
         <div className="flex flex-wrap items-center gap-2">
-          <div className="px-3 py-1.5 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/60 text-xs font-mono font-bold text-amber-700 dark:text-amber-300 flex items-center gap-1.5">
-            <Coins className="w-3.5 h-3.5" />
+          <button
+            type="button"
+            onClick={() => setMuted((prev) => !prev)}
+            aria-label={muted ? 'Ativar som do Mines' : 'Silenciar som do Mines'}
+            className="min-h-[40px] px-3 py-1.5 rounded-xl bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 text-xs font-semibold text-slate-700 dark:text-zinc-300 hover:border-zinc-500 inline-flex items-center gap-1.5 cursor-pointer"
+          >
+            {muted ? <VolumeX className="w-4 h-4 text-zinc-400" /> : <Volume2 className="w-4 h-4 text-sky-400" />}
+            <span className="hidden sm:inline">{muted ? 'Som mudo' : 'Som ativo'}</span>
+          </button>
+
+          <div className="min-h-[40px] px-3.5 py-1.5 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/60 text-xs font-mono font-bold tabular-nums text-amber-700 dark:text-amber-300 flex items-center gap-1.5">
+            <Coins className="w-3.5 h-3.5 shrink-0" />
             {formatPoints(pointsBalance)} pts
           </div>
-          <div className="px-3 py-1.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/60 text-xs font-mono font-bold text-emerald-700 dark:text-emerald-300 flex items-center gap-1.5">
-            <Wallet className="w-3.5 h-3.5" />
+          <div className="min-h-[40px] px-3.5 py-1.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/60 text-xs font-mono font-bold tabular-nums text-emerald-700 dark:text-emerald-300 flex items-center gap-1.5">
+            <Wallet className="w-3.5 h-3.5 shrink-0" />
             {formatBRL(brlBalanceCents)}
           </div>
         </div>
       </div>
 
-      {/* Main Container */}
-      <div className="bg-[#0d121a] border border-zinc-800 rounded-3xl overflow-hidden shadow-xl text-white">
-        <div className="px-5 py-4 border-b border-zinc-800/90 flex flex-wrap items-center justify-between gap-3 bg-gradient-to-r from-[#0e1522] via-[#101827] to-[#0f1f2b]">
+      {/* Main Arena Surface */}
+      <div className="bg-[#0b0f17] border border-zinc-800/90 rounded-3xl overflow-hidden shadow-2xl text-white">
+        <div className="px-5 py-4 border-b border-zinc-800/90 flex flex-wrap items-center justify-between gap-3 bg-gradient-to-r from-[#0e1524] via-[#101829] to-[#0f2130]">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-sky-500/20 border border-sky-400/40 flex items-center justify-center text-sky-400">
+            <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-sky-500/25 to-emerald-500/20 border border-sky-400/40 flex items-center justify-center text-sky-300 shadow-inner">
               <Gem className="w-5 h-5" />
             </div>
             <div>
@@ -276,7 +326,7 @@ export const MinesCasinoGame: React.FC<MinesCasinoGameProps> = ({ onBack }) => {
                 Mines Earn Easy
               </h1>
               <p className="text-[11px] text-zinc-400">
-                Grade 5×5 · Encontre diamantes, evite as bombas e retire quando quiser (sem dinheiro real)
+                Grade 5×5 · Encontre diamantes, evite as bombas e retire quando quiser
               </p>
             </div>
           </div>
@@ -293,7 +343,7 @@ export const MinesCasinoGame: React.FC<MinesCasinoGameProps> = ({ onBack }) => {
             {/* Currency */}
             <div className="space-y-1.5">
               <label className="text-xs font-bold text-zinc-300">Apostar usando:</label>
-              <div className="grid grid-cols-2 gap-2 p-1 rounded-xl bg-[#090d14] border border-zinc-800">
+              <div className="grid grid-cols-2 gap-2 p-1 rounded-xl bg-[#080c12] border border-zinc-800">
                 <button
                   type="button"
                   disabled={isPlaying || busyAction}
@@ -301,7 +351,7 @@ export const MinesCasinoGame: React.FC<MinesCasinoGameProps> = ({ onBack }) => {
                     setCurrency('points');
                     setErrorMsg(null);
                   }}
-                  className={`py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50 ${
+                  className={`min-h-[40px] py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50 ${
                     currency === 'points'
                       ? 'bg-amber-400 text-slate-950'
                       : 'text-zinc-400 hover:text-white'
@@ -317,7 +367,7 @@ export const MinesCasinoGame: React.FC<MinesCasinoGameProps> = ({ onBack }) => {
                     setCurrency('brl');
                     setErrorMsg(null);
                   }}
-                  className={`py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50 ${
+                  className={`min-h-[40px] py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50 ${
                     currency === 'brl'
                       ? 'bg-emerald-500 text-slate-950'
                       : 'text-zinc-400 hover:text-white'
@@ -330,31 +380,59 @@ export const MinesCasinoGame: React.FC<MinesCasinoGameProps> = ({ onBack }) => {
             </div>
 
             {/* Stake Amount */}
-            <div className="space-y-2">
-              <div className="flex items-center justify-between text-xs">
+            <div className="space-y-2.5">
+              <div className="flex items-center justify-between text-xs gap-2">
                 <span className="font-bold text-zinc-300">Valor da Aposta</span>
-                <span className="text-zinc-400 font-mono">
+                <span className="text-zinc-400 font-mono tabular-nums">
                   Disponível: {formatAmount(availableBalance)}
                 </span>
               </div>
-              <input
-                type="number"
-                min={currency === 'points' ? 10 : 0.01}
-                max={currency === 'points' ? 10000 : 50}
-                step={currency === 'points' ? 10 : 0.1}
-                disabled={isPlaying || busyAction}
-                value={currency === 'points' ? stakePoints : Number((stakeCents / 100).toFixed(2))}
-                onChange={(e) => {
-                  const val = Number(e.target.value);
-                  if (!Number.isFinite(val)) return;
-                  if (currency === 'points') {
-                    setStakePoints(Math.max(0, Math.min(10000, Math.floor(val))));
-                  } else {
-                    setStakeCents(Math.max(0, Math.min(5000, Math.round(val * 100))));
-                  }
-                }}
-                className="w-full px-3.5 py-2.5 rounded-xl bg-[#090d14] border border-zinc-700 text-sm font-mono font-bold text-white focus:outline-none focus:ring-2 focus:ring-sky-500 disabled:opacity-50"
-              />
+
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  min={currency === 'points' ? 10 : 0.01}
+                  max={currency === 'points' ? 10000 : 50}
+                  step={currency === 'points' ? 10 : 0.1}
+                  disabled={isPlaying || busyAction}
+                  value={currency === 'points' ? stakePoints : Number((stakeCents / 100).toFixed(2))}
+                  onChange={(e) => {
+                    const val = Number(e.target.value);
+                    if (!Number.isFinite(val)) return;
+                    if (currency === 'points') {
+                      setStakePoints(Math.max(0, Math.min(10000, Math.floor(val))));
+                    } else {
+                      setStakeCents(Math.max(0, Math.min(5000, Math.round(val * 100))));
+                    }
+                  }}
+                  className="flex-1 min-w-0 min-h-[44px] px-3.5 py-2.5 rounded-xl bg-[#080c12] border border-zinc-700 text-sm font-mono font-bold tabular-nums text-white focus:outline-none focus:ring-2 focus:ring-sky-500 disabled:opacity-50"
+                />
+                <button
+                  type="button"
+                  disabled={isPlaying || busyAction}
+                  onClick={() => handleAdjustStake(0.5)}
+                  className="min-h-[44px] px-3 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 text-xs font-mono font-bold text-zinc-200 cursor-pointer"
+                >
+                  ½
+                </button>
+                <button
+                  type="button"
+                  disabled={isPlaying || busyAction}
+                  onClick={() => handleAdjustStake(2)}
+                  className="min-h-[44px] px-3 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 text-xs font-mono font-bold text-zinc-200 cursor-pointer"
+                >
+                  2x
+                </button>
+                <button
+                  type="button"
+                  disabled={isPlaying || busyAction}
+                  onClick={handleMaxStake}
+                  className="min-h-[44px] px-3 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 text-xs font-bold text-amber-300 cursor-pointer"
+                >
+                  Máx
+                </button>
+              </div>
+
               <div className="flex flex-wrap gap-1.5">
                 {(currency === 'points' ? POINTS_CHIPS : BRL_CHIPS_CENTS).map((chip) => (
                   <button
@@ -362,10 +440,10 @@ export const MinesCasinoGame: React.FC<MinesCasinoGameProps> = ({ onBack }) => {
                     type="button"
                     disabled={isPlaying || busyAction}
                     onClick={() => (currency === 'points' ? setStakePoints(chip) : setStakeCents(chip))}
-                    className={`px-2.5 py-1 rounded-lg text-[11px] font-mono font-bold border transition-colors cursor-pointer disabled:opacity-50 ${
+                    className={`px-2.5 py-1.5 rounded-lg text-[11px] font-mono font-bold tabular-nums border transition-colors cursor-pointer disabled:opacity-50 ${
                       currentStake === chip
                         ? 'bg-sky-500/20 border-sky-400 text-sky-200'
-                        : 'bg-[#090d14] border-zinc-800 text-zinc-400 hover:text-white'
+                        : 'bg-[#080c12] border-zinc-800 text-zinc-400 hover:text-white'
                     }`}
                   >
                     {currency === 'points' ? `${chip} pts` : formatBRL(chip)}
@@ -375,10 +453,12 @@ export const MinesCasinoGame: React.FC<MinesCasinoGameProps> = ({ onBack }) => {
             </div>
 
             {/* Mines Selector */}
-            <div className="space-y-2">
+            <div className="space-y-2.5">
               <div className="flex items-center justify-between text-xs">
                 <span className="font-bold text-zinc-300">Quantidade de Bombas</span>
-                <span className="font-mono font-bold text-rose-400">{minesCount} bombas</span>
+                <span className="font-mono font-bold tabular-nums text-rose-400">
+                  {minesCount} {minesCount === 1 ? 'bomba' : 'bombas'}
+                </span>
               </div>
               <input
                 type="range"
@@ -395,7 +475,7 @@ export const MinesCasinoGame: React.FC<MinesCasinoGameProps> = ({ onBack }) => {
                 }}
                 className="w-full accent-sky-400 cursor-pointer disabled:opacity-50"
               />
-              <div className="grid grid-cols-4 gap-1.5">
+              <div className="grid grid-cols-5 gap-1.5">
                 {MINES_PRESETS.map((preset) => (
                   <button
                     key={preset}
@@ -405,10 +485,10 @@ export const MinesCasinoGame: React.FC<MinesCasinoGameProps> = ({ onBack }) => {
                       setMinesCount(preset);
                       if (!isPlaying) setNextMultiplier(previewMinesMultiplier(preset, 1));
                     }}
-                    className={`py-1.5 rounded-lg text-xs font-mono font-bold border cursor-pointer disabled:opacity-50 ${
+                    className={`min-h-[38px] py-1.5 rounded-lg text-xs font-mono font-bold tabular-nums border transition-colors cursor-pointer disabled:opacity-50 ${
                       minesCount === preset
                         ? 'bg-rose-500/20 border-rose-400 text-rose-200'
-                        : 'bg-[#090d14] border-zinc-800 text-zinc-400 hover:text-white'
+                        : 'bg-[#080c12] border-zinc-800 text-zinc-400 hover:text-white'
                     }`}
                   >
                     {preset}
@@ -429,7 +509,7 @@ export const MinesCasinoGame: React.FC<MinesCasinoGameProps> = ({ onBack }) => {
                 type="button"
                 disabled={busyAction}
                 onClick={handleStartRound}
-                className="w-full min-h-[48px] px-5 py-3 rounded-2xl bg-sky-500 hover:bg-sky-400 disabled:opacity-50 text-slate-950 text-sm font-extrabold inline-flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                className="w-full min-h-[48px] px-5 py-3 rounded-2xl bg-gradient-to-r from-sky-500 to-cyan-400 hover:from-sky-400 hover:to-cyan-300 disabled:opacity-50 text-slate-950 text-sm font-extrabold inline-flex items-center justify-center gap-2 shadow-lg shadow-sky-950/40 transition-all cursor-pointer"
               >
                 <Play className="w-4 h-4 fill-current" />
                 {busyAction ? 'Iniciando...' : roundOutcome === 'idle' ? 'Começar Partida' : 'Jogar Novamente'}
@@ -439,7 +519,7 @@ export const MinesCasinoGame: React.FC<MinesCasinoGameProps> = ({ onBack }) => {
                 type="button"
                 disabled={busyAction || revealedSafe.length < 1}
                 onClick={handleCashout}
-                className="w-full min-h-[48px] px-5 py-3 rounded-2xl bg-lime-400 hover:bg-lime-300 disabled:opacity-45 text-slate-950 text-sm font-extrabold inline-flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                className="w-full min-h-[48px] px-5 py-3 rounded-2xl bg-gradient-to-r from-lime-400 to-emerald-400 hover:from-lime-300 hover:to-emerald-300 disabled:opacity-45 text-slate-950 text-sm font-extrabold inline-flex items-center justify-center gap-2 shadow-lg shadow-lime-950/40 transition-all cursor-pointer"
               >
                 <Sparkles className="w-4 h-4" />
                 {revealedSafe.length < 1
@@ -449,32 +529,39 @@ export const MinesCasinoGame: React.FC<MinesCasinoGameProps> = ({ onBack }) => {
             )}
           </div>
 
-          {/* Right: 5x5 Board & Live Stats */}
+          {/* Right: 4-Metric HUD & Tactile 5x5 Board */}
           <div className="lg:col-span-7 space-y-4">
-            {/* Multiplier Strip */}
-            <div className="grid grid-cols-3 gap-2.5">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
               <div className="bg-[#121822] border border-zinc-800 rounded-2xl p-3">
                 <div className="text-[11px] text-zinc-400">Multiplicador Atual</div>
-                <div className="text-lg font-mono font-extrabold text-lime-300 mt-0.5">
+                <div className="text-base sm:text-lg font-mono font-extrabold tabular-nums text-lime-300 mt-0.5">
                   {currentMultiplier.toFixed(2)}x
                 </div>
               </div>
               <div className="bg-[#121822] border border-zinc-800 rounded-2xl p-3">
                 <div className="text-[11px] text-zinc-400">Próxima Casa</div>
-                <div className="text-lg font-mono font-extrabold text-sky-300 mt-0.5">
+                <div className="text-base sm:text-lg font-mono font-extrabold tabular-nums text-sky-300 mt-0.5">
                   {nextMultiplier.toFixed(2)}x
                 </div>
               </div>
               <div className="bg-[#121822] border border-zinc-800 rounded-2xl p-3">
+                <div className="text-[11px] text-zinc-400">
+                  {isPlaying && revealedSafe.length > 0 ? 'Prêmio Atual' : 'Prêmio 1ª Casa'}
+                </div>
+                <div className="text-base sm:text-lg font-mono font-extrabold tabular-nums text-emerald-300 mt-0.5 truncate">
+                  {currentWinPreview}
+                </div>
+              </div>
+              <div className="bg-[#121822] border border-zinc-800 rounded-2xl p-3">
                 <div className="text-[11px] text-zinc-400">Diamantes</div>
-                <div className="text-lg font-mono font-extrabold text-white mt-0.5">
-                  {revealedSafe.length} / {25 - (isPlaying ? activeMinesCount : minesCount)}
+                <div className="text-base sm:text-lg font-mono font-extrabold tabular-nums text-white mt-0.5">
+                  {revealedSafe.length} / {activeTotalSafe}
                 </div>
               </div>
             </div>
 
             {roundOutcome === 'won' && (
-              <div className="p-3.5 rounded-2xl bg-emerald-500/15 border border-emerald-500/40 text-xs sm:text-sm font-bold text-emerald-200 flex items-center justify-between gap-2">
+              <div className="p-3.5 rounded-2xl bg-emerald-500/15 border border-emerald-500/40 text-xs sm:text-sm font-bold text-emerald-100 flex items-center justify-between gap-2">
                 <span>
                   Você garantiu {formatAmount(payoutAmount, activeCurrency)} ({currentMultiplier.toFixed(2)}x)!
                 </span>
@@ -483,7 +570,7 @@ export const MinesCasinoGame: React.FC<MinesCasinoGameProps> = ({ onBack }) => {
             )}
 
             {roundOutcome === 'lost' && (
-              <div className="p-3.5 rounded-2xl bg-rose-500/15 border border-rose-500/40 text-xs sm:text-sm font-bold text-rose-200 flex items-center justify-between gap-2">
+              <div className="p-3.5 rounded-2xl bg-rose-500/15 border border-rose-500/40 text-xs sm:text-sm font-bold text-rose-100 flex items-center justify-between gap-2">
                 <span>
                   Bomba encontrada! Você perdeu {formatAmount(activeStake, activeCurrency)}.
                 </span>
@@ -492,8 +579,8 @@ export const MinesCasinoGame: React.FC<MinesCasinoGameProps> = ({ onBack }) => {
             )}
 
             {/* 5x5 Tile Grid */}
-            <div className="bg-[#090d14] border border-zinc-800 rounded-2xl p-3 sm:p-4 max-w-[440px] mx-auto">
-              <div className="grid grid-cols-5 gap-2 sm:gap-2.5">
+            <div className="bg-[#070a10] border border-zinc-800/90 rounded-2xl p-3.5 sm:p-5 max-w-[440px] mx-auto shadow-inner">
+              <div className="grid grid-cols-5 gap-2.5 sm:gap-3">
                 {Array.from({ length: 25 }).map((_, idx) => {
                   const isSafe = safeSet.has(idx);
                   const isMine = mineSet.has(idx);
@@ -508,28 +595,28 @@ export const MinesCasinoGame: React.FC<MinesCasinoGameProps> = ({ onBack }) => {
                       disabled={!isPlaying || isSafe || loadingTile !== null || busyAction}
                       onClick={() => handleRevealTile(idx)}
                       aria-label={`Casa ${idx + 1}`}
-                      className={`aspect-square rounded-xl border-2 flex items-center justify-center transition-all ${
+                      className={`aspect-square rounded-2xl border-2 flex items-center justify-center transition-all duration-150 ${
                         isHit
-                          ? 'bg-rose-600 border-rose-300 text-white shadow-lg shadow-rose-600/40 scale-[0.98]'
+                          ? 'bg-gradient-to-b from-rose-500 to-rose-700 border-rose-200 text-white shadow-lg shadow-rose-600/40 scale-[0.97]'
                           : isMine
-                            ? 'bg-rose-950/60 border-rose-500/40 text-rose-300 opacity-85'
+                            ? 'bg-rose-950/75 border-rose-500/45 text-rose-300 opacity-90'
                             : isSafe
-                              ? 'bg-emerald-500/20 border-emerald-400 text-emerald-300 shadow-inner shadow-emerald-500/20'
+                              ? 'bg-gradient-to-b from-emerald-500/30 to-emerald-900/40 border-emerald-400 text-emerald-300 shadow-[0_0_16px_rgba(16,185,129,0.22)]'
                               : isPlaying
-                                ? 'bg-[#17202e] hover:bg-[#1e2a3c] border-zinc-700 hover:border-sky-400/70 text-zinc-500 cursor-pointer active:scale-95'
+                                ? 'bg-gradient-to-b from-[#1b2638] to-[#131b28] hover:from-[#233249] hover:to-[#182334] border-zinc-700 hover:border-sky-400/80 text-zinc-400 shadow-[0_4px_0_0_rgba(9,13,20,0.95)] hover:-translate-y-0.5 active:translate-y-0 cursor-pointer'
                                 : showAllEnded
-                                  ? 'bg-[#121822]/70 border-zinc-800/80 text-zinc-700'
-                                  : 'bg-[#141c28] border-zinc-800 text-zinc-600'
+                                  ? 'bg-[#101621]/70 border-zinc-800/75 text-zinc-700'
+                                  : 'bg-gradient-to-b from-[#161f2e] to-[#101722] border-zinc-800 text-zinc-600'
                       }`}
                     >
                       {isHit || isMine ? (
-                        <Bomb className="w-6 h-6" />
+                        <Bomb className="w-6 h-6 drop-shadow" />
                       ) : isSafe ? (
-                        <Gem className="w-6 h-6" />
+                        <Gem className="w-6 h-6 drop-shadow-[0_0_8px_rgba(52,211,153,0.65)]" />
                       ) : isLoading ? (
-                        <div className="w-4 h-4 rounded-full border-2 border-sky-400 border-t-transparent animate-spin" />
+                        <div className="w-5 h-5 rounded-full border-2 border-sky-400 border-t-transparent animate-spin" />
                       ) : (
-                        <span className="w-2 h-2 rounded-full bg-current opacity-35" />
+                        <span className="w-2.5 h-2.5 rounded-full bg-current opacity-30" />
                       )}
                     </button>
                   );

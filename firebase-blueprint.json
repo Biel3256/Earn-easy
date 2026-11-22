@@ -510,12 +510,15 @@
     },
     "SocialMessage": {
       "title": "SocialMessage",
-      "description": "Chat message sent in global chat or private friend conversation.",
+      "description": "Chat message sent in global chat or private friend conversation (supports text, photos, and voice audio in private chats).",
       "type": "object",
       "properties": {
         "senderUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "senderName": { "type": "string", "minLength": 1, "maxLength": 80 },
         "text": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "messageType": { "type": "string", "enum": ["text", "image", "audio"] },
+        "mediaDataUrl": { "type": "string", "minLength": 32, "maxLength": 350000 },
+        "audioDurationSec": { "type": "number" },
         "readAt": { "type": "string", "format": "date-time" },
         "readBy": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "createdAt": { "type": "string", "format": "date-time" }

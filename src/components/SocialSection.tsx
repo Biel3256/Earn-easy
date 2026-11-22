@@ -22,18 +22,23 @@ import {
   Clock,
   Copy,
   Eye,
+  ImagePlus,
+  Maximize2,
   MessageCircle,
+  Mic,
   Search,
   Send,
+  Trash2,
   UserCheck,
   UserPlus,
   Users,
+  Volume2,
   X,
 } from 'lucide-react';
 import { db } from '../firebase';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
-import { LeaderboardEntry } from '../types/earneasy';
+import { LeaderboardEntry, SocialMessageType } from '../types/earneasy';
 import { checkTextProfanity } from '../utils/moderation';
 import {
   extractReadableError,
@@ -51,6 +56,9 @@ type SocialMessage = {
   senderUid: string;
   senderName: string;
   text: string;
+  messageType?: SocialMessageType;
+  mediaDataUrl?: string;
+  audioDurationSec?: number;
   createdAt?: { toDate?: () => Date };
   readAt?: { toDate?: () => Date; toMillis?: () => number } | null;
   readBy?: string;
@@ -107,6 +115,99 @@ function formatLastSeenStatus(lastSeenMs?: number): { label: string; isOnlineNow
   }
   const days = Math.floor(diffSec / 86400);
   return { label: `Offline · Visto por último há ${days} d`, isOnlineNow: false };
+}
+
+const MAX_PRIVATE_MEDIA_DATA_URL_CHARS = 340_000;
+const MAX_CHAT_IMAGE_TARGET_CHARS = 240_000;
+const MAX_VOICE_DURATION_SEC = 45;
+
+function formatAudioSeconds(sec?: number): string {
+  const safe = Math.max(0, Math.round(Number(sec) || 0));
+  const mins = Math.floor(safe / 60);
+  const rem = safe % 60;
+  return `${mins}:${String(rem).padStart(2, '0')}`;
+}
+
+async function compressChatImage(file: File): Promise<string> {
+  if (!file.type.startsWith('image/')) {
+    throw new Error('Selecione um arquivo de imagem válido (JPG, PNG ou WebP).');
+  }
+
+  const rawDataUrl = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(new Error('Não foi possível ler a imagem selecionada.'));
+    reader.readAsDataURL(file);
+  });
+
+  const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const el = new Image();
+    el.onload = () => resolve(el);
+    el.onerror = () => reject(new Error('Formato de imagem não suportado pelo navegador.'));
+    el.src = rawDataUrl;
+  });
+
+  const maxDim = 900;
+  let width = img.naturalWidth || img.width || 640;
+  let height = img.naturalHeight || img.height || 640;
+  if (width > maxDim || height > maxDim) {
+    const ratio = Math.min(maxDim / width, maxDim / height);
+    width = Math.max(1, Math.round(width * ratio));
+    height = Math.max(1, Math.round(height * ratio));
+  }
+
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    throw new Error('Seu navegador não suportou o processamento desta imagem.');
+  }
+  ctx.drawImage(img, 0, 0, width, height);
+
+  const qualities = [0.82, 0.72, 0.62, 0.5];
+  for (const q of qualities) {
+    const out = canvas.toDataURL('image/jpeg', q);
+    if (out.length <= MAX_CHAT_IMAGE_TARGET_CHARS) {
+      return out;
+    }
+  }
+
+  // Fallback tighter downscale if image has very high entropy
+  const smallerCanvas = document.createElement('canvas');
+  smallerCanvas.width = Math.max(1, Math.round(width * 0.65));
+  smallerCanvas.height = Math.max(1, Math.round(height * 0.65));
+  const sCtx = smallerCanvas.getContext('2d');
+  if (sCtx) {
+    sCtx.drawImage(canvas, 0, 0, smallerCanvas.width, smallerCanvas.height);
+    const out = smallerCanvas.toDataURL('image/jpeg', 0.62);
+    if (out.length <= MAX_PRIVATE_MEDIA_DATA_URL_CHARS) {
+      return out;
+    }
+  }
+
+  throw new Error('A foto ficou grande demais. Tente outra imagem mais leve.');
+}
+
+function normalizeAudioMimeType(rawMime: string): string {
+  const lower = (rawMime || '').toLowerCase().replace(/\s+/g, '');
+  if (lower.startsWith('audio/webm')) return lower.includes('codecs=opus') ? 'audio/webm;codecs=opus' : 'audio/webm';
+  if (lower.startsWith('audio/ogg')) return lower.includes('codecs=opus') ? 'audio/ogg;codecs=opus' : 'audio/ogg';
+  if (lower.startsWith('audio/mp4')) return 'audio/mp4';
+  if (lower.startsWith('audio/mpeg')) return 'audio/mpeg';
+  if (lower.startsWith('audio/wav')) return 'audio/wav';
+  if (lower.startsWith('audio/aac')) return 'audio/aac';
+  if (lower.startsWith('audio/x-m4a')) return 'audio/x-m4a';
+  return 'audio/webm';
+}
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(new Error('Falha ao processar o áudio gravado.'));
+    reader.readAsDataURL(blob);
+  });
 }
 
 export function SocialPresence() {
@@ -166,9 +267,20 @@ export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSec
   const [chatClockMs, setChatClockMs] = useState<number>(() => getServerNowMs());
   const [, refreshPresenceClock] = useState(0);
   const [tab, setTab] = useState<'friends' | 'global'>('friends');
+  const [pendingImageDataUrl, setPendingImageDataUrl] = useState<string | null>(null);
+  const [lightboxImageUrl, setLightboxImageUrl] = useState<string | null>(null);
+  const [recordingAudio, setRecordingAudio] = useState(false);
+  const [recordingSec, setRecordingSec] = useState(0);
 
   const privateEndRef = useRef<HTMLDivElement | null>(null);
   const globalEndRef = useRef<HTMLDivElement | null>(null);
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const recordTimerRef = useRef<number | null>(null);
+  const recordStartedAtRef = useRef<number>(0);
+  const recordActionModeRef = useRef<'send' | 'cancel'>('cancel');
   const deletingGlobalAttemptRef = useRef<Map<string, number>>(new Map());
 
   useEffect(() => {
@@ -370,6 +482,49 @@ export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSec
     }
   }, [initialSelectedUid, friends]);
 
+  const stopRecordingResources = (mode: 'send' | 'cancel' = 'cancel') => {
+    recordActionModeRef.current = mode;
+    if (recordTimerRef.current) {
+      window.clearInterval(recordTimerRef.current);
+      recordTimerRef.current = null;
+    }
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state !== 'inactive') {
+      try {
+        recorder.stop();
+      } catch {
+        // Ignore stop errors on already-ended streams
+      }
+    } else if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+      mediaStreamRef.current = null;
+    }
+    setRecordingAudio(false);
+    setRecordingSec(0);
+  };
+
+  useEffect(() => {
+    setPendingImageDataUrl(null);
+    stopRecordingResources('cancel');
+  }, [selectedFriend?.uid, tab]);
+
+  useEffect(() => {
+    return () => {
+      stopRecordingResources('cancel');
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!lightboxImageUrl) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setLightboxImageUrl(null);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [lightboxImageUrl]);
+
   const handleCopyMyId = async () => {
     if (!uid) return;
     try {
@@ -564,9 +719,10 @@ export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSec
   };
 
   const sendPrivate = async () => {
-    const text = safeText(privateDraft);
-    if (!uid || !selectedFriend || !text || busy) return;
-    if (userAccount?.status !== 'active') {
+    const caption = safeText(privateDraft);
+    const hasImage = Boolean(pendingImageDataUrl);
+    if (!uid || !selectedFriend || (!caption && !hasImage) || busy) return;
+    if (userAccount?.status && userAccount.status !== 'active') {
       setError('Sua conta precisa estar ativa para enviar mensagens.');
       return;
     }
@@ -574,17 +730,158 @@ export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSec
     setError('');
     try {
       const chatId = friendshipId(uid, selectedFriend.uid);
-      await addDoc(collection(db, 'friendships', chatId, 'messages'), {
-        senderUid: uid,
-        senderName: myName,
-        text,
-        createdAt: serverTimestamp(),
-      });
-      setPrivateDraft('');
+      if (pendingImageDataUrl) {
+        await addDoc(collection(db, 'friendships', chatId, 'messages'), {
+          senderUid: uid,
+          senderName: myName,
+          messageType: 'image',
+          mediaDataUrl: pendingImageDataUrl,
+          text: caption || '📷 Foto enviada',
+          createdAt: serverTimestamp(),
+        });
+        setPendingImageDataUrl(null);
+        setPrivateDraft('');
+      } else {
+        await addDoc(collection(db, 'friendships', chatId, 'messages'), {
+          senderUid: uid,
+          senderName: myName,
+          messageType: 'text',
+          text: caption,
+          createdAt: serverTimestamp(),
+        });
+        setPrivateDraft('');
+      }
     } catch (err) {
       setError(extractReadableError(err, 'Não foi possível enviar a mensagem privada.'));
     } finally {
       setBusy(false);
+    }
+  };
+
+  const handleSelectPrivateImage = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    setError('');
+    try {
+      const dataUrl = await compressChatImage(file);
+      setPendingImageDataUrl(dataUrl);
+    } catch (err) {
+      setError(extractReadableError(err, 'Não foi possível preparar a foto para envio.'));
+    }
+  };
+
+  const handleStartAudioRecording = async () => {
+    if (!uid || !selectedFriend || busy || recordingAudio) return;
+    if (userAccount?.status && userAccount.status !== 'active') {
+      setError('Sua conta precisa estar ativa para enviar áudios.');
+      return;
+    }
+    if (typeof MediaRecorder === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+      setError('Seu navegador não suporta gravação de áudio neste ambiente.');
+      return;
+    }
+
+    setError('');
+    setPendingImageDataUrl(null);
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const candidates = [
+        'audio/webm;codecs=opus',
+        'audio/webm',
+        'audio/ogg;codecs=opus',
+        'audio/mp4',
+      ];
+      const preferredMime = candidates.find((mime) => {
+        try {
+          return typeof MediaRecorder.isTypeSupported === 'function' && MediaRecorder.isTypeSupported(mime);
+        } catch {
+          return false;
+        }
+      });
+
+      const recorder = preferredMime
+        ? new MediaRecorder(stream, { mimeType: preferredMime, audioBitsPerSecond: 32000 })
+        : new MediaRecorder(stream);
+
+      mediaStreamRef.current = stream;
+      mediaRecorderRef.current = recorder;
+      audioChunksRef.current = [];
+      recordStartedAtRef.current = Date.now();
+      recordActionModeRef.current = 'cancel';
+
+      recorder.ondataavailable = (ev) => {
+        if (ev.data && ev.data.size > 0) {
+          audioChunksRef.current.push(ev.data);
+        }
+      };
+
+      recorder.onstop = async () => {
+        const mode = recordActionModeRef.current;
+        const durationSec = Math.max(
+          1,
+          Math.min(MAX_VOICE_DURATION_SEC, Math.round((Date.now() - recordStartedAtRef.current) / 1000))
+        );
+        const chunks = audioChunksRef.current;
+        const rawMime = recorder.mimeType || preferredMime || 'audio/webm';
+        audioChunksRef.current = [];
+        if (mediaStreamRef.current) {
+          mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+          mediaStreamRef.current = null;
+        }
+        mediaRecorderRef.current = null;
+
+        if (mode !== 'send' || chunks.length === 0 || !selectedFriend) {
+          return;
+        }
+
+        setBusy(true);
+        try {
+          const cleanMime = normalizeAudioMimeType(rawMime);
+          const blob = new Blob(chunks, { type: cleanMime });
+          const dataUrl = await blobToDataUrl(blob);
+          if (dataUrl.length > MAX_PRIVATE_MEDIA_DATA_URL_CHARS) {
+            setError('Áudio muito longo. Grave mensagens de até 35-45 segundos.');
+            return;
+          }
+          const chatId = friendshipId(uid, selectedFriend.uid);
+          await addDoc(collection(db, 'friendships', chatId, 'messages'), {
+            senderUid: uid,
+            senderName: myName,
+            messageType: 'audio',
+            mediaDataUrl: dataUrl,
+            audioDurationSec: durationSec,
+            text: `🎤 Mensagem de voz (${formatAudioSeconds(durationSec)})`,
+            createdAt: serverTimestamp(),
+          });
+        } catch (err) {
+          setError(extractReadableError(err, 'Não foi possível enviar o áudio agora.'));
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      recorder.start(250);
+      setRecordingAudio(true);
+      setRecordingSec(0);
+
+      recordTimerRef.current = window.setInterval(() => {
+        const elapsed = Math.floor((Date.now() - recordStartedAtRef.current) / 1000);
+        setRecordingSec(elapsed);
+        if (elapsed >= MAX_VOICE_DURATION_SEC) {
+          stopRecordingResources('send');
+        }
+      }, 250);
+    } catch (err) {
+      setRecordingAudio(false);
+      setRecordingSec(0);
+      setError(
+        extractReadableError(
+          err,
+          'Não foi possível acessar seu microfone. Verifique a permissão de áudio no navegador.'
+        )
+      );
     }
   };
 
@@ -1022,6 +1319,10 @@ export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSec
                       const mine = message.senderUid === uid;
                       const timeLabel = formatChatTime(message.createdAt);
                       const readLabel = formatChatTime(message.readAt);
+                      const isImage = message.messageType === 'image' && Boolean(message.mediaDataUrl);
+                      const isAudio = message.messageType === 'audio' && Boolean(message.mediaDataUrl);
+                      const showImageCaption = isImage && message.text && message.text !== '📷 Foto enviada';
+
                       return (
                         <div
                           key={message.id}
@@ -1034,7 +1335,50 @@ export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSec
                                 : 'bg-slate-100 dark:bg-zinc-800 text-slate-900 dark:text-zinc-100'
                             }`}
                           >
-                            <p className="leading-relaxed break-words">{message.text}</p>
+                            {isImage && message.mediaDataUrl ? (
+                              <div className="space-y-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => setLightboxImageUrl(message.mediaDataUrl || null)}
+                                  className="group relative block overflow-hidden rounded-xl border border-black/10 dark:border-white/10 cursor-pointer"
+                                >
+                                  <img
+                                    src={message.mediaDataUrl}
+                                    alt="Foto enviada no chat privado"
+                                    referrerPolicy="no-referrer"
+                                    className="max-h-60 max-w-[260px] w-auto object-cover rounded-xl"
+                                  />
+                                  <span className="absolute bottom-1.5 right-1.5 w-7 h-7 rounded-lg bg-black/60 text-white flex items-center justify-center opacity-80 group-hover:opacity-100">
+                                    <Maximize2 className="w-3.5 h-3.5" />
+                                  </span>
+                                </button>
+                                {showImageCaption && (
+                                  <p className="leading-relaxed break-words">{message.text}</p>
+                                )}
+                              </div>
+                            ) : isAudio && message.mediaDataUrl ? (
+                              <div className="space-y-1.5 min-w-[220px]">
+                                <div className="flex items-center justify-between gap-2 text-[11px] font-semibold opacity-90">
+                                  <span className="inline-flex items-center gap-1">
+                                    <Volume2 className="w-3.5 h-3.5" />
+                                    Mensagem de voz
+                                  </span>
+                                  {typeof message.audioDurationSec === 'number' && (
+                                    <span className="font-mono tabular-nums">
+                                      {formatAudioSeconds(message.audioDurationSec)}
+                                    </span>
+                                  )}
+                                </div>
+                                <audio
+                                  controls
+                                  preload="metadata"
+                                  src={message.mediaDataUrl}
+                                  className="w-full max-w-[250px] h-9"
+                                />
+                              </div>
+                            ) : (
+                              <p className="leading-relaxed break-words">{message.text}</p>
+                            )}
                           </div>
                           <span className="mt-1 text-[10px] text-slate-400 dark:text-zinc-500 font-mono inline-flex items-center gap-1">
                             <span>
@@ -1070,27 +1414,122 @@ export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSec
                   <div ref={privateEndRef} />
                 </div>
 
-                <div className="pt-3 border-t border-slate-100 dark:border-zinc-800 flex gap-2">
-                  <input
-                    type="text"
-                    value={privateDraft}
-                    maxLength={500}
-                    onChange={(event) => setPrivateDraft(event.target.value)}
-                    onKeyDown={(event) => event.key === 'Enter' && sendPrivate()}
-                    placeholder={`Mensagem para ${selectedFriend.displayName}...`}
-                    className="flex-1 rounded-xl border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-950 px-3.5 py-2.5 text-sm text-slate-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                  />
-                  <button
-                    type="button"
-                    onClick={sendPrivate}
-                    disabled={busy || !privateDraft.trim()}
-                    aria-label="Enviar mensagem privada"
-                    className="inline-flex items-center gap-1.5 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-semibold rounded-xl transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-                  >
-                    <Send className="w-4 h-4" />
-                    Enviar
-                  </button>
-                </div>
+                {/* Pending Image Preview */}
+                {pendingImageDataUrl && (
+                  <div className="mb-2.5 p-2.5 rounded-2xl bg-slate-100 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <img
+                        src={pendingImageDataUrl}
+                        alt="Prévia da foto"
+                        referrerPolicy="no-referrer"
+                        className="w-14 h-14 rounded-xl object-cover border border-slate-200 dark:border-zinc-700 shrink-0"
+                      />
+                      <div className="min-w-0">
+                        <div className="text-xs font-bold text-slate-800 dark:text-zinc-100">
+                          Foto pronta para enviar
+                        </div>
+                        <div className="text-[11px] text-slate-500 dark:text-zinc-400 truncate">
+                          Adicione uma legenda opcional abaixo ou clique em Enviar.
+                        </div>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setPendingImageDataUrl(null)}
+                      aria-label="Remover foto selecionada"
+                      className="p-2 rounded-xl border border-slate-200 dark:border-zinc-800 text-slate-500 hover:text-rose-500 cursor-pointer shrink-0"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                )}
+
+                <input
+                  ref={imageInputRef}
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp,image/*"
+                  onChange={handleSelectPrivateImage}
+                  className="hidden"
+                />
+
+                {recordingAudio ? (
+                  <div className="pt-3 border-t border-slate-100 dark:border-zinc-800 flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/35 border border-rose-200 dark:border-rose-800/70 flex-1 min-w-0">
+                      <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-pulse shrink-0" />
+                      <span className="text-xs font-bold text-rose-700 dark:text-rose-300 truncate">
+                        Gravando áudio ·{' '}
+                        <span className="font-mono tabular-nums">
+                          {formatAudioSeconds(recordingSec)} / {formatAudioSeconds(MAX_VOICE_DURATION_SEC)}
+                        </span>
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => stopRecordingResources('cancel')}
+                      title="Cancelar gravação"
+                      aria-label="Cancelar gravação"
+                      className="min-h-[42px] px-3 py-2 rounded-xl border border-slate-200 dark:border-zinc-700 text-slate-600 dark:text-zinc-300 hover:text-rose-600 hover:border-rose-400 cursor-pointer inline-flex items-center gap-1.5 text-xs font-semibold shrink-0"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                      Cancelar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => stopRecordingResources('send')}
+                      disabled={busy}
+                      className="min-h-[42px] inline-flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-semibold rounded-xl transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                    >
+                      <Send className="w-4 h-4" />
+                      Enviar áudio
+                    </button>
+                  </div>
+                ) : (
+                  <div className="pt-3 border-t border-slate-100 dark:border-zinc-800 flex items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => imageInputRef.current?.click()}
+                      title="Enviar foto"
+                      aria-label="Enviar foto no chat privado"
+                      className="min-h-[42px] min-w-[42px] p-2.5 rounded-xl border border-slate-200 dark:border-zinc-700 text-slate-600 dark:text-zinc-300 hover:border-emerald-500 hover:text-emerald-600 dark:hover:text-emerald-400 disabled:opacity-50 flex items-center justify-center shrink-0 cursor-pointer"
+                    >
+                      <ImagePlus className="w-4 h-4" />
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={handleStartAudioRecording}
+                      title="Gravar mensagem de voz"
+                      aria-label="Gravar áudio no chat privado"
+                      className="min-h-[42px] min-w-[42px] p-2.5 rounded-xl border border-slate-200 dark:border-zinc-700 text-slate-600 dark:text-zinc-300 hover:border-emerald-500 hover:text-emerald-600 dark:hover:text-emerald-400 disabled:opacity-50 flex items-center justify-center shrink-0 cursor-pointer"
+                    >
+                      <Mic className="w-4 h-4" />
+                    </button>
+                    <input
+                      type="text"
+                      value={privateDraft}
+                      maxLength={500}
+                      onChange={(event) => setPrivateDraft(event.target.value)}
+                      onKeyDown={(event) => event.key === 'Enter' && sendPrivate()}
+                      placeholder={
+                        pendingImageDataUrl
+                          ? `Legenda opcional para ${selectedFriend.displayName}...`
+                          : `Mensagem para ${selectedFriend.displayName}...`
+                      }
+                      className="flex-1 min-w-0 rounded-xl border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-950 px-3.5 py-2.5 text-sm text-slate-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={sendPrivate}
+                      disabled={busy || (!privateDraft.trim() && !pendingImageDataUrl)}
+                      aria-label="Enviar mensagem privada"
+                      className="min-h-[42px] inline-flex items-center gap-1.5 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-semibold rounded-xl transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                    >
+                      <Send className="w-4 h-4" />
+                      <span className="hidden sm:inline">Enviar</span>
+                    </button>
+                  </div>
+                )}
               </>
             ) : (
               <div className="flex-1 flex flex-col items-center justify-center text-center gap-2 text-slate-500 dark:text-zinc-400 px-4">
@@ -1202,6 +1641,32 @@ export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSec
               Enviar
             </button>
           </div>
+        </div>
+      )}
+
+      {lightboxImageUrl && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Visualizar imagem enviada no chat"
+          onClick={() => setLightboxImageUrl(null)}
+          className="fixed inset-0 z-50 bg-black/85 backdrop-blur-xs flex items-center justify-center p-4"
+        >
+          <button
+            type="button"
+            onClick={() => setLightboxImageUrl(null)}
+            aria-label="Fechar visualização da imagem"
+            className="absolute top-4 right-4 w-10 h-10 rounded-full bg-zinc-900/90 border border-zinc-700 text-white flex items-center justify-center hover:bg-zinc-800 cursor-pointer"
+          >
+            <X className="w-5 h-5" />
+          </button>
+          <img
+            src={lightboxImageUrl}
+            alt="Foto ampliada do chat privado"
+            referrerPolicy="no-referrer"
+            onClick={(event) => event.stopPropagation()}
+            className="max-h-[88vh] max-w-[92vw] rounded-2xl object-contain shadow-2xl border border-zinc-800"
+          />
         </div>
       )}
     </section>
