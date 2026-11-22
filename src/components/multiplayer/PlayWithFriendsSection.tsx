@@ -38,7 +38,7 @@ import {
 } from '../../types/earneasy';
 import { formatPoints } from '../../utils/pix';
 import { ProfileAvatar } from '../PlayerProfile';
-import { VerifiedBadge } from '../VerifiedBadge';
+import { resolveVerifiedBadgeTier, VerifiedBadge } from '../VerifiedBadge';
 import { MultiplayerGameBoards } from './MultiplayerGameBoards';
 import { MULTIPLAYER_CATALOG } from './multiplayerCatalog';
 
@@ -122,7 +122,8 @@ export const PlayWithFriendsSection: React.FC = React.memo(() => {
                 displayName: userAccount.displayName,
                 photoURL: userAccount.photoURL,
                 pointsBalance: userAccount.pointsBalance,
-                verified: Boolean(userAccount.identityVerified),
+                verified: resolveVerifiedBadgeTier(userAccount.verifiedBadge, userAccount.identityVerified) !== 'none',
+                verifiedBadge: resolveVerifiedBadgeTier(userAccount.verifiedBadge, userAccount.identityVerified),
               },
             })
           );
@@ -262,7 +263,8 @@ export const PlayWithFriendsSection: React.FC = React.memo(() => {
       displayName: userAccount.displayName,
       photoURL: userAccount.photoURL,
       pointsBalance: userAccount.pointsBalance,
-      verified: Boolean(userAccount.identityVerified),
+      verified: resolveVerifiedBadgeTier(userAccount.verifiedBadge, userAccount.identityVerified) !== 'none',
+      verifiedBadge: resolveVerifiedBadgeTier(userAccount.verifiedBadge, userAccount.identityVerified),
       gameId,
       visibility: createVisibility,
       postToGlobal: createVisibility === 'public',
@@ -286,7 +288,8 @@ export const PlayWithFriendsSection: React.FC = React.memo(() => {
       displayName: userAccount.displayName,
       photoURL: userAccount.photoURL,
       pointsBalance: userAccount.pointsBalance,
-      verified: Boolean(userAccount.identityVerified),
+      verified: resolveVerifiedBadgeTier(userAccount.verifiedBadge, userAccount.identityVerified) !== 'none',
+      verifiedBadge: resolveVerifiedBadgeTier(userAccount.verifiedBadge, userAccount.identityVerified),
     });
   };
 
@@ -308,7 +311,8 @@ export const PlayWithFriendsSection: React.FC = React.memo(() => {
       displayName: userAccount.displayName,
       photoURL: userAccount.photoURL,
       pointsBalance: userAccount.pointsBalance,
-      verified: Boolean(userAccount.identityVerified),
+      verified: resolveVerifiedBadgeTier(userAccount.verifiedBadge, userAccount.identityVerified) !== 'none',
+      verifiedBadge: resolveVerifiedBadgeTier(userAccount.verifiedBadge, userAccount.identityVerified),
     });
   };
 
@@ -456,9 +460,15 @@ export const PlayWithFriendsSection: React.FC = React.memo(() => {
                       <span className="text-sm font-extrabold text-slate-900 dark:text-white truncate">
                         {p.displayName} {isMe ? '(Você)' : ''}
                       </span>
-                      {(p.verified || (isMe && userAccount.identityVerified)) && (
-                        <VerifiedBadge size="xs" />
-                      )}
+                      <VerifiedBadge
+                        tier={
+                          isMe
+                            ? resolveVerifiedBadgeTier(userAccount.verifiedBadge, userAccount.identityVerified)
+                            : p.verifiedBadge
+                        }
+                        legacyVerified={p.verified || (isMe && userAccount.identityVerified)}
+                        size="xs"
+                      />
                       {p.isHost && (
                         <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md bg-amber-400/20 text-amber-400 text-[10px] font-bold">
                           <Crown className="w-3 h-3" /> Anfitrião
@@ -1111,7 +1121,11 @@ export const PlayWithFriendsSection: React.FC = React.memo(() => {
                         <span className="text-sm font-extrabold text-slate-900 dark:text-white truncate">
                           {match.hostName}
                         </span>
-                        {match.hostVerified && <VerifiedBadge size="xs" />}
+                        <VerifiedBadge
+                          tier={match.hostVerifiedBadge}
+                          legacyVerified={match.hostVerified}
+                          size="xs"
+                        />
                       </div>
                       <div className="text-xs font-bold text-emerald-700 dark:text-lime-400 truncate">
                         {MULTIPLAYER_GAME_LABELS[match.gameId] || match.gameId}

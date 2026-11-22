@@ -1,9 +1,15 @@
 import React, { useState } from 'react';
 import {
+  AlertCircle,
+  BadgeCheck,
   Bell,
   BellOff,
   BellRing,
   Check,
+  CheckCircle2,
+  Clock,
+  Crown,
+  FileCheck2,
   Landmark,
   Moon,
   Send,
@@ -12,7 +18,17 @@ import {
   UserCheck,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { formatBRL, formatPoints } from '../utils/pix';
+import {
+  VERIFICATION_DOCUMENT_LABELS,
+  formatBirthDateBr,
+  formatCpfMask,
+  isValidBirthDateStr,
+  isValidCPF,
+  maskCpfForAdminDisplay,
+} from '../utils/cpf';
+import { VerificationDocumentType } from '../types/earneasy';
+import { extractReadableError, formatBRL, formatPoints } from '../utils/pix';
+import { VerifiedBadge, resolveVerifiedBadgeTier } from './VerifiedBadge';
 
 export type AppTheme = 'light' | 'dark';
 
@@ -33,17 +49,31 @@ export const SettingsSection: React.FC<SettingsSectionProps> = ({
     firebaseUser,
     userAccount,
     privateInfo,
+    myVerificationRequest,
     signInWithGoogle,
     browserNotifPermission,
     browserNotifEnabled,
     requestBrowserNotifications,
     setBrowserNotifEnabled,
     sendTestBrowserNotification,
+    submitVerificationRequest,
   } = useAuth();
 
   const [notifRequesting, setNotifRequesting] = useState(false);
   const [notifFeedback, setNotifFeedback] = useState<{
     type: 'success' | 'info' | 'error';
+    text: string;
+  } | null>(null);
+
+  // Blue Verified Request Form State
+  const [fullName, setFullName] = useState('');
+  const [cpf, setCpf] = useState('');
+  const [birthDate, setBirthDate] = useState('');
+  const [documentType, setDocumentType] = useState<VerificationDocumentType>('rg');
+  const [documentNumber, setDocumentNumber] = useState('');
+  const [submittingBlue, setSubmittingBlue] = useState(false);
+  const [blueFeedback, setBlueFeedback] = useState<{
+    type: 'success' | 'error';
     text: string;
   } | null>(null);
 
@@ -106,6 +136,61 @@ export const SettingsSection: React.FC<SettingsSectionProps> = ({
     return browserNotifEnabled ? 'Ativas neste navegador' : 'Pausadas pelo usuário';
   };
 
+  const handleSubmitBlueVerified = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBlueFeedback(null);
+
+    if (fullName.trim().length < 5) {
+      setBlueFeedback({ type: 'error', text: 'Informe seu nome completo (mínimo 5 caracteres).' });
+      return;
+    }
+    if (!isValidCPF(cpf)) {
+      setBlueFeedback({ type: 'error', text: 'O CPF informado é inválido. Confira os dígitos e tente novamente.' });
+      return;
+    }
+    if (!isValidBirthDateStr(birthDate)) {
+      setBlueFeedback({ type: 'error', text: 'Informe uma data de nascimento válida.' });
+      return;
+    }
+    if (documentNumber.trim().length < 4) {
+      setBlueFeedback({ type: 'error', text: 'Informe o número do documento selecionado.' });
+      return;
+    }
+
+    setSubmittingBlue(true);
+    try {
+      await submitVerificationRequest({
+        fullName,
+        cpf,
+        birthDate,
+        documentType,
+        documentNumber,
+      });
+      setBlueFeedback({
+        type: 'success',
+        text: 'Solicitação de Verificado Azul enviada para análise! Assim que for aprovada, o selo azul aparecerá no seu perfil.',
+      });
+    } catch (err) {
+      setBlueFeedback({
+        type: 'error',
+        text: extractReadableError(err, 'Não foi possível enviar sua solicitação para análise agora.'),
+      });
+    } finally {
+      setSubmittingBlue(false);
+    }
+  };
+
+  const resolvedBadgeTier = resolveVerifiedBadgeTier(
+    userAccount?.verifiedBadge,
+    userAccount?.identityVerified
+  );
+  const verifStatus =
+    resolvedBadgeTier !== 'none'
+      ? 'approved'
+      : myVerificationRequest?.status || userAccount?.verificationStatus || 'none';
+  const rejectionReason =
+    myVerificationRequest?.rejectionReason || userAccount?.verificationNote || '';
+
   return (
     <div className="space-y-8 max-w-4xl mx-auto">
       <div className="space-y-1">
@@ -113,9 +198,235 @@ export const SettingsSection: React.FC<SettingsSectionProps> = ({
           Configurações
         </h1>
         <p className="text-sm text-slate-500 dark:text-zinc-400">
-          Escolha o tema visual do aplicativo, alertas do navegador e preferências de conta.
+          Escolha o tema visual do aplicativo, solicite o selo Verificado Azul, alertas e preferências da conta.
         </p>
       </div>
+
+      {/* Blue Verified Request Section */}
+      <section
+        id="verified-blue-section"
+        className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-6 space-y-5"
+      >
+        <div className="flex items-start justify-between gap-4 border-b border-slate-100 dark:border-zinc-800 pb-4">
+          <div className="space-y-0.5">
+            <h2 className="text-base font-bold text-slate-900 dark:text-zinc-50 flex items-center gap-2">
+              {resolvedBadgeTier === 'owner' ? (
+                <Crown className="w-5 h-5 text-amber-500" />
+              ) : (
+                <BadgeCheck className="w-5 h-5 text-sky-500" />
+              )}
+              {resolvedBadgeTier === 'owner'
+                ? 'Selo Exclusivo de Dono Oficial'
+                : 'Solicitar Verificado Azul'}
+            </h2>
+            <p className="text-xs text-slate-500 dark:text-zinc-400">
+              {resolvedBadgeTier === 'owner'
+                ? 'Sua conta possui o selo dourado exclusivo de Dono Oficial ativo em todo o aplicativo.'
+                : 'Envie seus dados cadastrais para análise e exiba o selo oficial Verificado Azul no seu perfil (sem bônus de pontos).'}
+            </p>
+          </div>
+          {resolvedBadgeTier !== 'none' && (
+            <VerifiedBadge
+              tier={userAccount?.verifiedBadge}
+              legacyVerified={userAccount?.identityVerified}
+              showLabel
+              size="md"
+            />
+          )}
+        </div>
+
+        {!firebaseUser || !userAccount ? (
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 rounded-lg p-4">
+            <p className="text-xs text-slate-600 dark:text-zinc-400">
+              Conecte sua conta Google para enviar um pedido de Verificado Azul.
+            </p>
+            <button
+              type="button"
+              onClick={signInWithGoogle}
+              className="px-4 py-2 bg-slate-900 dark:bg-emerald-600 text-white text-xs font-semibold rounded-lg hover:bg-slate-800 dark:hover:bg-emerald-500 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              Entrar com Google
+            </button>
+          </div>
+        ) : resolvedBadgeTier === 'owner' ? (
+          <div className="rounded-xl border border-amber-400/50 bg-amber-50/60 dark:bg-amber-950/20 p-4 flex items-center gap-3 text-xs text-amber-900 dark:text-amber-200">
+            <Crown className="w-5 h-5 text-amber-500 shrink-0" />
+            <div>
+              <div className="font-extrabold">Selo Dono Oficial Verificado Real Ativo</div>
+              <p className="opacity-85 mt-0.5">
+                Sua conta administrativa principal exibe a coroa dourada exclusiva de Dono no Ranking, Amigos, Salas Online e Perfil.
+              </p>
+            </div>
+          </div>
+        ) : resolvedBadgeTier === 'blue' ? (
+          <div className="rounded-xl border border-sky-400/50 bg-sky-50/70 dark:bg-sky-950/25 p-4 flex items-center gap-3 text-xs text-sky-900 dark:text-sky-200">
+            <BadgeCheck className="w-5 h-5 text-sky-500 shrink-0" />
+            <div>
+              <div className="font-extrabold">Verificado Azul Ativo!</div>
+              <p className="opacity-85 mt-0.5">
+                Seu perfil exibe o selo oficial Verificado Azul em todo o Earn Easy. Seus dados enviados ficam protegidos em sigilo.
+              </p>
+            </div>
+          </div>
+        ) : verifStatus === 'pending' ? (
+          <div className="rounded-xl border border-amber-300 dark:border-amber-800 bg-amber-50/80 dark:bg-amber-950/30 p-4 space-y-2 text-xs text-amber-900 dark:text-amber-200">
+            <div className="flex items-center gap-2 font-extrabold">
+              <Clock className="w-4 h-4 shrink-0 text-amber-600 dark:text-amber-400" />
+              Solicitação em análise
+            </div>
+            <p className="leading-relaxed">
+              Seu pedido de Verificado Azul foi enviado para análise. Assim que nossa equipe confirmar os dados, o selo azul será ativado no seu perfil.
+            </p>
+            {myVerificationRequest && (
+              <div className="pt-2 border-t border-amber-200/70 dark:border-amber-800/60 grid grid-cols-1 sm:grid-cols-2 gap-1.5 font-mono text-[11px]">
+                <div>Nome: {myVerificationRequest.fullName}</div>
+                <div>CPF: {maskCpfForAdminDisplay(myVerificationRequest.cpf)}</div>
+                <div>Nascimento: {formatBirthDateBr(myVerificationRequest.birthDate)}</div>
+                <div>
+                  Documento: {VERIFICATION_DOCUMENT_LABELS[myVerificationRequest.documentType]}
+                </div>
+              </div>
+            )}
+          </div>
+        ) : (
+          <form onSubmit={handleSubmitBlueVerified} className="space-y-4">
+            {verifStatus === 'rejected' && (
+              <div className="p-3.5 rounded-xl bg-red-50 dark:bg-red-950/35 border border-red-200 dark:border-red-900 text-xs text-red-800 dark:text-red-300 space-y-1">
+                <div className="font-bold">Sua solicitação anterior foi recusada na análise.</div>
+                {rejectionReason && (
+                  <div>
+                    <strong>Motivo:</strong> {rejectionReason}
+                  </div>
+                )}
+                <div className="opacity-85">Corrija seus dados abaixo e envie novamente para análise.</div>
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="sm:col-span-2">
+                <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300 mb-1">
+                  Nome Completo <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  minLength={5}
+                  maxLength={120}
+                  value={fullName}
+                  onChange={(e) => setFullName(e.target.value)}
+                  placeholder="Ex: Maria Clara Oliveira Santos"
+                  className="w-full px-3.5 py-2.5 text-sm bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300 mb-1">
+                  CPF <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  inputMode="numeric"
+                  maxLength={14}
+                  value={cpf}
+                  onChange={(e) => setCpf(formatCpfMask(e.target.value))}
+                  placeholder="000.000.000-00"
+                  className="w-full px-3.5 py-2.5 text-sm font-mono bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500"
+                />
+                {cpf.length >= 14 && (
+                  <p
+                    className={`mt-1 text-[11px] font-semibold ${
+                      isValidCPF(cpf)
+                        ? 'text-emerald-600 dark:text-emerald-400'
+                        : 'text-red-600 dark:text-red-400'
+                    }`}
+                  >
+                    {isValidCPF(cpf) ? 'CPF válido' : 'CPF inválido — confira os dígitos'}
+                  </p>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300 mb-1">
+                  Data de Nascimento <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="date"
+                  required
+                  min="1905-01-01"
+                  max={new Date().toISOString().slice(0, 10)}
+                  value={birthDate}
+                  onChange={(e) => setBirthDate(e.target.value)}
+                  className="w-full px-3.5 py-2.5 text-sm font-mono bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300 mb-1">
+                  Tipo de Documento <span className="text-red-500">*</span>
+                </label>
+                <select
+                  value={documentType}
+                  onChange={(e) => setDocumentType(e.target.value as VerificationDocumentType)}
+                  className="w-full px-3.5 py-2.5 text-sm bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500"
+                >
+                  <option value="rg">RG (Identidade)</option>
+                  <option value="cnh">CNH (Habilitação)</option>
+                  <option value="passaporte">Passaporte</option>
+                  <option value="outro">Outro Documento Oficial</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300 mb-1">
+                  Número do Documento <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  minLength={4}
+                  maxLength={40}
+                  value={documentNumber}
+                  onChange={(e) => setDocumentNumber(e.target.value)}
+                  placeholder="Ex: 12.345.678-9"
+                  className="w-full px-3.5 py-2.5 text-sm font-mono bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500"
+                />
+              </div>
+            </div>
+
+            {blueFeedback && (
+              <div
+                className={`p-3 rounded-xl border text-xs flex items-start gap-2 ${
+                  blueFeedback.type === 'success'
+                    ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300'
+                    : 'bg-red-50 dark:bg-red-950/40 border-red-200 dark:border-red-800 text-red-700 dark:text-red-300'
+                }`}
+              >
+                {blueFeedback.type === 'success' ? (
+                  <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
+                ) : (
+                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                )}
+                <span>{blueFeedback.text}</span>
+              </div>
+            )}
+
+            <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+              <p className="text-[11px] text-slate-500 dark:text-zinc-400">
+                Seus documentos ficam privados no servidor apenas para validação do selo azul.
+              </p>
+              <button
+                type="submit"
+                disabled={submittingBlue}
+                className="min-h-[44px] inline-flex items-center gap-2 px-5 py-2.5 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white text-xs font-extrabold rounded-xl transition-colors cursor-pointer"
+              >
+                <FileCheck2 className="w-4 h-4" />
+                {submittingBlue ? 'Enviando para análise...' : 'Enviar para Análise'}
+              </button>
+            </div>
+          </form>
+        )}
+      </section>
 
       {/* Appearance & Black Theme Selector */}
       <section className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-6 space-y-5">
@@ -339,7 +650,7 @@ export const SettingsSection: React.FC<SettingsSectionProps> = ({
               Conta & Segurança
             </h2>
             <p className="text-xs text-slate-500 dark:text-zinc-400 mt-0.5">
-              Dados verificados via Firebase Authentication e Firestore
+              Dados protegidos e sincronizados com segurança no servidor
             </p>
           </div>
           <ShieldCheck className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0" />

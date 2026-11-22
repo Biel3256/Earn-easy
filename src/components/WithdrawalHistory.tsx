@@ -70,7 +70,7 @@ export const WithdrawalHistory: React.FC = () => {
           })
         );
         setLoading(false);
-        setErrorMsg('Não foi possível carregar o histórico de saques no Firestore.');
+        setErrorMsg('Não foi possível carregar o histórico de saques no servidor.');
       }
     );
 

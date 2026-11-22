@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   addDoc,
   collection,
+  deleteDoc,
   doc,
   getDoc,
   getDocs,
@@ -34,7 +35,12 @@ import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { LeaderboardEntry } from '../types/earneasy';
 import { checkTextProfanity } from '../utils/moderation';
-import { extractReadableError } from '../utils/pix';
+import {
+  extractReadableError,
+  getServerNowMs,
+  syncServerUtcClock,
+  timestampToMillis,
+} from '../utils/pix';
 import { ProfileAvatar } from './PlayerProfile';
 import { VerifiedBadge } from './VerifiedBadge';
 
@@ -62,6 +68,9 @@ type FriendRequest = {
 const safeText = (value: string) => value.trim().slice(0, 500);
 const friendshipId = (a: string, b: string) => [a, b].sort().join('__');
 
+const GLOBAL_CHAT_TTL_MS = 5 * 60 * 1000;
+const GLOBAL_CHAT_DELETE_BUFFER_MS = 5_000;
+
 function formatChatTime(ts?: { toDate?: () => Date } | null): string {
   if (!ts || typeof ts.toDate !== 'function') return '';
   try {
@@ -69,6 +78,15 @@ function formatChatTime(ts?: { toDate?: () => Date } | null): string {
   } catch {
     return '';
   }
+}
+
+function formatRemainingGlobalTtl(createdAt: unknown, nowMs: number): string {
+  const createdMs = timestampToMillis(createdAt);
+  if (!createdMs) return '5m 00s';
+  const remainingSec = Math.max(0, Math.ceil((createdMs + GLOBAL_CHAT_TTL_MS - nowMs) / 1000));
+  const mins = Math.floor(remainingSec / 60);
+  const secs = remainingSec % 60;
+  return `${mins}m ${String(secs).padStart(2, '0')}s`;
 }
 
 function formatLastSeenStatus(lastSeenMs?: number): { label: string; isOnlineNow: boolean } {
@@ -138,18 +156,20 @@ export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSec
   const [presence, setPresence] = useState<Record<string, number>>({});
   const [selectedFriend, setSelectedFriend] = useState<PublicProfile | null>(null);
   const [privateMessages, setPrivateMessages] = useState<SocialMessage[]>([]);
-  const [globalMessages, setGlobalMessages] = useState<SocialMessage[]>([]);
+  const [rawGlobalMessages, setRawGlobalMessages] = useState<SocialMessage[]>([]);
   const [privateDraft, setPrivateDraft] = useState('');
   const [globalDraft, setGlobalDraft] = useState('');
   const [copiedId, setCopiedId] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
+  const [chatClockMs, setChatClockMs] = useState<number>(() => getServerNowMs());
   const [, refreshPresenceClock] = useState(0);
   const [tab, setTab] = useState<'friends' | 'global'>('friends');
 
   const privateEndRef = useRef<HTMLDivElement | null>(null);
   const globalEndRef = useRef<HTMLDivElement | null>(null);
+  const deletingGlobalAttemptRef = useRef<Map<string, number>>(new Map());
 
   useEffect(() => {
     if (!uid) return;
@@ -236,17 +256,52 @@ export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSec
   }, [uid]);
 
   useEffect(() => {
+    void syncServerUtcClock().then(() => {
+      setChatClockMs(getServerNowMs());
+    });
+  }, []);
+
+  useEffect(() => {
     const globalQuery = query(collection(db, 'globalMessages'), orderBy('createdAt', 'desc'), limit(60));
     return onSnapshot(
       globalQuery,
       (snap) => {
-        setGlobalMessages(
+        setRawGlobalMessages(
           snap.docs.map((item) => ({ id: item.id, ...item.data() } as SocialMessage)).reverse()
         );
       },
       () => setError('Não foi possível carregar o chat global.')
     );
   }, []);
+
+  const globalMessages = useMemo(() => {
+    return rawGlobalMessages.filter((message) => {
+      const createdMs = timestampToMillis(message.createdAt);
+      if (!createdMs) return true;
+      return chatClockMs - createdMs < GLOBAL_CHAT_TTL_MS;
+    });
+  }, [rawGlobalMessages, chatClockMs]);
+
+  // Automatically remove expired (>5 min) global chat messages from Firestore
+  useEffect(() => {
+    if (!uid || rawGlobalMessages.length === 0) return;
+    const nowLocal = Date.now();
+    const expiredMessages = rawGlobalMessages.filter((message) => {
+      const createdMs = timestampToMillis(message.createdAt);
+      if (!createdMs) return false;
+      if (chatClockMs - createdMs < GLOBAL_CHAT_TTL_MS + GLOBAL_CHAT_DELETE_BUFFER_MS) return false;
+      const lastAttempt = deletingGlobalAttemptRef.current.get(message.id) ?? 0;
+      return nowLocal - lastAttempt > 30_000;
+    });
+
+    if (expiredMessages.length === 0) return;
+    const batchSlice = expiredMessages.slice(0, 15);
+    batchSlice.forEach((msg) => deletingGlobalAttemptRef.current.set(msg.id, nowLocal));
+
+    void Promise.allSettled(
+      batchSlice.map((msg) => deleteDoc(doc(db, 'globalMessages', msg.id)))
+    );
+  }, [uid, rawGlobalMessages, chatClockMs]);
 
   useEffect(() => {
     if (!uid || !selectedFriend) {
@@ -298,9 +353,13 @@ export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSec
   }, [globalMessages.length, tab]);
 
   useEffect(() => {
-    const timer = window.setInterval(() => refreshPresenceClock((value) => value + 1), 15_000);
+    const intervalMs = tab === 'global' ? 3_000 : 15_000;
+    const timer = window.setInterval(() => {
+      setChatClockMs(getServerNowMs());
+      refreshPresenceClock((value) => value + 1);
+    }, intervalMs);
     return () => window.clearInterval(timer);
-  }, []);
+  }, [tab]);
 
   useEffect(() => {
     if (!initialSelectedUid) return;
@@ -695,7 +754,11 @@ export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSec
                     <div className="min-w-0">
                       <p className="truncate text-sm font-semibold text-slate-900 dark:text-zinc-100 flex items-center gap-1.5">
                         <span className="truncate">{profile.displayName}</span>
-                        {profile.identityVerified && <VerifiedBadge size="xs" />}
+                        <VerifiedBadge
+                          tier={profile.verifiedBadge}
+                          legacyVerified={profile.identityVerified}
+                          size="xs"
+                        />
                       </p>
                       <p className="truncate text-[11px] font-mono text-slate-500 dark:text-zinc-400">
                         {profile.uid} ·{' '}
@@ -873,7 +936,11 @@ export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSec
                           <div className="min-w-0">
                             <div className="truncate text-xs font-semibold flex items-center gap-1">
                               <span className="truncate">{friend.displayName}</span>
-                              {friend.identityVerified && <VerifiedBadge size="xs" />}
+                              <VerifiedBadge
+                                tier={friend.verifiedBadge}
+                                legacyVerified={friend.identityVerified}
+                                size="xs"
+                              />
                             </div>
                             <div
                               className={`text-[11px] truncate ${
@@ -902,7 +969,11 @@ export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSec
                   <span className="truncate">
                     {selectedFriend ? `Conversa com ${selectedFriend.displayName}` : 'Chat Privado'}
                   </span>
-                  {selectedFriend?.identityVerified && <VerifiedBadge size="xs" />}
+                  <VerifiedBadge
+                    tier={selectedFriend?.verifiedBadge}
+                    legacyVerified={selectedFriend?.identityVerified}
+                    size="xs"
+                  />
                 </h2>
                 <p
                   className={`text-[11px] flex items-center gap-1.5 ${
@@ -1036,13 +1107,19 @@ export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSec
         </div>
       ) : (
         <div className="bg-white/90 dark:bg-zinc-900/90 backdrop-blur-md border border-slate-200/90 dark:border-zinc-800 rounded-3xl p-5 flex min-h-[440px] max-h-[580px] flex-col shadow-sm">
-          <div className="pb-3 border-b border-slate-100 dark:border-zinc-800">
-            <h2 className="text-sm font-bold text-slate-900 dark:text-zinc-50">
-              Chat Global da Comunidade
-            </h2>
-            <p className="text-xs text-slate-500 dark:text-zinc-400">
-              Converse com outros jogadores ativos do Earn Easy em tempo real.
-            </p>
+          <div className="pb-3 border-b border-slate-100 dark:border-zinc-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div>
+              <h2 className="text-sm font-bold text-slate-900 dark:text-zinc-50">
+                Chat Global da Comunidade
+              </h2>
+              <p className="text-xs text-slate-500 dark:text-zinc-400">
+                Converse com outros jogadores ativos do Earn Easy em tempo real.
+              </p>
+            </div>
+            <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/35 border border-emerald-200 dark:border-emerald-900/60 px-2.5 py-1 rounded-xl self-start sm:self-auto shrink-0">
+              <Clock className="w-3.5 h-3.5" />
+              Mensagens apagam em 5 min
+            </span>
           </div>
 
           <div className="flex-1 space-y-2.5 overflow-y-auto py-4 pr-1">
@@ -1065,18 +1142,19 @@ export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSec
               <li>Avise a administração se encontrar algo suspeito ou uma mensagem que viole as regras.</li>
             </ol>
             <p className="text-[11px] font-bold text-amber-800 dark:text-amber-300 mt-2">
-              Quem descumprir as regras poderá receber aviso, mute ou banimento.
+              Quem descumprir as regras poderá receber aviso, mute ou banimento. Todas as mensagens são apagadas automaticamente após 5 minutos.
             </p>
             <p className="text-[11px] text-slate-500 dark:text-zinc-400 mt-1">Biel — Dono e administrador do Earn Easy</p>
           </div>
             {globalMessages.length === 0 ? (
               <div className="h-full flex items-center justify-center text-xs text-slate-500 dark:text-zinc-400">
-                Nenhuma mensagem ainda. Seja o primeiro a dar um oi!
+                Nenhuma mensagem ativa nos últimos 5 minutos. Seja o primeiro a dar um oi!
               </div>
             ) : (
               globalMessages.map((message) => {
                 const mine = message.senderUid === uid;
                 const timeLabel = formatChatTime(message.createdAt);
+                const ttlLabel = formatRemainingGlobalTtl(message.createdAt, chatClockMs);
                 return (
                   <div
                     key={message.id}
@@ -1090,11 +1168,11 @@ export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSec
                       <span className="text-[11px] font-bold text-emerald-700 dark:text-emerald-400">
                         {message.senderName}
                       </span>
-                      {timeLabel && (
-                        <span className="text-[10px] font-mono text-slate-400 dark:text-zinc-500">
-                          {timeLabel}
-                        </span>
-                      )}
+                      <span className="inline-flex items-center gap-1.5 text-[10px] font-mono text-slate-400 dark:text-zinc-500">
+                        {timeLabel && <span>{timeLabel}</span>}
+                        <span aria-hidden="true">·</span>
+                        <span>apaga em {ttlLabel}</span>
+                      </span>
                     </div>
                     <p className="text-slate-800 dark:text-zinc-200 break-words">{message.text}</p>
                   </div>

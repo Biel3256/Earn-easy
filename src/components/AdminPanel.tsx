@@ -16,12 +16,13 @@ import {
   writeBatch,
 } from 'firebase/firestore';
 import {
+  BadgeCheck,
   Ban,
-  Camera,
   CheckCircle2,
   Clock,
   Copy,
   Eye,
+  FileCheck2,
   Headset,
   History,
   Inbox,
@@ -49,8 +50,6 @@ import { useAuth } from '../context/AuthContext';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import {
   EnterpriseIntegration,
-  FACE_VERIFICATION_BONUS_POINTS,
-  FaceVerificationRequest,
   FraudEvent,
   GAME_LABELS,
   GameSession,
@@ -64,10 +63,11 @@ import {
   SupportTicket,
   UserAccount,
   UserPrivateInfo,
+  VerificationRequest,
   WithdrawalAttemptLog,
   WithdrawalAttemptStatus,
 } from '../types/earneasy';
-import { calculateAgeFromBirthDate, formatBirthDateBr } from '../utils/age';
+import { formatBirthDateBr, VERIFICATION_DOCUMENT_LABELS } from '../utils/cpf';
 import { generateId, sha256Hex } from '../utils/antifraud';
 import {
   extractReadableError,
@@ -75,9 +75,11 @@ import {
   formatPoints,
   formatScheduleRemaining,
   formatScheduleTime,
+  getServerNowMs,
+  syncServerUtcClock,
   timestampToMillis,
 } from '../utils/pix';
-import { VerifiedBadge } from './VerifiedBadge';
+import { resolveVerifiedBadgeTier, VerifiedBadge } from './VerifiedBadge';
 
 type AdminTab = 'overview' | 'verification' | 'payouts' | 'users' | 'codes' | 'support' | 'chat' | 'antifraud' | 'api';
 
@@ -169,8 +171,9 @@ export const AdminPanel: React.FC = React.memo(() => {
     withdrawalSettings,
     maintenanceSettings,
     updateMaintenanceSettings,
-    approveFaceVerification,
-    rejectFaceVerification,
+    approveVerificationRequest,
+    rejectVerificationRequest,
+    setUserBlueVerified,
   } = useAuth();
 
   const [tab, setTab] = useState<AdminTab>('overview');
@@ -191,11 +194,13 @@ export const AdminPanel: React.FC = React.memo(() => {
   const [supportReplyDraft, setSupportReplyDraft] = useState('');
   const [supportBusy, setSupportBusy] = useState(false);
   const [globalChatMessages, setGlobalChatMessages] = useState<Array<{ id: string; senderName?: string; senderUid?: string; text?: string; createdAt?: Timestamp }>>([]);
-  const [faceVerifications, setFaceVerifications] = useState<FaceVerificationRequest[]>([]);
-  const [faceFilter, setFaceFilter] = useState<'pending' | 'approved' | 'rejected' | 'all'>('pending');
-  const [faceRejectReasons, setFaceRejectReasons] = useState<Record<string, string>>({});
-  const [faceBusyUid, setFaceBusyUid] = useState<string | null>(null);
-  const [zoomSelfie, setZoomSelfie] = useState<FaceVerificationRequest | null>(null);
+  const [globalChatClockMs, setGlobalChatClockMs] = useState<number>(() => getServerNowMs());
+  const adminGlobalDeleteAttemptRef = React.useRef<Map<string, number>>(new Map());
+  const [verificationRequests, setVerificationRequests] = useState<VerificationRequest[]>([]);
+  const [verificationFilter, setVerificationFilter] = useState<'pending' | 'approved' | 'rejected' | 'all'>('pending');
+  const [verificationRejectReasons, setVerificationRejectReasons] = useState<Record<string, string>>({});
+  const [verificationBusyUid, setVerificationBusyUid] = useState<string | null>(null);
+  const [blueToggleBusyUid, setBlueToggleBusyUid] = useState<string | null>(null);
 
   const [payoutFilter, setPayoutFilter] = useState<'all' | 'pending' | 'approved' | 'paid' | 'rejected'>('all');
   const [attemptFilter, setAttemptFilter] = useState<
@@ -227,13 +232,45 @@ export const AdminPanel: React.FC = React.memo(() => {
       setGlobalChatMessages([]);
       return;
     }
+    void syncServerUtcClock().then(() => setGlobalChatClockMs(getServerNowMs()));
+    const timer = window.setInterval(() => setGlobalChatClockMs(getServerNowMs()), 5_000);
     const chatQuery = query(collection(db, 'globalMessages'), orderBy('createdAt', 'desc'), limit(100));
-    return onSnapshot(
+    const unsub = onSnapshot(
       chatQuery,
       (snap) => setGlobalChatMessages(snap.docs.map((item) => ({ id: item.id, ...item.data() } as { id: string; senderName?: string; senderUid?: string; text?: string; createdAt?: Timestamp }))),
       (err) => handleFirestoreError(err, OperationType.LIST, 'globalMessages')
     );
+    return () => {
+      window.clearInterval(timer);
+      unsub();
+    };
   }, [firebaseUser, isAdmin]);
+
+  const activeGlobalChatMessages = useMemo(() => {
+    const ttlMs = 5 * 60 * 1000;
+    return globalChatMessages.filter((message) => {
+      const createdMs = timestampToMillis(message.createdAt);
+      if (!createdMs) return true;
+      return globalChatClockMs - createdMs < ttlMs;
+    });
+  }, [globalChatMessages, globalChatClockMs]);
+
+  useEffect(() => {
+    if (!firebaseUser || !isAdmin || globalChatMessages.length === 0) return;
+    const ttlMs = 5 * 60 * 1000;
+    const nowLocal = Date.now();
+    const expired = globalChatMessages.filter((message) => {
+      const createdMs = timestampToMillis(message.createdAt);
+      if (!createdMs) return false;
+      if (globalChatClockMs - createdMs < ttlMs + 5_000) return false;
+      const lastAttempt = adminGlobalDeleteAttemptRef.current.get(message.id) ?? 0;
+      return nowLocal - lastAttempt > 30_000;
+    });
+    if (expired.length === 0) return;
+    const slice = expired.slice(0, 15);
+    slice.forEach((m) => adminGlobalDeleteAttemptRef.current.set(m.id, nowLocal));
+    void Promise.allSettled(slice.map((m) => deleteDoc(doc(db, 'globalMessages', m.id))));
+  }, [firebaseUser, isAdmin, globalChatMessages, globalChatClockMs]);
 
   // Pix withdrawal minimum & values settings state
   const [firstMinReais, setFirstMinReais] = useState(
@@ -407,9 +444,9 @@ export const AdminPanel: React.FC = React.memo(() => {
     );
 
     const u10 = onSnapshot(
-      query(collection(db, 'faceVerifications'), orderBy('submittedAt', 'desc')),
-      (snap) => setFaceVerifications(snap.docs.map((d) => d.data() as FaceVerificationRequest)),
-      (err) => handleFirestoreError(err, OperationType.LIST, 'faceVerifications')
+      query(collection(db, 'verificationRequests'), orderBy('submittedAt', 'desc')),
+      (snap) => setVerificationRequests(snap.docs.map((d) => d.data() as VerificationRequest)),
+      (err) => handleFirestoreError(err, OperationType.LIST, 'verificationRequests')
     );
 
     return () => {
@@ -708,6 +745,7 @@ export const AdminPanel: React.FC = React.memo(() => {
               gamesPlayed: uData.gamesPlayed,
               status: uData.status,
               identityVerified: Boolean(uData.identityVerified),
+              verifiedBadge: resolveVerifiedBadgeTier(uData.verifiedBadge, uData.identityVerified),
               updatedAt: serverTimestamp(),
             });
           }
@@ -1016,6 +1054,7 @@ export const AdminPanel: React.FC = React.memo(() => {
         gamesPlayed: u.gamesPlayed,
         status: 'active',
         identityVerified: Boolean(u.identityVerified),
+        verifiedBadge: resolveVerifiedBadgeTier(u.verifiedBadge, u.identityVerified),
         updatedAt: serverTimestamp(),
       });
       setActionMsg(`Usuário ${u.displayName} reativado com sucesso.`);
@@ -1473,53 +1512,80 @@ export const AdminPanel: React.FC = React.memo(() => {
   startOfToday.setHours(0, 0, 0, 0);
   const newUsersToday = users.filter((user) => timestampToMillis(user.createdAt) >= startOfToday.getTime()).length;
 
-  const handleApproveFace = async (req: FaceVerificationRequest) => {
-    if (faceBusyUid) return;
+  const handleApproveVerification = async (req: VerificationRequest) => {
+    if (verificationBusyUid) return;
     setActionErr(null);
     setActionMsg(null);
-    setFaceBusyUid(req.uid);
+    setVerificationBusyUid(req.uid);
     try {
-      await approveFaceVerification(req.uid);
+      await approveVerificationRequest(req.uid);
       setActionMsg(
-        `Verificação facial de ${req.displayName} aprovada! Selo ativado e +${formatPoints(FACE_VERIFICATION_BONUS_POINTS)} pontos creditados na hora.`
+        `Verificado Azul de ${req.displayName} aprovado com sucesso! Selo ativado sem bônus de pontos.`
       );
     } catch (err) {
-      setActionErr(extractReadableError(err, 'Erro ao aprovar verificação facial.'));
+      setActionErr(extractReadableError(err, 'Erro ao aprovar Verificado Azul.'));
     } finally {
-      setFaceBusyUid(null);
+      setVerificationBusyUid(null);
     }
   };
 
-  const handleRejectFace = async (req: FaceVerificationRequest) => {
-    if (faceBusyUid) return;
-    const reason = (faceRejectReasons[req.uid] || '').trim();
+  const handleRejectVerification = async (req: VerificationRequest) => {
+    if (verificationBusyUid) return;
+    const reason = (verificationRejectReasons[req.uid] || '').trim();
     if (reason.length < 3) {
-      setActionErr('Informe o motivo da recusa antes de recusar a verificação facial.');
+      setActionErr('Informe o motivo da recusa antes de recusar a solicitação.');
       return;
     }
     setActionErr(null);
     setActionMsg(null);
-    setFaceBusyUid(req.uid);
+    setVerificationBusyUid(req.uid);
     try {
-      await rejectFaceVerification(req.uid, reason);
-      setFaceRejectReasons((prev) => ({ ...prev, [req.uid]: '' }));
-      setActionMsg(`Verificação facial de ${req.displayName} recusada.`);
+      await rejectVerificationRequest(req.uid, reason);
+      setVerificationRejectReasons((prev) => ({ ...prev, [req.uid]: '' }));
+      setActionMsg(`Solicitação de Verificado Azul de ${req.displayName} recusada.`);
     } catch (err) {
-      setActionErr(extractReadableError(err, 'Erro ao recusar verificação facial.'));
+      setActionErr(extractReadableError(err, 'Erro ao recusar solicitação.'));
     } finally {
-      setFaceBusyUid(null);
+      setVerificationBusyUid(null);
     }
   };
 
-  const pendingFaceCount = useMemo(
-    () => faceVerifications.filter((f) => f.status === 'pending').length,
-    [faceVerifications]
+  const handleToggleBlueVerified = async (u: UserAccount) => {
+    if (blueToggleBusyUid) return;
+    const currentTier = resolveVerifiedBadgeTier(u.verifiedBadge, u.identityVerified);
+    if (currentTier === 'owner') {
+      setActionErr('O selo oficial do Dono é exclusivo e protegido.');
+      return;
+    }
+    const nextGranted = currentTier !== 'blue';
+    setActionErr(null);
+    setActionMsg(null);
+    setBlueToggleBusyUid(u.uid);
+    try {
+      await setUserBlueVerified(u.uid, nextGranted);
+      setActionMsg(
+        nextGranted
+          ? `Verificado Azul ativado para ${u.displayName}!`
+          : `Verificado Azul removido de ${u.displayName}.`
+      );
+    } catch (err) {
+      setActionErr(extractReadableError(err, 'Não foi possível atualizar o Verificado Azul.'));
+    } finally {
+      setBlueToggleBusyUid(null);
+    }
+  };
+
+  const pendingVerificationCount = useMemo(
+    () => verificationRequests.filter((f) => f.status === 'pending').length,
+    [verificationRequests]
   );
 
-  const filteredFaceVerifications = useMemo(
+  const filteredVerificationRequests = useMemo(
     () =>
-      faceVerifications.filter((f) => (faceFilter === 'all' ? true : f.status === faceFilter)),
-    [faceVerifications, faceFilter]
+      verificationRequests.filter((f) =>
+        verificationFilter === 'all' ? true : f.status === verificationFilter
+      ),
+    [verificationRequests, verificationFilter]
   );
 
   const ADMIN_TABS: Array<{
@@ -1531,9 +1597,9 @@ export const AdminPanel: React.FC = React.memo(() => {
     { id: 'overview', label: 'Visão Geral & Manutenção', Icon: LayoutDashboard },
     {
       id: 'verification',
-      label: 'Verificação Facial',
-      Icon: Camera,
-      badge: pendingFaceCount || undefined,
+      label: 'Verificação Azul',
+      Icon: BadgeCheck,
+      badge: pendingVerificationCount || undefined,
     },
     {
       id: 'payouts',
@@ -2314,7 +2380,12 @@ export const AdminPanel: React.FC = React.memo(() => {
                       <span className="text-sm font-bold text-slate-900 dark:text-white break-words">
                         {u.displayName}
                       </span>
-                      {u.identityVerified && <VerifiedBadge showLabel size="xs" />}
+                      <VerifiedBadge
+                        tier={u.verifiedBadge}
+                        legacyVerified={u.identityVerified}
+                        showLabel
+                        size="xs"
+                      />
                       {adminUids.includes(u.uid) && (
                         <span className="px-2 py-0.5 rounded-lg text-[11px] font-bold bg-lime-100 dark:bg-lime-500/15 text-lime-800 dark:text-lime-300">
                           Administrador
@@ -2378,6 +2449,25 @@ export const AdminPanel: React.FC = React.memo(() => {
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    {resolveVerifiedBadgeTier(u.verifiedBadge, u.identityVerified) !== 'owner' && (
+                      <button
+                        type="button"
+                        disabled={blueToggleBusyUid === u.uid}
+                        onClick={() => handleToggleBlueVerified(u)}
+                        className={`min-h-[40px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border font-bold cursor-pointer disabled:opacity-50 ${
+                          resolveVerifiedBadgeTier(u.verifiedBadge, u.identityVerified) === 'blue'
+                            ? 'bg-sky-600 text-white border-sky-500 hover:bg-sky-700'
+                            : 'bg-sky-50 dark:bg-sky-950/40 text-sky-700 dark:text-sky-300 border-sky-200 dark:border-sky-800 hover:border-sky-400'
+                        }`}
+                      >
+                        <BadgeCheck className="w-3.5 h-3.5" />
+                        {blueToggleBusyUid === u.uid
+                          ? 'Salvando...'
+                          : resolveVerifiedBadgeTier(u.verifiedBadge, u.identityVerified) === 'blue'
+                            ? 'Remover Verificado'
+                            : 'Dar Verificado Azul'}
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => openPointsModal(u)}
@@ -2988,15 +3078,15 @@ export const AdminPanel: React.FC = React.memo(() => {
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
             <div>
               <h3 className="text-base font-bold text-slate-900 dark:text-white">Moderação do Chat Global</h3>
-              <p className="text-xs text-slate-500 dark:text-zinc-400">Exclua mensagens inadequadas da conversa pública. A exclusão é permanente.</p>
+              <p className="text-xs text-slate-500 dark:text-zinc-400">Mensagens somem automaticamente após 5 minutos. Você também pode excluir mensagens inadequadas manualmente.</p>
             </div>
-            <span className="text-xs font-semibold text-slate-500 dark:text-zinc-400">{globalChatMessages.length} mensagens carregadas</span>
+            <span className="text-xs font-semibold text-slate-500 dark:text-zinc-400">{activeGlobalChatMessages.length} mensagens ativas (últimos 5 min)</span>
           </div>
-          {globalChatMessages.length === 0 ? (
-            <p className="text-xs text-slate-500 dark:text-zinc-400 py-8 text-center">Nenhuma mensagem encontrada no chat global.</p>
+          {activeGlobalChatMessages.length === 0 ? (
+            <p className="text-xs text-slate-500 dark:text-zinc-400 py-8 text-center">Nenhuma mensagem ativa no chat global.</p>
           ) : (
             <div className="space-y-2 max-h-[650px] overflow-y-auto pr-1">
-              {globalChatMessages.map((message) => (
+              {activeGlobalChatMessages.map((message) => (
                 <div key={message.id} className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 rounded-2xl border border-slate-200 dark:border-zinc-800 bg-slate-50/70 dark:bg-[#090d12] p-3.5">
                   <div className="min-w-0 space-y-1">
                     <div className="text-xs font-bold text-slate-900 dark:text-zinc-100">{message.senderName || 'Jogador'}</div>
@@ -3320,24 +3410,24 @@ export const AdminPanel: React.FC = React.memo(() => {
         </div>
       )}
 
-      {/* TAB: VERIFICAÇÃO FACIAL (+30.000 pts) */}
+      {/* TAB: VERIFICAÇÃO AZUL */}
       {tab === 'verification' && (
         <div className="bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 sm:p-6 space-y-5">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-zinc-800 pb-4">
             <div>
               <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                <Camera className="w-5 h-5 text-sky-500" />
-                Análise de Verificação Facial ({filteredFaceVerifications.length})
+                <BadgeCheck className="w-5 h-5 text-sky-500" />
+                Análise de Verificado Azul ({filteredVerificationRequests.length})
               </h3>
               <p className="text-xs text-slate-500 dark:text-zinc-400 mt-0.5">
-                Confira a selfie e os dados (+18). Ao aprovar, o perfil ganha o selo Verificado e +{formatPoints(FACE_VERIFICATION_BONUS_POINTS)} pontos imediatos (único por conta).
+                Confira nome completo, CPF, data de nascimento e documento enviado nas Configurações. Ao aprovar, libera o selo Verificado Azul (sem bônus de pontos).
               </p>
             </div>
 
             <div className="flex flex-wrap gap-1.5">
               {(
                 [
-                  { id: 'pending', label: `Pendentes (${pendingFaceCount})` },
+                  { id: 'pending', label: `Pendentes (${pendingVerificationCount})` },
                   { id: 'approved', label: 'Aprovados' },
                   { id: 'rejected', label: 'Recusados' },
                   { id: 'all', label: 'Todos' },
@@ -3346,9 +3436,9 @@ export const AdminPanel: React.FC = React.memo(() => {
                 <button
                   key={f.id}
                   type="button"
-                  onClick={() => setFaceFilter(f.id)}
+                  onClick={() => setVerificationFilter(f.id)}
                   className={`px-3 py-1.5 text-[11px] font-bold rounded-xl border transition-colors cursor-pointer ${
-                    faceFilter === f.id
+                    verificationFilter === f.id
                       ? 'bg-slate-900 dark:bg-lime-400 text-white dark:text-slate-950 border-transparent'
                       : 'bg-slate-50 dark:bg-[#090d12] text-slate-600 dark:text-zinc-300 border-slate-200 dark:border-zinc-800'
                   }`}
@@ -3359,158 +3449,123 @@ export const AdminPanel: React.FC = React.memo(() => {
             </div>
           </div>
 
-          {filteredFaceVerifications.length === 0 ? (
+          {filteredVerificationRequests.length === 0 ? (
             <p className="text-xs text-slate-500 dark:text-zinc-400 py-10 text-center">
-              Nenhuma solicitação de verificação facial neste filtro.
+              Nenhuma solicitação de Verificado Azul neste filtro.
             </p>
           ) : (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              {filteredFaceVerifications.map((req) => {
-                const age = req.birthDate ? calculateAgeFromBirthDate(req.birthDate) : null;
+              {filteredVerificationRequests.map((req) => {
                 const email = privateMap[req.uid]?.email || '';
-                const busy = faceBusyUid === req.uid;
+                const busy = verificationBusyUid === req.uid;
                 return (
                   <div
                     key={req.uid}
-                    className="rounded-2xl border border-slate-200 dark:border-zinc-800 bg-slate-50/70 dark:bg-[#090d12] p-4 flex flex-col sm:flex-row gap-4"
+                    className="rounded-2xl border border-slate-200 dark:border-zinc-800 bg-slate-50/70 dark:bg-[#090d12] p-4 flex flex-col gap-3 text-xs"
                   >
-                    <button
-                      type="button"
-                      onClick={() => setZoomSelfie(req)}
-                      className="relative w-28 h-28 sm:w-32 sm:h-32 rounded-2xl overflow-hidden border border-slate-300 dark:border-zinc-700 bg-black shrink-0 group cursor-pointer self-start"
-                      title="Clique para ampliar a foto"
-                    >
-                      <img
-                        src={req.selfieDataUrl}
-                        alt={`Selfie de ${req.displayName}`}
-                        className="w-full h-full object-cover"
-                      />
-                      <span className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-[11px] font-bold gap-1">
-                        <Eye className="w-3.5 h-3.5" /> Ampliar
-                      </span>
-                    </button>
-
-                    <div className="flex-1 min-w-0 space-y-2.5 text-xs">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div className="flex items-center gap-1.5 min-w-0">
-                          <span className="text-sm font-extrabold text-slate-900 dark:text-white truncate">
-                            {req.displayName}
-                          </span>
-                          {req.status === 'approved' && <VerifiedBadge size="xs" />}
-                        </div>
-                        <span
-                          className={`px-2 py-0.5 rounded-lg text-[11px] font-bold ${
-                            req.status === 'approved'
-                              ? 'bg-sky-500/15 text-sky-600 dark:text-sky-400'
-                              : req.status === 'rejected'
-                                ? 'bg-red-500/15 text-red-600 dark:text-red-400'
-                                : 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
-                          }`}
-                        >
-                          {req.status === 'approved'
-                            ? 'Aprovado'
-                            : req.status === 'rejected'
-                              ? 'Recusado'
-                              : 'Pendente'}
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <FileCheck2 className="w-4 h-4 text-sky-500 shrink-0" />
+                        <span className="text-sm font-extrabold text-slate-900 dark:text-white truncate">
+                          {req.displayName}
                         </span>
+                        {req.status === 'approved' && <VerifiedBadge tier="blue" size="xs" />}
                       </div>
-
-                      <div className="space-y-0.5 text-[11px] text-slate-600 dark:text-zinc-400 font-mono break-all">
-                        {email && <div>{email}</div>}
-                        <div>UID: {req.uid}</div>
-                        <div>
-                          {req.birthDate ? (
-                            <>Nascimento informado: <strong className="text-slate-900 dark:text-zinc-200">{formatBirthDateBr(req.birthDate)}</strong>{age !== null ? ` (${age} anos)` : ''}</>
-                          ) : (
-                            <strong className="text-amber-700 dark:text-amber-300">Idade não informada — confirmar 18+ por documento oficial antes de aprovar.</strong>
-                          )}
-                        </div>
-                        <div>Enviado em: {formatAttemptTimestamp(req.submittedAt)}</div>
-                      </div>
-
-                      {req.status === 'rejected' && req.rejectionReason && (
-                        <div className="p-2 rounded-xl bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900 text-[11px] text-red-700 dark:text-red-300">
-                          <strong>Motivo da recusa:</strong> {req.rejectionReason}
-                        </div>
-                      )}
-
-                      {req.status === 'pending' && (
-                        <div className="space-y-2 pt-1">
-                          <div className="flex flex-wrap gap-2">
-                            <button
-                              type="button"
-                              disabled={busy || req.bonusAwarded}
-                              onClick={() => handleApproveFace(req)}
-                              className="flex-1 min-h-[40px] inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-lime-400 hover:bg-lime-300 disabled:opacity-45 text-slate-950 text-xs font-black cursor-pointer"
-                            >
-                              <CheckCircle2 className="w-4 h-4" />
-                              {busy ? 'Processando...' : `Aprovar (+${formatPoints(FACE_VERIFICATION_BONUS_POINTS)} pts)`}
-                            </button>
-                          </div>
-
-                          <div className="flex gap-1.5">
-                            <input
-                              type="text"
-                              maxLength={200}
-                              value={faceRejectReasons[req.uid] || ''}
-                              onChange={(e) =>
-                                setFaceRejectReasons((prev) => ({ ...prev, [req.uid]: e.target.value }))
-                              }
-                              placeholder="Motivo da recusa (ex: foto escura / rosto cortado)"
-                              className="flex-1 min-h-[38px] px-3 py-1.5 text-xs bg-white dark:bg-[#0e1319] border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-xl"
-                            />
-                            <button
-                              type="button"
-                              disabled={busy || (faceRejectReasons[req.uid] || '').trim().length < 3}
-                              onClick={() => handleRejectFace(req)}
-                              className="min-h-[38px] inline-flex items-center gap-1 px-3 py-1.5 rounded-xl bg-red-50 dark:bg-red-950/50 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 text-xs font-bold disabled:opacity-40 cursor-pointer shrink-0"
-                            >
-                              <XCircle className="w-3.5 h-3.5" />
-                              Recusar
-                            </button>
-                          </div>
-                        </div>
-                      )}
+                      <span
+                        className={`px-2 py-0.5 rounded-lg text-[11px] font-bold ${
+                          req.status === 'approved'
+                            ? 'bg-sky-500/15 text-sky-600 dark:text-sky-400'
+                            : req.status === 'rejected'
+                              ? 'bg-red-500/15 text-red-600 dark:text-red-400'
+                              : 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
+                        }`}
+                      >
+                        {req.status === 'approved'
+                          ? 'Aprovado'
+                          : req.status === 'rejected'
+                            ? 'Recusado'
+                            : 'Pendente'}
+                      </span>
                     </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 rounded-xl bg-white dark:bg-[#0e1319] border border-slate-200/80 dark:border-zinc-800 p-3 text-[11px]">
+                      <div className="sm:col-span-2">
+                        <span className="text-slate-400 dark:text-zinc-500">Nome completo:</span>{' '}
+                        <strong className="text-slate-900 dark:text-zinc-100">{req.fullName}</strong>
+                      </div>
+                      <div>
+                        <span className="text-slate-400 dark:text-zinc-500">CPF:</span>{' '}
+                        <strong className="font-mono text-slate-900 dark:text-zinc-100">{req.cpf}</strong>
+                      </div>
+                      <div>
+                        <span className="text-slate-400 dark:text-zinc-500">Nascimento:</span>{' '}
+                        <strong className="font-mono text-slate-900 dark:text-zinc-100">
+                          {formatBirthDateBr(req.birthDate)}
+                        </strong>
+                      </div>
+                      <div className="sm:col-span-2">
+                        <span className="text-slate-400 dark:text-zinc-500">Documento:</span>{' '}
+                        <strong className="font-mono text-slate-900 dark:text-zinc-100">
+                          {VERIFICATION_DOCUMENT_LABELS[req.documentType]} · {req.documentNumber}
+                        </strong>
+                      </div>
+                    </div>
+
+                    <div className="space-y-0.5 text-[11px] text-slate-500 dark:text-zinc-400 font-mono break-all">
+                      {email && <div>{email}</div>}
+                      <div>UID: {req.uid}</div>
+                      <div>Enviado em: {formatAttemptTimestamp(req.submittedAt)}</div>
+                    </div>
+
+                    {req.status === 'rejected' && req.rejectionReason && (
+                      <div className="p-2 rounded-xl bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900 text-[11px] text-red-700 dark:text-red-300">
+                        <strong>Motivo da recusa:</strong> {req.rejectionReason}
+                      </div>
+                    )}
+
+                    {req.status === 'pending' && (
+                      <div className="space-y-2 pt-1">
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => handleApproveVerification(req)}
+                          className="w-full min-h-[40px] inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 disabled:opacity-45 text-white text-xs font-black cursor-pointer"
+                        >
+                          <CheckCircle2 className="w-4 h-4" />
+                          {busy ? 'Processando...' : 'Aprovar Verificado Azul'}
+                        </button>
+
+                        <div className="flex gap-1.5">
+                          <input
+                            type="text"
+                            maxLength={200}
+                            value={verificationRejectReasons[req.uid] || ''}
+                            onChange={(e) =>
+                              setVerificationRejectReasons((prev) => ({
+                                ...prev,
+                                [req.uid]: e.target.value,
+                              }))
+                            }
+                            placeholder="Motivo da recusa (ex: CPF divergente / documento incompleto)"
+                            className="flex-1 min-h-[38px] px-3 py-1.5 text-xs bg-white dark:bg-[#0e1319] border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-xl"
+                          />
+                          <button
+                            type="button"
+                            disabled={busy || (verificationRejectReasons[req.uid] || '').trim().length < 3}
+                            onClick={() => handleRejectVerification(req)}
+                            className="min-h-[38px] inline-flex items-center gap-1 px-3 py-1.5 rounded-xl bg-red-50 dark:bg-red-950/50 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 text-xs font-bold disabled:opacity-40 cursor-pointer shrink-0"
+                          >
+                            <XCircle className="w-3.5 h-3.5" />
+                            Recusar
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 );
               })}
             </div>
           )}
-        </div>
-      )}
-
-      {/* MODAL: AMPLIAR SELFIE FACIAL */}
-      {zoomSelfie && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setZoomSelfie(null);
-          }}
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm"
-        >
-          <div className="bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-3xl max-w-md w-full overflow-hidden shadow-2xl">
-            <div className="px-5 py-3.5 border-b border-slate-100 dark:border-zinc-800 flex items-center justify-between">
-              <div className="text-sm font-extrabold text-slate-900 dark:text-white truncate">
-                Selfie de {zoomSelfie.displayName}
-              </div>
-              <button
-                type="button"
-                onClick={() => setZoomSelfie(null)}
-                className="p-1.5 rounded-lg text-slate-500 hover:text-slate-900 dark:hover:text-white cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-            <div className="p-4 bg-black flex justify-center">
-              <img
-                src={zoomSelfie.selfieDataUrl}
-                alt={`Selfie ampliada de ${zoomSelfie.displayName}`}
-                className="max-h-[70vh] w-auto rounded-2xl object-contain"
-              />
-            </div>
-          </div>
         </div>
       )}
 

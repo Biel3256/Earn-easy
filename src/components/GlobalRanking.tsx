@@ -264,7 +264,13 @@ export const GlobalRanking: React.FC<GlobalRankingProps> = ({
             <span className="truncate">
               {loading ? 'Carregando...' : topLeader ? topLeader.displayName : 'Sem líder ainda'}
             </span>
-            {!loading && topLeader?.identityVerified && <VerifiedBadge size="sm" />}
+            {!loading && (
+              <VerifiedBadge
+                tier={topLeader?.verifiedBadge}
+                legacyVerified={topLeader?.identityVerified}
+                size="sm"
+              />
+            )}
           </div>
           <div className="text-sm font-mono tabular-nums font-bold text-emerald-600 dark:text-emerald-400">
             {topLeader ? formatBRL(topLeader.brlBalanceCents) : 'R$ 0,00'}
@@ -480,7 +486,11 @@ export const GlobalRanking: React.FC<GlobalRankingProps> = ({
                           <div className="min-w-0">
                             <div className="font-semibold text-slate-900 dark:text-zinc-100 flex items-center gap-1.5 min-w-0">
                               <span className="truncate">{player.displayName}</span>
-                              {player.identityVerified && <VerifiedBadge size="xs" />}
+                              <VerifiedBadge
+                                tier={player.verifiedBadge}
+                                legacyVerified={player.identityVerified}
+                                size="xs"
+                              />
                               {isMe && (
                                 <span className="text-xs font-medium text-emerald-700 dark:text-emerald-400 shrink-0">
                                   · Você

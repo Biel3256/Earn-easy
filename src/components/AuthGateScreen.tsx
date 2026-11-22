@@ -15,8 +15,6 @@ import {
 import lobbyHeroImg from '../assets/images/earn_easy_lobby_hero_1795064087528.jpg';
 import { useAuth } from '../context/AuthContext';
 import { AVATAR_PRESETS, isGalleryDataUrl, processGalleryAvatarFile, resolveAvatarSrc } from '../utils/avatars';
-import { validateBirthDateInput } from '../utils/age';
-import { MIN_VERIFIED_AGE } from '../types/earneasy';
 import { BrandLogo } from './BrandLogo';
 import { ParticleBackdrop } from './ParticleBackdrop';
 import { AppTheme } from './SettingsSection';
@@ -66,7 +64,6 @@ export const AuthGateScreen: React.FC<AuthGateScreenProps> = ({
   } = useAuth();
 
   const [username, setUsername] = useState('');
-  const [birthDate, setBirthDate] = useState('');
   const [referralCode, setReferralCode] = useState(() => {
     if (typeof window === 'undefined') return '';
     try {
@@ -117,20 +114,9 @@ export const AuthGateScreen: React.FC<AuthGateScreenProps> = ({
     }
   };
 
-  const birthValidation = birthDate ? validateBirthDateInput(birthDate) : null;
-
   const handleCreateAccount = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError(null);
-
-    const check = validateBirthDateInput(birthDate);
-    if (!check.valid || !check.isAdult) {
-      setFormError(
-        check.error ||
-          `Cadastro permitido somente para maiores de ${MIN_VERIFIED_AGE} anos.`
-      );
-      return;
-    }
 
     setSubmitting(true);
     try {
@@ -138,7 +124,6 @@ export const AuthGateScreen: React.FC<AuthGateScreenProps> = ({
         displayName: username,
         photoURL: selectedPhoto,
         referralCode: referralCode.trim() || undefined,
-        birthDate: check.clean,
       });
       if (result.status === 'suspended') {
         setFormError(
@@ -194,7 +179,7 @@ export const AuthGateScreen: React.FC<AuthGateScreenProps> = ({
               Verificando sessão...
             </div>
             <p className="text-xs text-slate-500 dark:text-zinc-400">
-              Conectando com sua conta Earn Easy no Firestore.
+              Conectando com sua conta Earn Easy no servidor...
             </p>
           </div>
         ) : userAccount?.status === 'suspended' ? (
@@ -286,34 +271,6 @@ export const AuthGateScreen: React.FC<AuthGateScreenProps> = ({
                 <p className="mt-2 text-xs text-amber-700 dark:text-amber-400 leading-relaxed">
                   Aviso de tolerância zero: é proibido usar palavrões, ofensas ou termos impróprios no nome de usuário. Qualquer violação resulta em banimento imediato.
                 </p>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300 mb-1.5">
-                  Data de Nascimento (Obrigatório +{MIN_VERIFIED_AGE} anos)
-                </label>
-                <input
-                  type="date"
-                  required
-                  min="1905-01-01"
-                  max={new Date().toISOString().slice(0, 10)}
-                  value={birthDate}
-                  onChange={(e) => {
-                    setBirthDate(e.target.value);
-                    setFormError(null);
-                  }}
-                  className="w-full px-3.5 py-2.5 text-sm font-mono bg-white dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-600"
-                />
-                {birthValidation && !birthValidation.isAdult && (
-                  <p className="mt-1.5 text-xs font-semibold text-red-600 dark:text-red-400">
-                    {birthValidation.error}
-                  </p>
-                )}
-                {birthValidation && birthValidation.valid && birthValidation.isAdult && (
-                  <p className="mt-1.5 text-xs font-semibold text-emerald-700 dark:text-emerald-400">
-                    Idade confirmada: {birthValidation.age} anos (+{MIN_VERIFIED_AGE} elegível).
-                  </p>
-                )}
               </div>
 
               <div>
@@ -423,7 +380,7 @@ export const AuthGateScreen: React.FC<AuthGateScreenProps> = ({
 
               <button
                 type="submit"
-                disabled={submitting || processingGallery || Boolean(birthValidation && !birthValidation.isAdult)}
+                disabled={submitting || processingGallery}
                 className="w-full inline-flex items-center justify-center gap-2 px-5 py-3 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold rounded-xl transition-colors cursor-pointer disabled:opacity-50"
               >
                 <UserPlus className="w-4 h-4" />

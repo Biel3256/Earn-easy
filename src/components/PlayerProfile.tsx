@@ -2,10 +2,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   AlertCircle,
   Award,
-  Camera,
   Check,
   CheckCircle2,
-  Clock,
   Copy,
   Fingerprint,
   Gamepad2,
@@ -14,22 +12,18 @@ import {
   Link2,
   Lock,
   RotateCcw,
-  ShieldCheck,
   UserCheck,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
-import { FACE_VERIFICATION_BONUS_POINTS } from '../types/earneasy';
 import {
   AVATAR_PRESETS,
   isGalleryDataUrl,
   processGalleryAvatarFile,
   resolveAvatarSrc,
 } from '../utils/avatars';
-import { formatBirthDateBr } from '../utils/age';
 import { calculateGamesXp, calculatePlayerLevel, PLAYER_LEVELS } from '../utils/levels';
 import { formatBRL, formatPoints } from '../utils/pix';
-import { FaceVerificationModal } from './FaceVerificationModal';
 import { VerifiedBadge } from './VerifiedBadge';
 
 export const ProfileAvatar: React.FC<{
@@ -83,7 +77,6 @@ export const PlayerProfile: React.FC = () => {
     privateInfo,
     mySessions,
     myLevelRewards,
-    myFaceVerification,
     signInWithGoogle,
     updateUserProfile,
     claimLevelReward,
@@ -99,7 +92,6 @@ export const PlayerProfile: React.FC = () => {
   const [feedback, setFeedback] = useState<{ type: 'ok' | 'err'; msg: string } | null>(null);
   const [claimingLevel, setClaimingLevel] = useState<number | null>(null);
   const [rewardFeedback, setRewardFeedback] = useState<{ type: 'ok' | 'err'; msg: string } | null>(null);
-  const [faceModalOpen, setFaceModalOpen] = useState(false);
   const galleryInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -318,7 +310,12 @@ export const PlayerProfile: React.FC = () => {
                 <h1 className="text-2xl font-display font-bold text-slate-900 dark:text-zinc-50 truncate">
                   {userAccount.displayName}
                 </h1>
-                {userAccount.identityVerified && <VerifiedBadge showLabel size="md" />}
+                <VerifiedBadge
+                  tier={userAccount.verifiedBadge}
+                  legacyVerified={userAccount.identityVerified}
+                  showLabel
+                  size="md"
+                />
               </div>
               <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-zinc-400">
                 <span>Nível {levelInfo.level} · {levelInfo.title}</span>
@@ -472,113 +469,6 @@ export const PlayerProfile: React.FC = () => {
           )}
         </div>
       </section>
-
-      {/* Facial Verification (+30,000 pts) */}
-      {(() => {
-        const faceStatus = userAccount.identityVerified
-          ? 'approved'
-          : myFaceVerification?.status || userAccount.faceVerificationStatus || 'none';
-        const rejectionNote =
-          myFaceVerification?.rejectionReason || userAccount.faceVerificationNote || '';
-
-        return (
-          <section className="bg-white/95 dark:bg-zinc-900/95 backdrop-blur-md border border-slate-200/90 dark:border-zinc-800 rounded-3xl p-6 shadow-sm">
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-              <div className="flex items-start gap-4 min-w-0">
-                <div
-                  className={`w-12 h-12 rounded-2xl border flex items-center justify-center shrink-0 ${
-                    faceStatus === 'approved'
-                      ? 'bg-sky-500/15 border-sky-500/35 text-sky-500'
-                      : faceStatus === 'pending'
-                        ? 'bg-amber-500/15 border-amber-500/35 text-amber-500'
-                        : faceStatus === 'rejected'
-                          ? 'bg-red-500/15 border-red-500/35 text-red-500'
-                          : 'bg-lime-400/15 border-lime-400/35 text-emerald-700 dark:text-lime-400'
-                  }`}
-                >
-                  {faceStatus === 'approved' ? (
-                    <ShieldCheck className="w-6 h-6" />
-                  ) : faceStatus === 'pending' ? (
-                    <Clock className="w-6 h-6" />
-                  ) : (
-                    <Camera className="w-6 h-6" />
-                  )}
-                </div>
-
-                <div className="space-y-1 min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <h2 className="text-base font-extrabold text-slate-900 dark:text-white">
-                      Verificação Facial do Perfil
-                    </h2>
-                    {faceStatus === 'approved' ? (
-                      <VerifiedBadge showLabel size="sm" />
-                    ) : (
-                      <span className="text-xs font-mono font-extrabold text-emerald-700 dark:text-lime-400">
-                        +{formatPoints(FACE_VERIFICATION_BONUS_POINTS)} pts
-                      </span>
-                    )}
-                  </div>
-
-                  {faceStatus === 'approved' ? (
-                    <p className="text-xs text-slate-600 dark:text-zinc-300 leading-relaxed">
-                      Sua identidade foi verificada pelo administrador! Você recebeu o selo{' '}
-                      <strong className="text-sky-600 dark:text-sky-400">Perfil Verificado</strong> e o bônus imediato de{' '}
-                      <strong className="font-mono">+{formatPoints(FACE_VERIFICATION_BONUS_POINTS)} pontos</strong>.
-                      {userAccount.birthDate && ` · Nascimento: ${formatBirthDateBr(userAccount.birthDate)}`}
-                    </p>
-                  ) : faceStatus === 'pending' ? (
-                    <p className="text-xs text-amber-700 dark:text-amber-300 leading-relaxed">
-                      Sua selfie foi enviada e está em análise no Painel Administrativo. Assim que for aprovada, o selo Verificado e os +{formatPoints(FACE_VERIFICATION_BONUS_POINTS)} pontos entram na sua conta na hora!
-                    </p>
-                  ) : faceStatus === 'rejected' ? (
-                    <div className="space-y-1">
-                      <p className="text-xs text-red-600 dark:text-red-400 font-semibold">
-                        Sua foto anterior foi recusada pelo administrador. Envie uma nova selfie nítida para ganhar +{formatPoints(FACE_VERIFICATION_BONUS_POINTS)} pontos.
-                      </p>
-                      {rejectionNote && (
-                        <p className="text-xs text-slate-600 dark:text-zinc-300">
-                          <strong>Motivo:</strong> {rejectionNote}
-                        </p>
-                      )}
-                    </div>
-                  ) : (
-                    <p className="text-xs text-slate-600 dark:text-zinc-400 leading-relaxed">
-                      Tire uma selfie ou envie sua foto do rosto para o administrador verificar seu perfil. Aprovando, você exibe o selo Verificado em todo o app e ganha{' '}
-                      <strong className="text-emerald-700 dark:text-lime-400 font-mono">
-                        +{formatPoints(FACE_VERIFICATION_BONUS_POINTS)} pontos
-                      </strong>{' '}
-                      imediatamente!
-                    </p>
-                  )}
-                </div>
-              </div>
-
-              <div className="shrink-0">
-                {faceStatus === 'approved' ? (
-                  <div className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-2xl bg-sky-500/10 border border-sky-500/30 text-sky-600 dark:text-sky-400 text-xs font-extrabold">
-                    <CheckCircle2 className="w-4 h-4" />
-                    Verificado (+30.000 pts)
-                  </div>
-                ) : faceStatus === 'pending' ? (
-                  <div className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-700 dark:text-amber-300 text-xs font-extrabold">
-                    <Clock className="w-4 h-4" />
-                    Em Análise pelo ADM
-                  </div>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => setFaceModalOpen(true)}
-                    className="min-h-[44px] inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-2xl bg-lime-400 hover:bg-lime-300 text-slate-950 text-xs font-black transition-colors cursor-pointer shadow-md shadow-lime-500/20 whitespace-nowrap"
-                  >
-                    <Camera className="w-4 h-4" />
-                    {faceStatus === 'rejected' ? 'Enviar Nova Selfie' : 'Verificar Rosto (+30.000 pts)'}
-                  </button>
-                )}
-              </div>
-            </div>
-          </section>
-        );
-      })()}
 
       {/* Edit Avatar, Gallery Upload & Display Name + Level Roadmap */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
@@ -813,11 +703,6 @@ export const PlayerProfile: React.FC = () => {
           </div>
         </section>
       </div>
-
-      <FaceVerificationModal
-        open={faceModalOpen}
-        onClose={() => setFaceModalOpen(false)}
-      />
     </div>
   );
 };

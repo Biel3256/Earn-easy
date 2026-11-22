@@ -547,7 +547,11 @@ function MainShell() {
                   <div className="text-left min-w-0">
                     <div className="text-xs font-bold text-slate-900 dark:text-white leading-tight max-w-[140px] flex items-center gap-1">
                       <span className="truncate">{userAccount?.displayName || 'Perfil'}</span>
-                      {userAccount?.identityVerified && <VerifiedBadge size="xs" />}
+                      <VerifiedBadge
+                        tier={userAccount?.verifiedBadge}
+                        legacyVerified={userAccount?.identityVerified}
+                        size="xs"
+                      />
                     </div>
                     {levelInfo && (
                       <div className="flex items-center gap-1.5 mt-0.5">
@@ -808,7 +812,11 @@ function MainShell() {
                     <div className="min-w-0">
                       <div className="text-sm font-bold text-slate-900 dark:text-white leading-snug flex items-center gap-1.5">
                         <span className="truncate">{userAccount.displayName}</span>
-                        {userAccount.identityVerified && <VerifiedBadge size="sm" />}
+                        <VerifiedBadge
+                          tier={userAccount.verifiedBadge}
+                          legacyVerified={userAccount.identityVerified}
+                          size="sm"
+                        />
                       </div>
                       <button
                         type="button"

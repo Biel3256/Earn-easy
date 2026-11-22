@@ -645,7 +645,8 @@ var MultiplayerEngine = class {
           hostUid: host.uid,
           hostName: sanitizeGlobalName(host.displayName),
           hostPhotoURL: host.photoURL,
-          hostVerified: Boolean(host.verified),
+          hostVerified: Boolean(host.verified || host.verifiedBadge !== "none"),
+          hostVerifiedBadge: host.verifiedBadge || (host.verified ? "blue" : "none"),
           gameId: room.gameId,
           totalRounds: room.totalRounds,
           stakePoints: room.stakePoints,
@@ -701,7 +702,8 @@ var MultiplayerEngine = class {
         isHost: p.isHost,
         acceptedRules: p.acceptedRules,
         score: p.score,
-        verified: Boolean(p.verified)
+        verified: Boolean(p.verified || p.verifiedBadge !== "none"),
+        verifiedBadge: p.verifiedBadge || (p.verified ? "blue" : "none")
       })),
       gameState: room.gameData ? this.sanitizeGameStateFor(room, viewerUid) : null,
       settlement: room.settlement,
@@ -947,7 +949,8 @@ var MultiplayerEngine = class {
     const gameId = String(payload.gameId || "domino");
     const visibility = payload.visibility === "public" ? "public" : "private";
     const postToGlobal = visibility === "public" && payload.postToGlobal !== false;
-    const verified = Boolean(payload.verified);
+    const verifiedBadge = payload.verifiedBadge === "owner" ? "owner" : payload.verifiedBadge === "blue" || payload.verified ? "blue" : "none";
+    const verified = verifiedBadge !== "none";
     const totalRounds = [1, 3, 5, 7].includes(Number(payload.totalRounds)) ? Number(payload.totalRounds) : 3;
     const stakePoints = Math.max(0, Math.min(5e4, Math.floor(Number(payload.stakePoints || 0))));
     if (!uid) {
@@ -995,6 +998,7 @@ var MultiplayerEngine = class {
           acceptedRules: true,
           score: 0,
           verified,
+          verifiedBadge,
           ws
         }
       ],
@@ -1017,7 +1021,8 @@ var MultiplayerEngine = class {
     const uid = String(payload.uid || "").trim();
     const displayName = sanitizeGlobalName(String(payload.displayName || "Jogador"));
     const photoURL = String(payload.photoURL || "").slice(0, 6e4);
-    const verified = Boolean(payload.verified);
+    const verifiedBadge = payload.verifiedBadge === "owner" ? "owner" : payload.verifiedBadge === "blue" || payload.verified ? "blue" : "none";
+    const verified = verifiedBadge !== "none";
     const pointsBalance = Math.max(0, Math.floor(Number(payload.pointsBalance || 0)));
     if (!uid || !roomCode) {
       this.sendError(ws, "Informe seu usu\xE1rio e o c\xF3digo da sala.");
@@ -1036,6 +1041,7 @@ var MultiplayerEngine = class {
       existing.photoURL = photoURL || existing.photoURL;
       existing.pointsBalance = pointsBalance;
       existing.verified = verified;
+      existing.verifiedBadge = verifiedBadge;
       existing.connected = true;
       existing.ws = ws;
       this.socketToRoom.set(ws, { roomCode, uid });
@@ -1062,6 +1068,7 @@ var MultiplayerEngine = class {
       acceptedRules: false,
       score: 0,
       verified,
+      verifiedBadge,
       ws
     });
     room.postedToGlobal = false;
@@ -2593,6 +2600,226 @@ ${conversationLines}` : "O usu\xE1rio acabou de abrir o chat de suporte."
       return;
     }
     res.json({ valid: true, settlement: result.settlement });
+  });
+  const activeMinesGames = /* @__PURE__ */ new Map();
+  const validateCasinoStake = (currency, rawStake) => {
+    const curr = currency === "brl" ? "brl" : currency === "points" ? "points" : null;
+    if (!curr) {
+      return { ok: false, error: "Moeda de aposta inv\xE1lida (use points ou brl)." };
+    }
+    const stake = Math.floor(Number(rawStake));
+    if (!Number.isFinite(stake)) {
+      return { ok: false, error: "Valor de aposta inv\xE1lido." };
+    }
+    if (curr === "points" && (stake < 10 || stake > 1e4)) {
+      return { ok: false, error: "Aposta em pontos deve ficar entre 10 e 10.000 pontos." };
+    }
+    if (curr === "brl" && (stake < 1 || stake > 5e3)) {
+      return { ok: false, error: "Aposta na carteira deve ficar entre R$ 0,01 e R$ 50,00." };
+    }
+    return { ok: true, currency: curr, stakeAmount: stake };
+  };
+  const computeMinesMultiplier = (minesCount, safeCount) => {
+    if (safeCount <= 0) return 1;
+    let factor = 0.97;
+    for (let i = 0; i < safeCount; i += 1) {
+      const remainingTiles = 25 - i;
+      const remainingSafe = 25 - minesCount - i;
+      if (remainingSafe <= 0) break;
+      factor *= remainingTiles / remainingSafe;
+    }
+    return Math.min(50, Math.max(1.01, Math.floor(factor * 100) / 100));
+  };
+  const getDoubleSlotColor = (slot) => {
+    if (slot === 0) return "white";
+    if (slot >= 1 && slot <= 7) return "red";
+    return "black";
+  };
+  app.post("/api/casino/double/roll", (req, res) => {
+    const { userId, currency, stakeAmount, choice } = req.body ?? {};
+    const cleanUid = typeof userId === "string" ? userId.trim() : "";
+    if (!cleanUid) {
+      res.status(400).json({ error: "Usu\xE1rio n\xE3o identificado." });
+      return;
+    }
+    const stakeCheck = validateCasinoStake(currency, stakeAmount);
+    if (!stakeCheck.ok) {
+      res.status(400).json({ error: stakeCheck.error });
+      return;
+    }
+    const cleanChoice = choice === "red" || choice === "black" || choice === "white" ? choice : null;
+    if (!cleanChoice) {
+      res.status(400).json({ error: "Escolha inv\xE1lida no Double (vermelho, preto ou branco)." });
+      return;
+    }
+    const slot = crypto2.randomInt(0, 15);
+    const winningColor = getDoubleSlotColor(slot);
+    const won = winningColor === cleanChoice;
+    const multiplier = won ? winningColor === "white" ? 14 : 2 : 0;
+    const payoutAmount = won ? stakeCheck.stakeAmount * multiplier : 0;
+    const sessionId = `dbl_${Date.now()}_${crypto2.randomBytes(5).toString("hex")}`;
+    const integrityHash = crypto2.createHmac("sha256", SIGNING_SECRET).update(`${sessionId}|${cleanUid}|double|${stakeCheck.currency}|${stakeCheck.stakeAmount}|${slot}|${payoutAmount}`).digest("hex");
+    res.json({
+      sessionId,
+      slot,
+      winningColor,
+      choice: cleanChoice,
+      won,
+      multiplier,
+      currency: stakeCheck.currency,
+      stakeAmount: stakeCheck.stakeAmount,
+      payoutAmount,
+      netDelta: payoutAmount - stakeCheck.stakeAmount,
+      integrityHash
+    });
+  });
+  app.post("/api/casino/mines/deal", (req, res) => {
+    const { userId, currency, stakeAmount, minesCount, sessionId: providedSessionId } = req.body ?? {};
+    const cleanUid = typeof userId === "string" ? userId.trim() : "";
+    if (!cleanUid) {
+      res.status(400).json({ error: "Usu\xE1rio n\xE3o identificado." });
+      return;
+    }
+    const stakeCheck = validateCasinoStake(currency, stakeAmount);
+    if (!stakeCheck.ok) {
+      res.status(400).json({ error: stakeCheck.error });
+      return;
+    }
+    const mines = Math.floor(Number(minesCount));
+    if (!Number.isInteger(mines) || mines < 1 || mines > 24) {
+      res.status(400).json({ error: "Quantidade de minas deve ser entre 1 e 24." });
+      return;
+    }
+    const cutoff = Date.now() - 2 * 60 * 60 * 1e3;
+    for (const [id, game] of activeMinesGames.entries()) {
+      if (game.createdAt < cutoff || game.userId === cleanUid && game.revealedSafe.length === 0) {
+        activeMinesGames.delete(id);
+      }
+    }
+    const deck = Array.from({ length: 25 }, (_, i) => i);
+    for (let i = deck.length - 1; i > 0; i -= 1) {
+      const j = crypto2.randomInt(0, i + 1);
+      [deck[i], deck[j]] = [deck[j], deck[i]];
+    }
+    const minesList = deck.slice(0, mines).sort((a, b) => a - b);
+    const sessionId = typeof providedSessionId === "string" && /^[a-zA-Z0-9_-]{8,128}$/.test(providedSessionId) ? providedSessionId : `mns_${Date.now()}_${crypto2.randomBytes(5).toString("hex")}`;
+    const integrityHash = crypto2.createHmac("sha256", SIGNING_SECRET).update(`${sessionId}|${cleanUid}|mines|${stakeCheck.currency}|${stakeCheck.stakeAmount}|${minesList.join(",")}`).digest("hex");
+    activeMinesGames.set(sessionId, {
+      sessionId,
+      userId: cleanUid,
+      currency: stakeCheck.currency,
+      stakeAmount: stakeCheck.stakeAmount,
+      minesCount: mines,
+      minesSet: new Set(minesList),
+      revealedSafe: [],
+      createdAt: Date.now()
+    });
+    res.json({
+      sessionId,
+      minesCount: mines,
+      currency: stakeCheck.currency,
+      stakeAmount: stakeCheck.stakeAmount,
+      nextMultiplier: computeMinesMultiplier(mines, 1),
+      integrityHash
+    });
+  });
+  app.post("/api/casino/mines/reveal", (req, res) => {
+    const { sessionId, userId, tileIndex } = req.body ?? {};
+    const game = typeof sessionId === "string" ? activeMinesGames.get(sessionId) : void 0;
+    if (!game || game.userId !== String(userId || "").trim()) {
+      res.status(404).json({ error: "Partida de Mines n\xE3o encontrada ou j\xE1 encerrada." });
+      return;
+    }
+    const idx = Math.floor(Number(tileIndex));
+    if (!Number.isInteger(idx) || idx < 0 || idx >= 25) {
+      res.status(400).json({ error: "Casa inv\xE1lida." });
+      return;
+    }
+    if (game.revealedSafe.includes(idx)) {
+      const currentMultiplier2 = computeMinesMultiplier(game.minesCount, game.revealedSafe.length);
+      res.json({
+        busted: false,
+        tileIndex: idx,
+        revealedSafe: game.revealedSafe,
+        currentMultiplier: currentMultiplier2,
+        currentPayoutAmount: Math.floor(game.stakeAmount * currentMultiplier2),
+        nextMultiplier: computeMinesMultiplier(game.minesCount, game.revealedSafe.length + 1),
+        allSafeCleared: game.revealedSafe.length >= 25 - game.minesCount
+      });
+      return;
+    }
+    if (game.minesSet.has(idx)) {
+      const minePositions = Array.from(game.minesSet).sort((a, b) => a - b);
+      activeMinesGames.delete(game.sessionId);
+      const integrityHash = crypto2.createHmac("sha256", SIGNING_SECRET).update(`${game.sessionId}|${game.userId}|mines|lost|0`).digest("hex");
+      res.json({
+        busted: true,
+        tileIndex: idx,
+        revealedSafe: game.revealedSafe,
+        minePositions,
+        currentMultiplier: 0,
+        payoutAmount: 0,
+        integrityHash
+      });
+      return;
+    }
+    game.revealedSafe.push(idx);
+    const safeCount = game.revealedSafe.length;
+    const currentMultiplier = computeMinesMultiplier(game.minesCount, safeCount);
+    const currentPayoutAmount = Math.min(game.stakeAmount * 50, Math.floor(game.stakeAmount * currentMultiplier));
+    const allSafeCleared = safeCount >= 25 - game.minesCount;
+    if (allSafeCleared) {
+      const minePositions = Array.from(game.minesSet).sort((a, b) => a - b);
+      activeMinesGames.delete(game.sessionId);
+      const integrityHash = crypto2.createHmac("sha256", SIGNING_SECRET).update(`${game.sessionId}|${game.userId}|mines|won|${currentPayoutAmount}`).digest("hex");
+      res.json({
+        busted: false,
+        tileIndex: idx,
+        revealedSafe: game.revealedSafe,
+        minePositions,
+        currentMultiplier,
+        currentPayoutAmount,
+        payoutAmount: currentPayoutAmount,
+        nextMultiplier: currentMultiplier,
+        allSafeCleared: true,
+        integrityHash
+      });
+      return;
+    }
+    res.json({
+      busted: false,
+      tileIndex: idx,
+      revealedSafe: game.revealedSafe,
+      currentMultiplier,
+      currentPayoutAmount,
+      nextMultiplier: computeMinesMultiplier(game.minesCount, safeCount + 1),
+      allSafeCleared: false
+    });
+  });
+  app.post("/api/casino/mines/cashout", (req, res) => {
+    const { sessionId, userId } = req.body ?? {};
+    const game = typeof sessionId === "string" ? activeMinesGames.get(sessionId) : void 0;
+    if (!game || game.userId !== String(userId || "").trim()) {
+      res.status(404).json({ error: "Partida de Mines n\xE3o encontrada ou j\xE1 finalizada." });
+      return;
+    }
+    if (game.revealedSafe.length < 1) {
+      res.status(400).json({ error: "Abra pelo menos 1 casa segura antes de retirar." });
+      return;
+    }
+    const currentMultiplier = computeMinesMultiplier(game.minesCount, game.revealedSafe.length);
+    const payoutAmount = Math.min(game.stakeAmount * 50, Math.floor(game.stakeAmount * currentMultiplier));
+    const minePositions = Array.from(game.minesSet).sort((a, b) => a - b);
+    activeMinesGames.delete(game.sessionId);
+    const integrityHash = crypto2.createHmac("sha256", SIGNING_SECRET).update(`${game.sessionId}|${game.userId}|mines|won|${payoutAmount}`).digest("hex");
+    res.json({
+      sessionId: game.sessionId,
+      multiplier: currentMultiplier,
+      payoutAmount,
+      revealedSafeCount: game.revealedSafe.length,
+      minePositions,
+      integrityHash
+    });
   });
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({

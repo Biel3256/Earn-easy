@@ -29,6 +29,7 @@ export interface ServerPlayer {
   acceptedRules: boolean;
   score: number;
   verified: boolean;
+  verifiedBadge: 'none' | 'blue' | 'owner';
   ws: WebSocket | null;
 }
 
@@ -38,6 +39,7 @@ export interface GlobalMatchListing {
   hostName: string;
   hostPhotoURL: string;
   hostVerified: boolean;
+  hostVerifiedBadge: 'none' | 'blue' | 'owner';
   gameId: MultiplayerGameId;
   totalRounds: number;
   stakePoints: number;
@@ -342,7 +344,8 @@ export class MultiplayerEngine {
           hostUid: host.uid,
           hostName: sanitizeGlobalName(host.displayName),
           hostPhotoURL: host.photoURL,
-          hostVerified: Boolean(host.verified),
+          hostVerified: Boolean(host.verified || host.verifiedBadge !== 'none'),
+          hostVerifiedBadge: host.verifiedBadge || (host.verified ? 'blue' : 'none'),
           gameId: room.gameId,
           totalRounds: room.totalRounds,
           stakePoints: room.stakePoints,
@@ -403,7 +406,8 @@ export class MultiplayerEngine {
         isHost: p.isHost,
         acceptedRules: p.acceptedRules,
         score: p.score,
-        verified: Boolean(p.verified),
+        verified: Boolean(p.verified || p.verifiedBadge !== 'none'),
+        verifiedBadge: p.verifiedBadge || (p.verified ? 'blue' : 'none'),
       })),
       gameState: room.gameData ? this.sanitizeGameStateFor(room, viewerUid) : null,
       settlement: room.settlement,
@@ -670,7 +674,13 @@ export class MultiplayerEngine {
     const gameId = String(payload.gameId || 'domino') as MultiplayerGameId;
     const visibility: RoomVisibility = payload.visibility === 'public' ? 'public' : 'private';
     const postToGlobal = visibility === 'public' && payload.postToGlobal !== false;
-    const verified = Boolean(payload.verified);
+    const verifiedBadge: 'none' | 'blue' | 'owner' =
+      payload.verifiedBadge === 'owner'
+        ? 'owner'
+        : payload.verifiedBadge === 'blue' || payload.verified
+          ? 'blue'
+          : 'none';
+    const verified = verifiedBadge !== 'none';
     const totalRounds = [1, 3, 5, 7].includes(Number(payload.totalRounds)) ? Number(payload.totalRounds) : 3;
     const stakePoints = Math.max(0, Math.min(50000, Math.floor(Number(payload.stakePoints || 0))));
 
@@ -723,6 +733,7 @@ export class MultiplayerEngine {
           acceptedRules: true,
           score: 0,
           verified,
+          verifiedBadge,
           ws,
         },
       ],
@@ -747,7 +758,13 @@ export class MultiplayerEngine {
     const uid = String(payload.uid || '').trim();
     const displayName = sanitizeGlobalName(String(payload.displayName || 'Jogador'));
     const photoURL = String(payload.photoURL || '').slice(0, 60000);
-    const verified = Boolean(payload.verified);
+    const verifiedBadge: 'none' | 'blue' | 'owner' =
+      payload.verifiedBadge === 'owner'
+        ? 'owner'
+        : payload.verifiedBadge === 'blue' || payload.verified
+          ? 'blue'
+          : 'none';
+    const verified = verifiedBadge !== 'none';
     const pointsBalance = Math.max(0, Math.floor(Number(payload.pointsBalance || 0)));
 
     if (!uid || !roomCode) {
@@ -770,6 +787,7 @@ export class MultiplayerEngine {
       existing.photoURL = photoURL || existing.photoURL;
       existing.pointsBalance = pointsBalance;
       existing.verified = verified;
+      existing.verifiedBadge = verifiedBadge;
       existing.connected = true;
       existing.ws = ws;
       this.socketToRoom.set(ws, { roomCode, uid });
@@ -798,6 +816,7 @@ export class MultiplayerEngine {
       acceptedRules: false,
       score: 0,
       verified,
+      verifiedBadge,
       ws,
     });
     // Remove immediately from Global Match Chat as soon as opponent accepts/joins!

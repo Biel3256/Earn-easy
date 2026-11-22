@@ -247,7 +247,12 @@ export const PlayerInspectorModal: React.FC<PlayerInspectorModalProps> = ({
                 <h2 className="text-lg sm:text-xl font-display font-extrabold text-white break-words">
                   {player.displayName}
                 </h2>
-                {player.identityVerified && <VerifiedBadge showLabel size="sm" />}
+                <VerifiedBadge
+                  tier={player.verifiedBadge}
+                  legacyVerified={player.identityVerified}
+                  showLabel
+                  size="sm"
+                />
                 {player.uid === myUid && (
                   <span className="text-[11px] font-semibold text-lime-300">· Você</span>
                 )}
