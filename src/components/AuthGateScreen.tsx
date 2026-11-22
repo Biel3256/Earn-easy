@@ -215,7 +215,7 @@ export const AuthGateScreen: React.FC<AuthGateScreenProps> = ({
                 </div>
               )}
               <div className="text-red-800/90 dark:text-red-300/90">
-                E-mail vinculado: {firebaseUser?.email}
+                E-mail vinculado: {firebaseUser?.email || firebaseUser?.providerData?.[0]?.email || 'Conta Google conectada'}
               </div>
             </div>
 
@@ -240,7 +240,10 @@ export const AuthGateScreen: React.FC<AuthGateScreenProps> = ({
                   Escolha seu nome de usuário
                 </h1>
                 <p className="text-xs text-slate-500 dark:text-zinc-400">
-                  Conectado como <span className="font-mono text-slate-700 dark:text-zinc-200">{firebaseUser.email}</span>
+                  Conectado como{' '}
+                  <span className="font-mono text-slate-700 dark:text-zinc-200">
+                    {firebaseUser.email || firebaseUser.providerData?.[0]?.email || 'Conta Google'}
+                  </span>
                 </p>
               </div>
               <button

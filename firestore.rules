@@ -53,6 +53,10 @@ service cloud.firestore {
     }
 
     function isSignedIn() {
+      return request.auth != null && request.auth.uid != null;
+    }
+
+    function hasVerifiedEmail() {
       return request.auth != null && request.auth.token.email_verified == true;
     }
 
@@ -63,7 +67,7 @@ service cloud.firestore {
     function isPlatformOwner() {
       return isSignedIn() && (
         request.auth.uid == 'H93H113NSHg0K3ircdUTe7fY0Gt1' ||
-        request.auth.token.email == 'riel6359@gmail.com'
+        (hasVerifiedEmail() && request.auth.token.email == 'riel6359@gmail.com')
       );
     }
 

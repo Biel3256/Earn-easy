@@ -570,7 +570,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           if (!privSnap.exists()) {
             await setDoc(privateRef, {
               uid: user.uid,
-              email: (user.email || 'sem-email@earneasy.app').slice(0, 160),
+              email: (user.email || user.providerData?.[0]?.email || 'sem-email@earneasy.app').slice(0, 160),
               defaultPixKeyType: 'none',
               defaultPixKey: '',
               deviceFingerprint: fingerprint,
@@ -1684,7 +1684,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         });
         batch.set(privateRef, {
           uid: firebaseUser.uid,
-          email: (firebaseUser.email || 'sem-email@earneasy.app').slice(0, 160),
+          email: (firebaseUser.email || firebaseUser.providerData?.[0]?.email || 'sem-email@earneasy.app').slice(0, 160),
           defaultPixKeyType: 'none',
           defaultPixKey: '',
           deviceFingerprint: fingerprint,
@@ -1728,7 +1728,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       });
       batch.set(privateRef, {
         uid: firebaseUser.uid,
-        email: (firebaseUser.email || 'sem-email@earneasy.app').slice(0, 160),
+        email: (firebaseUser.email || firebaseUser.providerData?.[0]?.email || 'sem-email@earneasy.app').slice(0, 160),
         defaultPixKeyType: 'none',
         defaultPixKey: '',
         deviceFingerprint: fingerprint,
