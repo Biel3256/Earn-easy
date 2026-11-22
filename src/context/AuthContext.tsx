@@ -1236,11 +1236,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const sessionId = generateId('sess');
     const playedDate = getTodayUtcDate();
 
-    try {
+    const runRewardTx = async (includeReferralCommission: boolean) => {
       await runTransaction(db, async (tx) => {
         const userRef = doc(db, 'users', firebaseUser.uid);
         const referralRef = doc(db, 'referrals', firebaseUser.uid);
-        const [snap, refSnap] = await Promise.all([tx.get(userRef), tx.get(referralRef)]);
+        const [snap, refSnap] = await Promise.all([
+          tx.get(userRef),
+          includeReferralCommission ? tx.get(referralRef) : Promise.resolve(null),
+        ]);
         if (!snap.exists()) throw new Error('Conta de usuário não encontrada.');
         const current = snap.data() as UserAccount;
         if (!isAccountCurrentlyActive(current)) {
@@ -1262,7 +1265,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
         const commission = credited > 0 ? Math.floor((credited * 12) / 100) : 0;
         let activeReferrerData: Referral | null = null;
-        if (refSnap.exists() && commission >= 1) {
+        if (includeReferralCommission && refSnap && refSnap.exists() && commission >= 1) {
           const candidateRef = refSnap.data() as Referral;
           if (candidateRef.referrerUid && candidateRef.referrerUid !== firebaseUser.uid) {
             const refLbSnap = await tx.get(doc(db, 'leaderboard', candidateRef.referrerUid));
@@ -1314,6 +1317,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           })
         );
       });
+    };
+
+    try {
+      try {
+        await runRewardTx(true);
+      } catch (firstErr) {
+        if (isFirestoreSdkError(firstErr)) {
+          await runRewardTx(false);
+        } else {
+          throw firstErr;
+        }
+      }
     } catch (error) {
       handleTransactionError(error, OperationType.WRITE, `users/${firebaseUser.uid}`);
     }
@@ -1707,72 +1722,88 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         };
       }
 
-      batch.set(userRef, {
-        uid: firebaseUser.uid,
-        displayName: cleanName,
-        photoURL: cleanPhoto,
-        pointsBalance: 0,
-        lifetimePoints: 0,
-        brlBalanceCents: 0,
-        totalWithdrawnCents: 0,
-        lastConversionDate: '',
-        status: 'active',
-        riskScore: 0,
-        gamesPlayed: 0,
-        identityVerified: false,
-        verifiedBadge: 'none',
-        verificationStatus: 'none',
-        verificationNote: '',
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
-      batch.set(privateRef, {
-        uid: firebaseUser.uid,
-        email: (firebaseUser.email || firebaseUser.providerData?.[0]?.email || 'sem-email@earneasy.app').slice(0, 160),
-        defaultPixKeyType: 'none',
-        defaultPixKey: '',
-        deviceFingerprint: fingerprint,
-        updatedAt: serverTimestamp(),
-      });
-      batch.set(doc(db, 'leaderboard', firebaseUser.uid), {
-        uid: firebaseUser.uid,
-        displayName: cleanName,
-        photoURL: cleanPhoto,
-        brlBalanceCents: 0,
-        pointsBalance: 0,
-        lifetimePoints: 0,
-        gamesPlayed: 0,
-        status: 'active',
-        identityVerified: false,
-        updatedAt: serverTimestamp(),
-      });
-
-      if (validReferrerUid) {
-        batch.set(doc(db, 'referrals', firebaseUser.uid), {
-          referralId: firebaseUser.uid,
-          referrerUid: validReferrerUid,
-          invitedUid: firebaseUser.uid,
-          invitedDisplayName: cleanName,
-          signupBonusPoints: REFERRAL_SIGNUP_BONUS_POINTS,
-          commissionRatePct: 12,
-          totalCommissionPointsEarned: 0,
+      const commitActiveSignup = async (referrerUid: string | null) => {
+        const activeBatch = writeBatch(db);
+        activeBatch.set(userRef, {
+          uid: firebaseUser.uid,
+          displayName: cleanName,
+          photoURL: cleanPhoto,
+          pointsBalance: 0,
+          lifetimePoints: 0,
+          brlBalanceCents: 0,
+          totalWithdrawnCents: 0,
+          lastConversionDate: '',
+          status: 'active',
+          riskScore: 0,
+          gamesPlayed: 0,
+          identityVerified: false,
+          verifiedBadge: 'none',
+          verificationStatus: 'none',
+          verificationNote: '',
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         });
-        batch.update(doc(db, 'users', validReferrerUid), {
-          pointsBalance: increment(REFERRAL_SIGNUP_BONUS_POINTS),
+        activeBatch.set(privateRef, {
+          uid: firebaseUser.uid,
+          email: (firebaseUser.email || firebaseUser.providerData?.[0]?.email || 'sem-email@earneasy.app').slice(0, 160),
+          defaultPixKeyType: 'none',
+          defaultPixKey: '',
+          deviceFingerprint: fingerprint,
           updatedAt: serverTimestamp(),
         });
+        activeBatch.set(doc(db, 'leaderboard', firebaseUser.uid), {
+          uid: firebaseUser.uid,
+          displayName: cleanName,
+          photoURL: cleanPhoto,
+          brlBalanceCents: 0,
+          pointsBalance: 0,
+          lifetimePoints: 0,
+          gamesPlayed: 0,
+          status: 'active',
+          identityVerified: false,
+          updatedAt: serverTimestamp(),
+        });
+
+        if (referrerUid) {
+          activeBatch.set(doc(db, 'referrals', firebaseUser.uid), {
+            referralId: firebaseUser.uid,
+            referrerUid,
+            invitedUid: firebaseUser.uid,
+            invitedDisplayName: cleanName,
+            signupBonusPoints: REFERRAL_SIGNUP_BONUS_POINTS,
+            commissionRatePct: 12,
+            totalCommissionPointsEarned: 0,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+          activeBatch.update(doc(db, 'users', referrerUid), {
+            pointsBalance: increment(REFERRAL_SIGNUP_BONUS_POINTS),
+            updatedAt: serverTimestamp(),
+          });
+        }
+
+        await activeBatch.commit();
+      };
+
+      let appliedReferrerUid: string | null = validReferrerUid;
+      try {
+        await commitActiveSignup(appliedReferrerUid);
+      } catch (firstErr) {
+        if (appliedReferrerUid && isFirestoreSdkError(firstErr)) {
+          appliedReferrerUid = null;
+          await commitActiveSignup(null);
+        } else {
+          throw firstErr;
+        }
       }
 
-      await batch.commit();
       try {
         window.localStorage.removeItem('earneasy_ref_uid');
       } catch {
         // Ignore storage error
       }
 
-      if (validReferrerUid && firebaseUser.email) {
+      if (appliedReferrerUid && firebaseUser.email) {
         const origin =
           typeof window !== 'undefined' ? window.location.origin : 'https://earneasy.app';
         void dispatchEmailNotification({
@@ -1781,7 +1812,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           eventType: 'referral_welcome',
           subject: 'Convite vinculado com sucesso no Earn Easy!',
           summary: `Sua conta (${cleanName}) foi criada através de um link de convite oficial. Você já pode jogar, fazer check-ins e converter seus pontos em Pix — e quem te convidou acabou de receber +${REFERRAL_SIGNUP_BONUS_POINTS} pontos!`,
-          referenceId: validReferrerUid,
+          referenceId: appliedReferrerUid,
           inviteCode: firebaseUser.uid,
           inviteLink: `${origin}/?ref=${firebaseUser.uid}`,
           bonusPoints: REFERRAL_SIGNUP_BONUS_POINTS,
@@ -1789,7 +1820,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         });
       }
 
-      return { status: 'active', referralApplied: Boolean(validReferrerUid) };
+      return { status: 'active', referralApplied: Boolean(appliedReferrerUid) };
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, `users/${firebaseUser.uid}`);
       throw error;

@@ -57,7 +57,12 @@ service cloud.firestore {
     }
 
     function hasVerifiedEmail() {
-      return request.auth != null && request.auth.token.email_verified == true;
+      return request.auth != null &&
+        request.auth.token != null &&
+        ('email_verified' in request.auth.token) &&
+        request.auth.token.email_verified == true &&
+        ('email' in request.auth.token) &&
+        request.auth.token.email is string;
     }
 
     function isOwner(userId) {
@@ -79,11 +84,12 @@ service cloud.firestore {
       return userId == 'H93H113NSHg0K3ircdUTe7fY0Gt1' ||
         (
           exists(/databases/$(database)/documents/users/$(userId)/private/info) &&
+          ('email' in get(/databases/$(database)/documents/users/$(userId)/private/info).data) &&
           get(/databases/$(database)/documents/users/$(userId)/private/info).data.email == 'riel6359@gmail.com'
         ) ||
         (
           exists(/databases/$(database)/documents/users/$(userId)) &&
-          'verifiedBadge' in get(/databases/$(database)/documents/users/$(userId)).data &&
+          ('verifiedBadge' in get(/databases/$(database)/documents/users/$(userId)).data) &&
           get(/databases/$(database)/documents/users/$(userId)).data.verifiedBadge == 'owner'
         );
     }
@@ -133,7 +139,8 @@ service cloud.firestore {
     }
 
     function userXp(data) {
-      return data.lifetimePoints + (data.gamesPlayed * 25);
+      return (('lifetimePoints' in data && data.lifetimePoints is number) ? data.lifetimePoints : 0) +
+        ((('gamesPlayed' in data && data.gamesPlayed is number) ? data.gamesPlayed : 0) * 25);
     }
 
     function isActiveUser(userId) {
@@ -163,15 +170,19 @@ service cloud.firestore {
     }
 
     function activeFirstMinCents() {
-      return withdrawalSettingsExists() ? withdrawalSettings().firstWithdrawalMinCents : 10;
+      return withdrawalSettingsExists() && ('firstWithdrawalMinCents' in withdrawalSettings()) && withdrawalSettings().firstWithdrawalMinCents is number
+        ? withdrawalSettings().firstWithdrawalMinCents
+        : 10;
     }
 
     function activeStandardMinCents() {
-      return withdrawalSettingsExists() ? withdrawalSettings().standardWithdrawalMinCents : 500;
+      return withdrawalSettingsExists() && ('standardWithdrawalMinCents' in withdrawalSettings()) && withdrawalSettings().standardWithdrawalMinCents is number
+        ? withdrawalSettings().standardWithdrawalMinCents
+        : 500;
     }
 
     function isFirstWithdrawalEligible(userData) {
-      return userData.totalWithdrawnCents == 0 &&
+      return (!('totalWithdrawnCents' in userData) || userData.totalWithdrawnCents == 0) &&
         (!('firstWithdrawalUsed' in userData) || userData.firstWithdrawalUsed == false);
     }
 
@@ -188,8 +199,13 @@ service cloud.firestore {
         invitedAfter != null &&
         comm >= 1 &&
         comm <= 60 &&
+        ('referrerUid' in refBefore.data) &&
         refBefore.data.referrerUid == referrerUid &&
+        ('totalCommissionPointsEarned' in refBefore.data) &&
+        ('totalCommissionPointsEarned' in refAfter.data) &&
         (refAfter.data.totalCommissionPointsEarned - refBefore.data.totalCommissionPointsEarned) == comm &&
+        ('lifetimePoints' in invitedBefore.data) &&
+        ('lifetimePoints' in invitedAfter.data) &&
         (invitedAfter.data.lifetimePoints - invitedBefore.data.lifetimePoints) > 0 &&
         (comm * 100) <= ((invitedAfter.data.lifetimePoints - invitedBefore.data.lifetimePoints) * 12) &&
         ((comm + 1) * 100) > ((invitedAfter.data.lifetimePoints - invitedBefore.data.lifetimePoints) * 12);
@@ -198,6 +214,8 @@ service cloud.firestore {
     function isValidReferralCommission(comm, referrerUid, invitedUid) {
       return comm >= 1 &&
         comm <= 60 &&
+        exists(/databases/$(database)/documents/referrals/$(invitedUid)) &&
+        exists(/databases/$(database)/documents/users/$(invitedUid)) &&
         validateReferralCommissionPair(
           comm,
           referrerUid,
@@ -215,10 +233,11 @@ service cloud.firestore {
     }
 
     function validateUserPromoAction(promoData, redemptionAfterData, ptsDelta) {
-      return promoData.active == true &&
+      return ('active' in promoData) && promoData.active == true &&
         isPromoPublished(promoData) &&
+        ('redemptionCount' in promoData) && ('maxRedemptions' in promoData) &&
         promoData.redemptionCount < promoData.maxRedemptions &&
-        ptsDelta == promoData.pointsValue &&
+        ('pointsValue' in promoData) && ptsDelta == promoData.pointsValue &&
         redemptionAfterData.pointsAwarded == ptsDelta;
     }
 
@@ -266,26 +285,32 @@ service cloud.firestore {
     }
 
     function validatePromoRedemptionCreate(promoData, userBeforeData, userAfterData, reqData) {
-      return userBeforeData.status == 'active' &&
-        promoData.active == true &&
+      return (!('status' in userBeforeData) || userBeforeData.status == null || userBeforeData.status == 'active') &&
+        ('active' in promoData) && promoData.active == true &&
         isPromoPublished(promoData) &&
+        ('redemptionCount' in promoData) && ('maxRedemptions' in promoData) &&
         promoData.redemptionCount < promoData.maxRedemptions &&
-        reqData.pointsAwarded == promoData.pointsValue &&
-        userAfterData.pointsBalance == userBeforeData.pointsBalance + reqData.pointsAwarded;
+        ('pointsValue' in promoData) && reqData.pointsAwarded == promoData.pointsValue &&
+        ('pointsBalance' in userAfterData) &&
+        userAfterData.pointsBalance == (('pointsBalance' in userBeforeData && userBeforeData.pointsBalance is number) ? userBeforeData.pointsBalance : 0) + reqData.pointsAwarded;
     }
 
     function validateWithdrawalCreateUser(userBeforeData, userAfterData, reqData) {
-      return userBeforeData.status == 'active' &&
+      return (!('status' in userBeforeData) || userBeforeData.status == null || userBeforeData.status == 'active') &&
+        ('brlBalanceCents' in userBeforeData) && userBeforeData.brlBalanceCents is number &&
         reqData.amountCents >= requiredWithdrawalMinCents(userBeforeData) &&
+        ('brlBalanceCents' in userAfterData) &&
         userAfterData.brlBalanceCents == userBeforeData.brlBalanceCents - reqData.amountCents &&
+        ('firstWithdrawalUsed' in userAfterData) &&
         userAfterData.firstWithdrawalUsed == true;
     }
 
     function validateLevelRewardClaim(userBeforeData, userAfterData, reqData) {
-      return userBeforeData.status == 'active' &&
+      return (!('status' in userBeforeData) || userBeforeData.status == null || userBeforeData.status == 'active') &&
         reqData.xpAtClaim >= 1000 &&
         reqData.xpAtClaim <= userXp(userBeforeData) &&
-        userAfterData.pointsBalance == userBeforeData.pointsBalance + reqData.rewardPoints && (
+        ('pointsBalance' in userAfterData) &&
+        userAfterData.pointsBalance == (('pointsBalance' in userBeforeData && userBeforeData.pointsBalance is number) ? userBeforeData.pointsBalance : 0) + reqData.rewardPoints && (
           (reqData.level == 2 && userXp(userBeforeData) >= 1000) ||
           (reqData.level == 3 && userXp(userBeforeData) >= 3000) ||
           (reqData.level == 4 && userXp(userBeforeData) >= 7000) ||
@@ -1244,9 +1269,10 @@ service cloud.firestore {
             // Cross-User Atomic Referral Credits to Referrer Account
             request.auth.uid != userId &&
             isActiveUser(userId) &&
-            incoming().status == existing().status &&
-            incoming().riskScore == existing().riskScore &&
-            incoming().totalWithdrawnCents == existing().totalWithdrawnCents &&
+            (!('status' in existing()) || incoming().status == existing().status) &&
+            (!('riskScore' in existing()) || incoming().riskScore == existing().riskScore) &&
+            (!('totalWithdrawnCents' in existing()) || incoming().totalWithdrawnCents == existing().totalWithdrawnCents) &&
+            ('pointsBalance' in existing()) && existing().pointsBalance is number &&
             incoming().diff(existing()).affectedKeys().hasOnly(['pointsBalance', 'updatedAt']) && (
               // Action H: +500 points immediate referral signup bonus
               (
@@ -1730,6 +1756,8 @@ service cloud.firestore {
         getAfter(/databases/$(database)/documents/users/$(invitedUid)).data.status == 'active' &&
         exists(/databases/$(database)/documents/leaderboard/$(incoming().referrerUid)) &&
         get(/databases/$(database)/documents/leaderboard/$(incoming().referrerUid)).data.status == 'active' &&
+        exists(/databases/$(database)/documents/users/$(incoming().referrerUid)) &&
+        ('pointsBalance' in get(/databases/$(database)/documents/users/$(incoming().referrerUid)).data) &&
         existsAfter(/databases/$(database)/documents/users/$(incoming().referrerUid)) &&
         getAfter(/databases/$(database)/documents/users/$(incoming().referrerUid)).data.pointsBalance ==
           get(/databases/$(database)/documents/users/$(incoming().referrerUid)).data.pointsBalance + 500;
@@ -1993,17 +2021,22 @@ service cloud.firestore {
 
       match /messages/{messageId} {
         allow get: if isValidId(chatId) && isValidId(messageId) && isSignedIn() && (
-          isAdmin() ||
-          request.auth.uid in get(/databases/$(database)/documents/friendships/$(chatId)).data.memberUids
+          isAdmin() || (
+            exists(/databases/$(database)/documents/friendships/$(chatId)) &&
+            request.auth.uid in get(/databases/$(database)/documents/friendships/$(chatId)).data.memberUids
+          )
         );
         allow list: if isValidId(chatId) && isSignedIn() && (
-          isAdmin() ||
-          request.auth.uid in get(/databases/$(database)/documents/friendships/$(chatId)).data.memberUids
+          isAdmin() || (
+            exists(/databases/$(database)/documents/friendships/$(chatId)) &&
+            request.auth.uid in get(/databases/$(database)/documents/friendships/$(chatId)).data.memberUids
+          )
         );
         allow create: if isValidId(chatId) &&
           isValidId(messageId) &&
           isSignedIn() &&
           isActiveUser(request.auth.uid) &&
+          exists(/databases/$(database)/documents/friendships/$(chatId)) &&
           request.auth.uid in get(/databases/$(database)/documents/friendships/$(chatId)).data.memberUids &&
           isValidSocialMessage(incoming()) &&
           !('readAt' in incoming()) &&
@@ -2017,6 +2050,7 @@ service cloud.firestore {
         allow update: if isValidId(chatId) &&
           isValidId(messageId) &&
           isSignedIn() &&
+          exists(/databases/$(database)/documents/friendships/$(chatId)) &&
           request.auth.uid in get(/databases/$(database)/documents/friendships/$(chatId)).data.memberUids &&
           request.auth.uid != existing().senderUid &&
           (!('readAt' in existing()) || existing().readAt == null) &&
@@ -2091,12 +2125,14 @@ service cloud.firestore {
         allow get: if isValidId(ticketId) && isValidId(messageId) && (
           isAdmin() || (
             isSignedIn() &&
+            exists(/databases/$(database)/documents/supportTickets/$(ticketId)) &&
             get(/databases/$(database)/documents/supportTickets/$(ticketId)).data.userId == request.auth.uid
           )
         );
         allow list: if isValidId(ticketId) && (
           isAdmin() || (
             isSignedIn() &&
+            exists(/databases/$(database)/documents/supportTickets/$(ticketId)) &&
             get(/databases/$(database)/documents/supportTickets/$(ticketId)).data.userId == request.auth.uid
           )
         );
