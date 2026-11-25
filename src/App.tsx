@@ -30,6 +30,7 @@ import {
 } from 'lucide-react';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { MultiplayerProvider, useMultiplayer } from './context/MultiplayerContext';
 import { ToastProvider } from './context/ToastContext';
 import { AppFooter } from './components/AppFooter';
 import { AuthGateScreen } from './components/AuthGateScreen';
@@ -43,7 +44,6 @@ import { ParticleBackdrop } from './components/ParticleBackdrop';
 import { PlayerInspectorModal } from './components/PlayerInspectorModal';
 import { PlayerProfile, ProfileAvatar } from './components/PlayerProfile';
 import { PlayWithFriendsSection } from './components/multiplayer/PlayWithFriendsSection';
-import { VerifiedBadge } from './components/VerifiedBadge';
 import { WalletSection } from './components/WalletSection';
 import { DashboardSection } from './components/DashboardSection';
 import { NotificationsSection } from './components/NotificationsSection';
@@ -119,6 +119,7 @@ function MainShell() {
     signInWithGoogle,
     logout,
   } = useAuth();
+  const { opponentJoinedSignal } = useMultiplayer();
 
   const [activeTab, setActiveTab] = useState<NavTab>('games');
   const [theme, setTheme] = useState<AppTheme>(() => getInitialTheme());
@@ -152,6 +153,13 @@ function MainShell() {
       window.removeEventListener('hashchange', syncRoute);
     };
   }, []);
+
+  useEffect(() => {
+    if (opponentJoinedSignal > 0 && !isBackofficeRoute) {
+      setActiveTab('play_friends');
+      setMoreSheetOpen(false);
+    }
+  }, [opponentJoinedSignal, isBackofficeRoute]);
 
   useEffect(() => {
     try {
@@ -545,13 +553,8 @@ function MainShell() {
                     textSizeClass="text-[11px]"
                   />
                   <div className="text-left min-w-0">
-                    <div className="text-xs font-bold text-slate-900 dark:text-white leading-tight max-w-[140px] flex items-center gap-1">
-                      <span className="truncate">{userAccount?.displayName || 'Perfil'}</span>
-                      <VerifiedBadge
-                        tier={userAccount?.verifiedBadge}
-                        legacyVerified={userAccount?.identityVerified}
-                        size="xs"
-                      />
+                    <div className="text-xs font-bold text-slate-900 dark:text-white leading-tight max-w-[120px] truncate">
+                      {userAccount?.displayName || 'Perfil'}
                     </div>
                     {levelInfo && (
                       <div className="flex items-center gap-1.5 mt-0.5">
@@ -713,6 +716,7 @@ function MainShell() {
                 <SocialSection
                   initialSelectedUid={friendChatTargetUid}
                   onInspectPlayer={(player, rank) => setInspectedPlayer({ player, rank })}
+                  onNavigatePlayFriends={() => handleSelectTab('play_friends')}
                 />
               )}
               {activeTab === 'invites' && <InvitesAndCodesSection />}
@@ -810,13 +814,8 @@ function MainShell() {
                       textSizeClass="text-xs"
                     />
                     <div className="min-w-0">
-                      <div className="text-sm font-bold text-slate-900 dark:text-white leading-snug flex items-center gap-1.5">
-                        <span className="truncate">{userAccount.displayName}</span>
-                        <VerifiedBadge
-                          tier={userAccount.verifiedBadge}
-                          legacyVerified={userAccount.identityVerified}
-                          size="sm"
-                        />
+                      <div className="text-sm font-bold text-slate-900 dark:text-white leading-snug">
+                        {userAccount.displayName}
                       </div>
                       <button
                         type="button"
@@ -978,7 +977,9 @@ export default function App() {
     <ErrorBoundary>
       <AuthProvider>
         <ToastProvider>
-          <MainShell />
+          <MultiplayerProvider>
+            <MainShell />
+          </MultiplayerProvider>
         </ToastProvider>
       </AuthProvider>
     </ErrorBoundary>

@@ -25,7 +25,6 @@ import { LeaderboardEntry } from '../types/earneasy';
 import { calculatePlayerLevel } from '../utils/levels';
 import { extractReadableError, formatBRL, formatPoints } from '../utils/pix';
 import { ProfileAvatar } from './PlayerProfile';
-import { VerifiedBadge } from './VerifiedBadge';
 
 interface PlayerInspectorModalProps {
   player: LeaderboardEntry | null;
@@ -247,12 +246,6 @@ export const PlayerInspectorModal: React.FC<PlayerInspectorModalProps> = ({
                 <h2 className="text-lg sm:text-xl font-display font-extrabold text-white break-words">
                   {player.displayName}
                 </h2>
-                <VerifiedBadge
-                  tier={player.verifiedBadge}
-                  legacyVerified={player.identityVerified}
-                  showLabel
-                  size="sm"
-                />
                 {player.uid === myUid && (
                   <span className="text-[11px] font-semibold text-lime-300">· Você</span>
                 )}

@@ -499,75 +499,12 @@ function shuffleArray(arr) {
   }
   return copy;
 }
-var SERVER_PROFANITY_ROOTS = [
-  "porra",
-  "poha",
-  "puta",
-  "puto",
-  "putinha",
-  "putao",
-  "putaria",
-  "merda",
-  "bosta",
-  "cuzao",
-  "cuzinho",
-  "cuzona",
-  "fdp",
-  "pqp",
-  "vsf",
-  "vtnc",
-  "caralho",
-  "karalho",
-  "buceta",
-  "boceta",
-  "xereca",
-  "chereca",
-  "arrombado",
-  "arrombada",
-  "piroca",
-  "filhodaputa",
-  "punheta",
-  "siririca",
-  "boquete",
-  "desgraca",
-  "desgracado",
-  "foder",
-  "fodase",
-  "fudido",
-  "fodido",
-  "viado",
-  "boiola",
-  "piranha",
-  "vadia",
-  "vagabundo",
-  "fuck",
-  "fucking",
-  "shit",
-  "bitch",
-  "asshole",
-  "pussy",
-  "cunt",
-  "whore",
-  "slut",
-  "faggot",
-  "nigger",
-  "nigga",
-  "nazi",
-  "hitler"
-];
-function sanitizeGlobalName(rawName) {
-  const clean = String(rawName || "Jogador").trim().slice(0, 40) || "Jogador";
-  const normalized = clean.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/0/g, "o").replace(/1/g, "i").replace(/3/g, "e").replace(/4/g, "a").replace(/5/g, "s").replace(/[^a-z0-9]/g, "");
-  if (SERVER_PROFANITY_ROOTS.some((root) => normalized.includes(root))) {
-    return "Jogador ***";
-  }
-  return clean;
-}
 var MultiplayerEngine = class {
   constructor(signingSecret) {
     this.rooms = /* @__PURE__ */ new Map();
     this.socketToRoom = /* @__PURE__ */ new Map();
     this.allSockets = /* @__PURE__ */ new Set();
+    this.lastGlobalPostByUid = /* @__PURE__ */ new Map();
     this.issuedSettlements = /* @__PURE__ */ new Map();
     this.signingSecret = signingSecret;
   }
@@ -620,7 +557,7 @@ var MultiplayerEngine = class {
     });
     wss.on("connection", (ws) => {
       this.allSockets.add(ws);
-      this.send(ws, "global:matches", this.getOpenGlobalMatches());
+      this.sendDirectory(ws);
       ws.on("message", (raw) => {
         try {
           const msg = JSON.parse(raw.toString());
@@ -635,41 +572,56 @@ var MultiplayerEngine = class {
       });
     });
   }
-  getOpenGlobalMatches() {
-    const open = [];
-    for (const room of this.rooms.values()) {
-      if (room.visibility === "public" && room.postedToGlobal && room.status === "lobby" && room.players.length === 1 && room.players[0]?.connected) {
-        const host = room.players[0];
-        open.push({
-          roomCode: room.roomCode,
-          hostUid: host.uid,
-          hostName: sanitizeGlobalName(host.displayName),
-          hostPhotoURL: host.photoURL,
-          hostVerified: Boolean(host.verified || host.verifiedBadge !== "none"),
-          hostVerifiedBadge: host.verifiedBadge || (host.verified ? "blue" : "none"),
-          gameId: room.gameId,
-          totalRounds: room.totalRounds,
-          stakePoints: room.stakePoints,
-          createdAt: room.createdAt
-        });
-      }
-    }
-    return open.sort((a, b) => b.createdAt - a.createdAt).slice(0, 40);
-  }
-  broadcastGlobalMatches() {
-    const listings = this.getOpenGlobalMatches();
-    for (const sock of this.allSockets) {
-      if (sock.readyState === WebSocket.OPEN) {
-        this.send(sock, "global:matches", listings);
-      }
-    }
-  }
   send(ws, type, payload) {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     ws.send(JSON.stringify({ type, payload }));
   }
   sendError(ws, message) {
     this.send(ws, "error", { message });
+  }
+  getDirectoryPayload() {
+    const publicRooms = [];
+    const globalInvites = [];
+    for (const room of this.rooms.values()) {
+      if (room.status !== "lobby") continue;
+      if (room.players.length !== 1) continue;
+      const host = room.players[0];
+      if (!host || !host.connected) continue;
+      const summary = {
+        roomCode: room.roomCode,
+        hostUid: host.uid,
+        hostDisplayName: host.displayName,
+        hostPhotoURL: host.photoURL,
+        gameId: room.gameId,
+        totalRounds: room.totalRounds,
+        stakePoints: room.stakePoints,
+        visibility: room.visibility,
+        postedToGlobal: room.postedToGlobal,
+        playerCount: room.players.length,
+        createdAt: room.createdAt,
+        updatedAt: room.updatedAt
+      };
+      if (room.visibility === "public") {
+        publicRooms.push(summary);
+      }
+      if (room.postedToGlobal) {
+        globalInvites.push(summary);
+      }
+    }
+    publicRooms.sort((a, b) => b.createdAt - a.createdAt);
+    globalInvites.sort((a, b) => b.createdAt - a.createdAt);
+    return { publicRooms, globalInvites };
+  }
+  sendDirectory(ws) {
+    this.send(ws, "rooms:directory", this.getDirectoryPayload());
+  }
+  broadcastDirectory() {
+    const payload = this.getDirectoryPayload();
+    for (const sock of this.allSockets) {
+      if (sock.readyState === WebSocket.OPEN) {
+        this.send(sock, "rooms:directory", payload);
+      }
+    }
   }
   broadcastRoom(room) {
     room.updatedAt = Date.now();
@@ -684,11 +636,11 @@ var MultiplayerEngine = class {
       roomCode: room.roomCode,
       hostUid: room.hostUid,
       gameId: room.gameId,
-      visibility: room.visibility,
-      postedToGlobal: room.postedToGlobal,
       totalRounds: room.totalRounds,
       currentRound: room.currentRound,
       status: room.status,
+      visibility: room.visibility,
+      postedToGlobal: room.postedToGlobal,
       stakePoints: room.stakePoints,
       proposedCounterPoints: room.proposedCounterPoints,
       counterProposedByUid: room.counterProposedByUid,
@@ -701,9 +653,7 @@ var MultiplayerEngine = class {
         connected: p.connected,
         isHost: p.isHost,
         acceptedRules: p.acceptedRules,
-        score: p.score,
-        verified: Boolean(p.verified || p.verifiedBadge !== "none"),
-        verifiedBadge: p.verifiedBadge || (p.verified ? "blue" : "none")
+        score: p.score
       })),
       gameState: room.gameData ? this.sanitizeGameStateFor(room, viewerUid) : null,
       settlement: room.settlement,
@@ -863,15 +813,18 @@ var MultiplayerEngine = class {
       if (room.status === "lobby") {
         this.rooms.delete(room.roomCode);
       }
-      this.broadcastGlobalMatches();
+      this.broadcastDirectory();
       return;
     }
     this.broadcastRoom(room);
-    this.broadcastGlobalMatches();
+    this.broadcastDirectory();
   }
   handleMessage(ws, msg) {
     const { type, payload = {} } = msg || {};
     switch (type) {
+      case "room:list_public":
+        this.sendDirectory(ws);
+        break;
       case "room:create":
         this.createRoom(ws, payload);
         break;
@@ -887,11 +840,8 @@ var MultiplayerEngine = class {
       case "room:config":
         this.updateConfig(ws, payload);
         break;
-      case "room:post_global":
-        this.postRoomToGlobal(ws);
-        break;
-      case "room:unpost_global":
-        this.unpostRoomFromGlobal(ws);
+      case "room:publish_global":
+        this.publishToGlobal(ws, payload);
         break;
       case "room:stake_accept":
         this.acceptStake(ws);
@@ -926,33 +876,45 @@ var MultiplayerEngine = class {
     if (!prev) return;
     const prevRoom = this.rooms.get(prev.roomCode);
     if (prevRoom) {
-      const p = prevRoom.players.find((item) => item.uid === prev.uid);
-      if (p) {
-        p.ws = null;
-        p.connected = false;
-      }
-      if (prevRoom.status === "lobby" && prevRoom.players.every((item) => !item.connected)) {
-        if (prevRoom.roundTimer) clearTimeout(prevRoom.roundTimer);
-        this.rooms.delete(prevRoom.roomCode);
+      if (prevRoom.status === "lobby") {
+        prevRoom.players = prevRoom.players.filter((item) => item.uid !== prev.uid);
+        if (prevRoom.players.length === 0) {
+          if (prevRoom.roundTimer) clearTimeout(prevRoom.roundTimer);
+          this.rooms.delete(prevRoom.roomCode);
+        } else {
+          if (prevRoom.hostUid === prev.uid) {
+            prevRoom.hostUid = prevRoom.players[0].uid;
+            prevRoom.players[0].isHost = true;
+          }
+          prevRoom.players.forEach((p) => {
+            p.acceptedRules = p.isHost;
+          });
+          prevRoom.stakeStatus = "pending_opponent";
+          prevRoom.proposedCounterPoints = null;
+          this.broadcastRoom(prevRoom);
+        }
       } else {
+        const p = prevRoom.players.find((item) => item.uid === prev.uid);
+        if (p) {
+          p.ws = null;
+          p.connected = false;
+        }
         this.broadcastRoom(prevRoom);
       }
-      this.broadcastGlobalMatches();
+      this.broadcastDirectory();
     }
     this.socketToRoom.delete(ws);
   }
   createRoom(ws, payload) {
     const uid = String(payload.uid || "").trim();
-    const displayName = sanitizeGlobalName(String(payload.displayName || "Jogador"));
+    const displayName = String(payload.displayName || "Jogador").trim().slice(0, 60);
     const photoURL = String(payload.photoURL || "").slice(0, 6e4);
     const pointsBalance = Math.max(0, Math.floor(Number(payload.pointsBalance || 0)));
     const gameId = String(payload.gameId || "domino");
-    const visibility = payload.visibility === "public" ? "public" : "private";
-    const postToGlobal = visibility === "public" && payload.postToGlobal !== false;
-    const verifiedBadge = payload.verifiedBadge === "owner" ? "owner" : payload.verifiedBadge === "blue" || payload.verified ? "blue" : "none";
-    const verified = verifiedBadge !== "none";
     const totalRounds = [1, 3, 5, 7].includes(Number(payload.totalRounds)) ? Number(payload.totalRounds) : 3;
     const stakePoints = Math.max(0, Math.min(5e4, Math.floor(Number(payload.stakePoints || 0))));
+    const postToGlobal = Boolean(payload.postToGlobal);
+    const visibility = postToGlobal ? "public" : payload.visibility === "public" ? "public" : "private";
     if (!uid) {
       this.sendError(ws, "Fa\xE7a login para criar uma sala.");
       return;
@@ -965,24 +927,26 @@ var MultiplayerEngine = class {
       this.sendError(ws, "Voc\xEA n\xE3o tem pontos suficientes para apostar essa quantia.");
       return;
     }
-    this.detachSocketFromCurrentRoom(ws);
-    for (const [oldCode, oldRoom] of this.rooms.entries()) {
-      if (oldRoom.hostUid === uid && oldRoom.status === "lobby" && oldRoom.players.length <= 1) {
-        if (oldRoom.roundTimer) clearTimeout(oldRoom.roundTimer);
-        this.rooms.delete(oldCode);
+    if (postToGlobal) {
+      const lastPost = this.lastGlobalPostByUid.get(uid) || 0;
+      if (Date.now() - lastPost < 3e3) {
+        this.sendError(ws, "Aguarde alguns segundos antes de enviar outra partida no Chat Global.");
+        return;
       }
+      this.lastGlobalPostByUid.set(uid, Date.now());
     }
-    const roomCode = generateRoomCode(this.rooms);
+    this.detachSocketFromCurrentRoom(ws);
     const now = Date.now();
+    const roomCode = generateRoomCode(this.rooms);
     const room = {
       roomCode,
       hostUid: uid,
       gameId,
-      visibility,
-      postedToGlobal: postToGlobal,
       totalRounds,
       currentRound: 0,
       status: "lobby",
+      visibility,
+      postedToGlobal: postToGlobal,
       stakePoints,
       proposedCounterPoints: null,
       counterProposedByUid: null,
@@ -990,15 +954,13 @@ var MultiplayerEngine = class {
       players: [
         {
           uid,
-          displayName,
+          displayName: displayName || "Jogador",
           photoURL,
           pointsBalance,
           connected: true,
           isHost: true,
           acceptedRules: true,
           score: 0,
-          verified,
-          verifiedBadge,
           ws
         }
       ],
@@ -1014,15 +976,13 @@ var MultiplayerEngine = class {
     this.rooms.set(roomCode, room);
     this.socketToRoom.set(ws, { roomCode, uid });
     this.broadcastRoom(room);
-    this.broadcastGlobalMatches();
+    this.broadcastDirectory();
   }
   joinRoom(ws, payload) {
     const roomCode = String(payload.roomCode || "").trim().toUpperCase();
     const uid = String(payload.uid || "").trim();
-    const displayName = sanitizeGlobalName(String(payload.displayName || "Jogador"));
+    const displayName = String(payload.displayName || "Jogador").trim().slice(0, 60);
     const photoURL = String(payload.photoURL || "").slice(0, 6e4);
-    const verifiedBadge = payload.verifiedBadge === "owner" ? "owner" : payload.verifiedBadge === "blue" || payload.verified ? "blue" : "none";
-    const verified = verifiedBadge !== "none";
     const pointsBalance = Math.max(0, Math.floor(Number(payload.pointsBalance || 0)));
     if (!uid || !roomCode) {
       this.sendError(ws, "Informe seu usu\xE1rio e o c\xF3digo da sala.");
@@ -1031,7 +991,6 @@ var MultiplayerEngine = class {
     const room = this.rooms.get(roomCode);
     if (!room) {
       this.sendError(ws, "Sala n\xE3o encontrada ou j\xE1 encerrada.");
-      this.broadcastGlobalMatches();
       return;
     }
     this.detachSocketFromCurrentRoom(ws);
@@ -1040,13 +999,10 @@ var MultiplayerEngine = class {
       existing.displayName = displayName || existing.displayName;
       existing.photoURL = photoURL || existing.photoURL;
       existing.pointsBalance = pointsBalance;
-      existing.verified = verified;
-      existing.verifiedBadge = verifiedBadge;
       existing.connected = true;
       existing.ws = ws;
       this.socketToRoom.set(ws, { roomCode, uid });
       this.broadcastRoom(room);
-      this.broadcastGlobalMatches();
       return;
     }
     if (room.status !== "lobby") {
@@ -1055,7 +1011,6 @@ var MultiplayerEngine = class {
     }
     if (room.players.length >= 2) {
       this.sendError(ws, "Esta sala j\xE1 est\xE1 cheia (2/2 jogadores).");
-      this.broadcastGlobalMatches();
       return;
     }
     room.players.push({
@@ -1067,17 +1022,15 @@ var MultiplayerEngine = class {
       isHost: false,
       acceptedRules: false,
       score: 0,
-      verified,
-      verifiedBadge,
       ws
     });
-    room.postedToGlobal = false;
     room.stakeStatus = "pending_opponent";
     room.proposedCounterPoints = null;
     room.counterProposedByUid = null;
+    room.postedToGlobal = false;
     this.socketToRoom.set(ws, { roomCode, uid });
     this.broadcastRoom(room);
-    this.broadcastGlobalMatches();
+    this.broadcastDirectory();
   }
   leaveRoom(ws) {
     const info = this.socketToRoom.get(ws);
@@ -1095,7 +1048,7 @@ var MultiplayerEngine = class {
         this.rooms.delete(room.roomCode);
       }
       this.send(ws, "room:left", { roomCode: info.roomCode });
-      this.broadcastGlobalMatches();
+      this.broadcastDirectory();
       return;
     }
     room.players = room.players.filter((p) => p.uid !== info.uid);
@@ -1107,7 +1060,6 @@ var MultiplayerEngine = class {
         room.hostUid = room.players[0].uid;
         room.players[0].isHost = true;
       }
-      room.postedToGlobal = false;
       room.players.forEach((p) => {
         p.acceptedRules = p.isHost;
       });
@@ -1116,7 +1068,7 @@ var MultiplayerEngine = class {
       this.broadcastRoom(room);
     }
     this.send(ws, "room:left", { roomCode: info.roomCode });
-    this.broadcastGlobalMatches();
+    this.broadcastDirectory();
   }
   getSocketContext(ws) {
     const info = this.socketToRoom.get(ws);
@@ -1170,34 +1122,39 @@ var MultiplayerEngine = class {
       p.acceptedRules = p.isHost;
     });
     this.broadcastRoom(room);
-    this.broadcastGlobalMatches();
+    this.broadcastDirectory();
   }
-  postRoomToGlobal(ws) {
+  publishToGlobal(ws, payload) {
     const ctx = this.getSocketContext(ws);
     if (!ctx) return;
     const { room, player } = ctx;
+    if (room.status !== "lobby") {
+      this.sendError(ws, "Apenas salas aguardando no lobby podem ser publicadas no Chat Global.");
+      return;
+    }
     if (!player.isHost) {
-      this.sendError(ws, "Apenas o anfitri\xE3o pode publicar a partida no Chat Global.");
+      this.sendError(ws, "Apenas o anfitri\xE3o pode publicar ou remover a partida do Chat Global.");
       return;
     }
-    if (room.status !== "lobby" || room.players.length >= 2) {
-      this.sendError(ws, "S\xF3 \xE9 poss\xEDvel publicar salas abertas aguardando advers\xE1rio.");
-      return;
+    const publish = Boolean(payload.publish);
+    if (publish) {
+      if (room.players.length >= 2) {
+        this.sendError(ws, "Sua sala j\xE1 tem um advers\xE1rio.");
+        return;
+      }
+      const lastPost = this.lastGlobalPostByUid.get(player.uid) || 0;
+      if (!room.postedToGlobal && Date.now() - lastPost < 3e3) {
+        this.sendError(ws, "Aguarde alguns segundos antes de enviar outra partida no Chat Global.");
+        return;
+      }
+      this.lastGlobalPostByUid.set(player.uid, Date.now());
+      room.visibility = "public";
+      room.postedToGlobal = true;
+    } else {
+      room.postedToGlobal = false;
     }
-    room.visibility = "public";
-    room.postedToGlobal = true;
-    room.createdAt = Date.now();
     this.broadcastRoom(room);
-    this.broadcastGlobalMatches();
-  }
-  unpostRoomFromGlobal(ws) {
-    const ctx = this.getSocketContext(ws);
-    if (!ctx) return;
-    const { room, player } = ctx;
-    if (!player.isHost) return;
-    room.postedToGlobal = false;
-    this.broadcastRoom(room);
-    this.broadcastGlobalMatches();
+    this.broadcastDirectory();
   }
   acceptStake(ws) {
     const ctx = this.getSocketContext(ws);
@@ -1300,7 +1257,7 @@ var MultiplayerEngine = class {
     });
     this.initRound(room);
     this.broadcastRoom(room);
-    this.broadcastGlobalMatches();
+    this.broadcastDirectory();
   }
   resetToLobby(ws) {
     const ctx = this.getSocketContext(ws);
@@ -1323,7 +1280,7 @@ var MultiplayerEngine = class {
       p.acceptedRules = p.isHost;
     });
     this.broadcastRoom(room);
-    this.broadcastGlobalMatches();
+    this.broadcastDirectory();
   }
   forfeitMatch(ws) {
     const ctx = this.getSocketContext(ws);
@@ -2600,226 +2557,6 @@ ${conversationLines}` : "O usu\xE1rio acabou de abrir o chat de suporte."
       return;
     }
     res.json({ valid: true, settlement: result.settlement });
-  });
-  const activeMinesGames = /* @__PURE__ */ new Map();
-  const validateCasinoStake = (currency, rawStake) => {
-    const curr = currency === "brl" ? "brl" : currency === "points" ? "points" : null;
-    if (!curr) {
-      return { ok: false, error: "Moeda de aposta inv\xE1lida (use points ou brl)." };
-    }
-    const stake = Math.floor(Number(rawStake));
-    if (!Number.isFinite(stake)) {
-      return { ok: false, error: "Valor de aposta inv\xE1lido." };
-    }
-    if (curr === "points" && (stake < 10 || stake > 1e4)) {
-      return { ok: false, error: "Aposta em pontos deve ficar entre 10 e 10.000 pontos." };
-    }
-    if (curr === "brl" && (stake < 1 || stake > 5e3)) {
-      return { ok: false, error: "Aposta na carteira deve ficar entre R$ 0,01 e R$ 50,00." };
-    }
-    return { ok: true, currency: curr, stakeAmount: stake };
-  };
-  const computeMinesMultiplier = (minesCount, safeCount) => {
-    if (safeCount <= 0) return 1;
-    let factor = 0.97;
-    for (let i = 0; i < safeCount; i += 1) {
-      const remainingTiles = 25 - i;
-      const remainingSafe = 25 - minesCount - i;
-      if (remainingSafe <= 0) break;
-      factor *= remainingTiles / remainingSafe;
-    }
-    return Math.min(50, Math.max(1.01, Math.floor(factor * 100) / 100));
-  };
-  const getDoubleSlotColor = (slot) => {
-    if (slot === 0) return "white";
-    if (slot >= 1 && slot <= 7) return "red";
-    return "black";
-  };
-  app.post("/api/casino/double/roll", (req, res) => {
-    const { userId, currency, stakeAmount, choice } = req.body ?? {};
-    const cleanUid = typeof userId === "string" ? userId.trim() : "";
-    if (!cleanUid) {
-      res.status(400).json({ error: "Usu\xE1rio n\xE3o identificado." });
-      return;
-    }
-    const stakeCheck = validateCasinoStake(currency, stakeAmount);
-    if (!stakeCheck.ok) {
-      res.status(400).json({ error: stakeCheck.error });
-      return;
-    }
-    const cleanChoice = choice === "red" || choice === "black" || choice === "white" ? choice : null;
-    if (!cleanChoice) {
-      res.status(400).json({ error: "Escolha inv\xE1lida no Double (vermelho, preto ou branco)." });
-      return;
-    }
-    const slot = crypto2.randomInt(0, 15);
-    const winningColor = getDoubleSlotColor(slot);
-    const won = winningColor === cleanChoice;
-    const multiplier = won ? winningColor === "white" ? 14 : 2 : 0;
-    const payoutAmount = won ? stakeCheck.stakeAmount * multiplier : 0;
-    const sessionId = `dbl_${Date.now()}_${crypto2.randomBytes(5).toString("hex")}`;
-    const integrityHash = crypto2.createHmac("sha256", SIGNING_SECRET).update(`${sessionId}|${cleanUid}|double|${stakeCheck.currency}|${stakeCheck.stakeAmount}|${slot}|${payoutAmount}`).digest("hex");
-    res.json({
-      sessionId,
-      slot,
-      winningColor,
-      choice: cleanChoice,
-      won,
-      multiplier,
-      currency: stakeCheck.currency,
-      stakeAmount: stakeCheck.stakeAmount,
-      payoutAmount,
-      netDelta: payoutAmount - stakeCheck.stakeAmount,
-      integrityHash
-    });
-  });
-  app.post("/api/casino/mines/deal", (req, res) => {
-    const { userId, currency, stakeAmount, minesCount, sessionId: providedSessionId } = req.body ?? {};
-    const cleanUid = typeof userId === "string" ? userId.trim() : "";
-    if (!cleanUid) {
-      res.status(400).json({ error: "Usu\xE1rio n\xE3o identificado." });
-      return;
-    }
-    const stakeCheck = validateCasinoStake(currency, stakeAmount);
-    if (!stakeCheck.ok) {
-      res.status(400).json({ error: stakeCheck.error });
-      return;
-    }
-    const mines = Math.floor(Number(minesCount));
-    if (!Number.isInteger(mines) || mines < 1 || mines > 24) {
-      res.status(400).json({ error: "Quantidade de minas deve ser entre 1 e 24." });
-      return;
-    }
-    const cutoff = Date.now() - 2 * 60 * 60 * 1e3;
-    for (const [id, game] of activeMinesGames.entries()) {
-      if (game.createdAt < cutoff || game.userId === cleanUid && game.revealedSafe.length === 0) {
-        activeMinesGames.delete(id);
-      }
-    }
-    const deck = Array.from({ length: 25 }, (_, i) => i);
-    for (let i = deck.length - 1; i > 0; i -= 1) {
-      const j = crypto2.randomInt(0, i + 1);
-      [deck[i], deck[j]] = [deck[j], deck[i]];
-    }
-    const minesList = deck.slice(0, mines).sort((a, b) => a - b);
-    const sessionId = typeof providedSessionId === "string" && /^[a-zA-Z0-9_-]{8,128}$/.test(providedSessionId) ? providedSessionId : `mns_${Date.now()}_${crypto2.randomBytes(5).toString("hex")}`;
-    const integrityHash = crypto2.createHmac("sha256", SIGNING_SECRET).update(`${sessionId}|${cleanUid}|mines|${stakeCheck.currency}|${stakeCheck.stakeAmount}|${minesList.join(",")}`).digest("hex");
-    activeMinesGames.set(sessionId, {
-      sessionId,
-      userId: cleanUid,
-      currency: stakeCheck.currency,
-      stakeAmount: stakeCheck.stakeAmount,
-      minesCount: mines,
-      minesSet: new Set(minesList),
-      revealedSafe: [],
-      createdAt: Date.now()
-    });
-    res.json({
-      sessionId,
-      minesCount: mines,
-      currency: stakeCheck.currency,
-      stakeAmount: stakeCheck.stakeAmount,
-      nextMultiplier: computeMinesMultiplier(mines, 1),
-      integrityHash
-    });
-  });
-  app.post("/api/casino/mines/reveal", (req, res) => {
-    const { sessionId, userId, tileIndex } = req.body ?? {};
-    const game = typeof sessionId === "string" ? activeMinesGames.get(sessionId) : void 0;
-    if (!game || game.userId !== String(userId || "").trim()) {
-      res.status(404).json({ error: "Partida de Mines n\xE3o encontrada ou j\xE1 encerrada." });
-      return;
-    }
-    const idx = Math.floor(Number(tileIndex));
-    if (!Number.isInteger(idx) || idx < 0 || idx >= 25) {
-      res.status(400).json({ error: "Casa inv\xE1lida." });
-      return;
-    }
-    if (game.revealedSafe.includes(idx)) {
-      const currentMultiplier2 = computeMinesMultiplier(game.minesCount, game.revealedSafe.length);
-      res.json({
-        busted: false,
-        tileIndex: idx,
-        revealedSafe: game.revealedSafe,
-        currentMultiplier: currentMultiplier2,
-        currentPayoutAmount: Math.floor(game.stakeAmount * currentMultiplier2),
-        nextMultiplier: computeMinesMultiplier(game.minesCount, game.revealedSafe.length + 1),
-        allSafeCleared: game.revealedSafe.length >= 25 - game.minesCount
-      });
-      return;
-    }
-    if (game.minesSet.has(idx)) {
-      const minePositions = Array.from(game.minesSet).sort((a, b) => a - b);
-      activeMinesGames.delete(game.sessionId);
-      const integrityHash = crypto2.createHmac("sha256", SIGNING_SECRET).update(`${game.sessionId}|${game.userId}|mines|lost|0`).digest("hex");
-      res.json({
-        busted: true,
-        tileIndex: idx,
-        revealedSafe: game.revealedSafe,
-        minePositions,
-        currentMultiplier: 0,
-        payoutAmount: 0,
-        integrityHash
-      });
-      return;
-    }
-    game.revealedSafe.push(idx);
-    const safeCount = game.revealedSafe.length;
-    const currentMultiplier = computeMinesMultiplier(game.minesCount, safeCount);
-    const currentPayoutAmount = Math.min(game.stakeAmount * 50, Math.floor(game.stakeAmount * currentMultiplier));
-    const allSafeCleared = safeCount >= 25 - game.minesCount;
-    if (allSafeCleared) {
-      const minePositions = Array.from(game.minesSet).sort((a, b) => a - b);
-      activeMinesGames.delete(game.sessionId);
-      const integrityHash = crypto2.createHmac("sha256", SIGNING_SECRET).update(`${game.sessionId}|${game.userId}|mines|won|${currentPayoutAmount}`).digest("hex");
-      res.json({
-        busted: false,
-        tileIndex: idx,
-        revealedSafe: game.revealedSafe,
-        minePositions,
-        currentMultiplier,
-        currentPayoutAmount,
-        payoutAmount: currentPayoutAmount,
-        nextMultiplier: currentMultiplier,
-        allSafeCleared: true,
-        integrityHash
-      });
-      return;
-    }
-    res.json({
-      busted: false,
-      tileIndex: idx,
-      revealedSafe: game.revealedSafe,
-      currentMultiplier,
-      currentPayoutAmount,
-      nextMultiplier: computeMinesMultiplier(game.minesCount, safeCount + 1),
-      allSafeCleared: false
-    });
-  });
-  app.post("/api/casino/mines/cashout", (req, res) => {
-    const { sessionId, userId } = req.body ?? {};
-    const game = typeof sessionId === "string" ? activeMinesGames.get(sessionId) : void 0;
-    if (!game || game.userId !== String(userId || "").trim()) {
-      res.status(404).json({ error: "Partida de Mines n\xE3o encontrada ou j\xE1 finalizada." });
-      return;
-    }
-    if (game.revealedSafe.length < 1) {
-      res.status(400).json({ error: "Abra pelo menos 1 casa segura antes de retirar." });
-      return;
-    }
-    const currentMultiplier = computeMinesMultiplier(game.minesCount, game.revealedSafe.length);
-    const payoutAmount = Math.min(game.stakeAmount * 50, Math.floor(game.stakeAmount * currentMultiplier));
-    const minePositions = Array.from(game.minesSet).sort((a, b) => a - b);
-    activeMinesGames.delete(game.sessionId);
-    const integrityHash = crypto2.createHmac("sha256", SIGNING_SECRET).update(`${game.sessionId}|${game.userId}|mines|won|${payoutAmount}`).digest("hex");
-    res.json({
-      sessionId: game.sessionId,
-      multiplier: currentMultiplier,
-      payoutAmount,
-      revealedSafeCount: game.revealedSafe.length,
-      minePositions,
-      integrityHash
-    });
   });
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({

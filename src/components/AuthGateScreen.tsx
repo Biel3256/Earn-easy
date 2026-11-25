@@ -117,7 +117,6 @@ export const AuthGateScreen: React.FC<AuthGateScreenProps> = ({
   const handleCreateAccount = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError(null);
-
     setSubmitting(true);
     try {
       const result = await createUserAccount({
@@ -179,7 +178,7 @@ export const AuthGateScreen: React.FC<AuthGateScreenProps> = ({
               Verificando sessão...
             </div>
             <p className="text-xs text-slate-500 dark:text-zinc-400">
-              Conectando com sua conta Earn Easy no servidor...
+              Conectando com sua conta Earn Easy no Firestore.
             </p>
           </div>
         ) : userAccount?.status === 'suspended' ? (

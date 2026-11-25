@@ -16,13 +16,10 @@ import {
   writeBatch,
 } from 'firebase/firestore';
 import {
-  BadgeCheck,
   Ban,
   CheckCircle2,
   Clock,
   Copy,
-  Eye,
-  FileCheck2,
   Headset,
   History,
   Inbox,
@@ -49,29 +46,23 @@ import {
 import { useAuth } from '../context/AuthContext';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import {
-  ADMIN_BOOTSTRAP_EMAIL,
-  AdminRoleRecord,
   EnterpriseIntegration,
   FraudEvent,
   GAME_LABELS,
   GameSession,
-  isOwnerIdentity,
   MAX_CONFIGURABLE_WITHDRAWAL_CENTS,
   MAX_PROMO_CODE_POINTS,
   MIN_CONFIGURABLE_WITHDRAWAL_CENTS,
   PixWithdrawal,
-  PRIMARY_OWNER_UID,
   PromoCode,
   Referral,
   SupportMessage,
   SupportTicket,
   UserAccount,
   UserPrivateInfo,
-  VerificationRequest,
   WithdrawalAttemptLog,
   WithdrawalAttemptStatus,
 } from '../types/earneasy';
-import { formatBirthDateBr, VERIFICATION_DOCUMENT_LABELS } from '../utils/cpf';
 import { generateId, sha256Hex } from '../utils/antifraud';
 import {
   extractReadableError,
@@ -79,13 +70,10 @@ import {
   formatPoints,
   formatScheduleRemaining,
   formatScheduleTime,
-  getServerNowMs,
-  syncServerUtcClock,
   timestampToMillis,
 } from '../utils/pix';
-import { resolveVerifiedBadgeTier, VerifiedBadge } from './VerifiedBadge';
 
-type AdminTab = 'overview' | 'verification' | 'payouts' | 'users' | 'codes' | 'support' | 'chat' | 'antifraud' | 'api';
+type AdminTab = 'overview' | 'payouts' | 'users' | 'codes' | 'support' | 'chat' | 'antifraud' | 'api';
 
 const ATTEMPT_STATUS_META: Record<
   WithdrawalAttemptStatus,
@@ -172,21 +160,14 @@ export const AdminPanel: React.FC = React.memo(() => {
     firebaseUser,
     userAccount,
     isAdmin,
-    isOwner,
     withdrawalSettings,
     maintenanceSettings,
     updateMaintenanceSettings,
-    approveVerificationRequest,
-    rejectVerificationRequest,
-    setUserBlueVerified,
   } = useAuth();
 
   const [tab, setTab] = useState<AdminTab>('overview');
   const [users, setUsers] = useState<UserAccount[]>([]);
-  const [adminRecords, setAdminRecords] = useState<AdminRoleRecord[]>([]);
-  const [confirmRevokeUid, setConfirmRevokeUid] = useState<string | null>(null);
-  const [confirmDeleteMsgId, setConfirmDeleteMsgId] = useState<string | null>(null);
-  const [adminActionBusyUid, setAdminActionBusyUid] = useState<string | null>(null);
+  const [adminUids, setAdminUids] = useState<string[]>([]);
   const [privateMap, setPrivateMap] = useState<Record<string, UserPrivateInfo>>({});
   const [withdrawals, setWithdrawals] = useState<PixWithdrawal[]>([]);
   const [fraudLogs, setFraudLogs] = useState<FraudEvent[]>([]);
@@ -202,13 +183,6 @@ export const AdminPanel: React.FC = React.memo(() => {
   const [supportReplyDraft, setSupportReplyDraft] = useState('');
   const [supportBusy, setSupportBusy] = useState(false);
   const [globalChatMessages, setGlobalChatMessages] = useState<Array<{ id: string; senderName?: string; senderUid?: string; text?: string; createdAt?: Timestamp }>>([]);
-  const [globalChatClockMs, setGlobalChatClockMs] = useState<number>(() => getServerNowMs());
-  const adminGlobalDeleteAttemptRef = React.useRef<Map<string, number>>(new Map());
-  const [verificationRequests, setVerificationRequests] = useState<VerificationRequest[]>([]);
-  const [verificationFilter, setVerificationFilter] = useState<'pending' | 'approved' | 'rejected' | 'all'>('pending');
-  const [verificationRejectReasons, setVerificationRejectReasons] = useState<Record<string, string>>({});
-  const [verificationBusyUid, setVerificationBusyUid] = useState<string | null>(null);
-  const [blueToggleBusyUid, setBlueToggleBusyUid] = useState<string | null>(null);
 
   const [payoutFilter, setPayoutFilter] = useState<'all' | 'pending' | 'approved' | 'paid' | 'rejected'>('all');
   const [attemptFilter, setAttemptFilter] = useState<
@@ -240,45 +214,13 @@ export const AdminPanel: React.FC = React.memo(() => {
       setGlobalChatMessages([]);
       return;
     }
-    void syncServerUtcClock().then(() => setGlobalChatClockMs(getServerNowMs()));
-    const timer = window.setInterval(() => setGlobalChatClockMs(getServerNowMs()), 5_000);
     const chatQuery = query(collection(db, 'globalMessages'), orderBy('createdAt', 'desc'), limit(100));
-    const unsub = onSnapshot(
+    return onSnapshot(
       chatQuery,
       (snap) => setGlobalChatMessages(snap.docs.map((item) => ({ id: item.id, ...item.data() } as { id: string; senderName?: string; senderUid?: string; text?: string; createdAt?: Timestamp }))),
       (err) => handleFirestoreError(err, OperationType.LIST, 'globalMessages')
     );
-    return () => {
-      window.clearInterval(timer);
-      unsub();
-    };
   }, [firebaseUser, isAdmin]);
-
-  const activeGlobalChatMessages = useMemo(() => {
-    const ttlMs = 5 * 60 * 1000;
-    return globalChatMessages.filter((message) => {
-      const createdMs = timestampToMillis(message.createdAt);
-      if (!createdMs) return true;
-      return globalChatClockMs - createdMs < ttlMs;
-    });
-  }, [globalChatMessages, globalChatClockMs]);
-
-  useEffect(() => {
-    if (!firebaseUser || !isAdmin || globalChatMessages.length === 0) return;
-    const ttlMs = 5 * 60 * 1000;
-    const nowLocal = Date.now();
-    const expired = globalChatMessages.filter((message) => {
-      const createdMs = timestampToMillis(message.createdAt);
-      if (!createdMs) return false;
-      if (globalChatClockMs - createdMs < ttlMs + 5_000) return false;
-      const lastAttempt = adminGlobalDeleteAttemptRef.current.get(message.id) ?? 0;
-      return nowLocal - lastAttempt > 30_000;
-    });
-    if (expired.length === 0) return;
-    const slice = expired.slice(0, 15);
-    slice.forEach((m) => adminGlobalDeleteAttemptRef.current.set(m.id, nowLocal));
-    void Promise.allSettled(slice.map((m) => deleteDoc(doc(db, 'globalMessages', m.id))));
-  }, [firebaseUser, isAdmin, globalChatMessages, globalChatClockMs]);
 
   // Pix withdrawal minimum & values settings state
   const [firstMinReais, setFirstMinReais] = useState(
@@ -362,18 +304,7 @@ export const AdminPanel: React.FC = React.memo(() => {
 
     const uAdmins = onSnapshot(
       collection(db, 'admins'),
-      (snap) => {
-        const list = snap.docs.map((adminDoc) => {
-          const data = adminDoc.data() as Partial<AdminRoleRecord>;
-          return {
-            uid: data.uid || adminDoc.id,
-            email: data.email || '',
-            grantedBy: data.grantedBy || 'admin',
-            createdAt: data.createdAt,
-          } as AdminRoleRecord;
-        });
-        setAdminRecords(list);
-      },
+      (snap) => setAdminUids(snap.docs.map((adminDoc) => adminDoc.id)),
       (err) => handleFirestoreError(err, OperationType.LIST, 'admins')
     );
 
@@ -417,28 +348,26 @@ export const AdminPanel: React.FC = React.memo(() => {
       (err) => handleFirestoreError(err, OperationType.LIST, 'gameSessions')
     );
 
-    const u5 = isOwner
-      ? onSnapshot(
-          query(collection(db, 'integrations'), orderBy('createdAt', 'desc')),
-          (snap) => {
-            const list = snap.docs.map((d) => d.data() as EnterpriseIntegration);
-            setIntegrations(list);
-            list.forEach((intg) => {
-              fetch('/api/v1/keys/sync', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  integrationId: intg.integrationId,
-                  name: intg.name,
-                  keyHash: intg.apiKeyHash,
-                  active: intg.active,
-                }),
-              }).catch(() => {});
-            });
-          },
-          (err) => handleFirestoreError(err, OperationType.LIST, 'integrations')
-        )
-      : () => {};
+    const u5 = onSnapshot(
+      query(collection(db, 'integrations'), orderBy('createdAt', 'desc')),
+      (snap) => {
+        const list = snap.docs.map((d) => d.data() as EnterpriseIntegration);
+        setIntegrations(list);
+        list.forEach((intg) => {
+          fetch('/api/v1/keys/sync', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              integrationId: intg.integrationId,
+              name: intg.name,
+              keyHash: intg.apiKeyHash,
+              active: intg.active,
+            }),
+          }).catch(() => {});
+        });
+      },
+      (err) => handleFirestoreError(err, OperationType.LIST, 'integrations')
+    );
 
     const u6 = onSnapshot(
       query(collection(db, 'promoCodes'), orderBy('createdAt', 'desc')),
@@ -464,12 +393,6 @@ export const AdminPanel: React.FC = React.memo(() => {
       (err) => handleFirestoreError(err, OperationType.LIST, 'supportTickets')
     );
 
-    const u10 = onSnapshot(
-      query(collection(db, 'verificationRequests'), orderBy('submittedAt', 'desc')),
-      (snap) => setVerificationRequests(snap.docs.map((d) => d.data() as VerificationRequest)),
-      (err) => handleFirestoreError(err, OperationType.LIST, 'verificationRequests')
-    );
-
     return () => {
       uAdmins();
       u1();
@@ -481,9 +404,8 @@ export const AdminPanel: React.FC = React.memo(() => {
       u7();
       u8();
       u9();
-      u10();
     };
-  }, [firebaseUser, isAdmin, isOwner]);
+  }, [firebaseUser, isAdmin]);
 
   useEffect(() => {
     if (!isAdmin || !selectedTicketId) {
@@ -762,11 +684,8 @@ export const AdminPanel: React.FC = React.memo(() => {
               photoURL: uData.photoURL,
               brlBalanceCents: uData.brlBalanceCents + w.amountCents,
               pointsBalance: uData.pointsBalance,
-              lifetimePoints: uData.lifetimePoints,
               gamesPlayed: uData.gamesPlayed,
               status: uData.status,
-              identityVerified: Boolean(uData.identityVerified),
-              verifiedBadge: resolveVerifiedBadgeTier(uData.verifiedBadge, uData.identityVerified),
               updatedAt: serverTimestamp(),
             });
           }
@@ -1071,11 +990,8 @@ export const AdminPanel: React.FC = React.memo(() => {
         photoURL: u.photoURL,
         brlBalanceCents: u.brlBalanceCents,
         pointsBalance: u.pointsBalance,
-        lifetimePoints: u.lifetimePoints,
         gamesPlayed: u.gamesPlayed,
         status: 'active',
-        identityVerified: Boolean(u.identityVerified),
-        verifiedBadge: resolveVerifiedBadgeTier(u.verifiedBadge, u.identityVerified),
         updatedAt: serverTimestamp(),
       });
       setActionMsg(`Usuário ${u.displayName} reativado com sucesso.`);
@@ -1084,64 +1000,30 @@ export const AdminPanel: React.FC = React.memo(() => {
     }
   };
 
-  const adminUids = useMemo(
-    () => adminRecords.map((record) => record.uid),
-    [adminRecords]
-  );
-
-  const isUserProtectedOwner = (u: UserAccount) => {
-    const email = privateMap[u.uid]?.email || '';
-    return isOwnerIdentity(email, u.uid) || u.verifiedBadge === 'owner';
-  };
-
   const promoteAdmin = async (u: UserAccount) => {
-    if (!isOwner) {
-      setActionErr('Somente o Dono da plataforma pode promover administradores.');
-      return;
-    }
-    if (isUserProtectedOwner(u)) {
-      setActionErr('O Dono já possui controle absoluto protegido.');
-      return;
-    }
-    const email = (privateMap[u.uid]?.email || 'admin@earneasy.app').slice(0, 160);
-    setAdminActionBusyUid(u.uid);
-    setActionErr(null);
-    setActionMsg(null);
+    const email = privateMap[u.uid]?.email || 'admin@earneasy.app';
     try {
       await setDoc(doc(db, 'admins', u.uid), {
         uid: u.uid,
         email,
-        grantedBy: firebaseUser?.uid || 'owner',
+        grantedBy: firebaseUser?.uid || 'admin',
         createdAt: serverTimestamp(),
       });
-      setActionMsg(`${u.displayName} promovido a administrador limitado.`);
+      setActionMsg(`${u.displayName} promovido a administrador.`);
     } catch (err) {
       setActionErr(extractReadableError(err, 'Erro ao promover usuário.'));
-    } finally {
-      setAdminActionBusyUid(null);
     }
   };
 
-  const revokeAdminByUid = async (targetUid: string, targetLabel?: string) => {
-    if (!firebaseUser || !isOwner) {
-      setActionErr('Somente o Dono da plataforma pode remover administradores.');
-      return;
-    }
-    if (isOwnerIdentity(null, targetUid) || targetUid === firebaseUser.uid) {
-      setActionErr('A conta do Dono não pode ser rebaixada.');
-      return;
-    }
-    setAdminActionBusyUid(targetUid);
-    setActionErr(null);
-    setActionMsg(null);
+  const revokeAdmin = async (u: UserAccount) => {
+    if (!firebaseUser || u.uid === firebaseUser.uid) return;
+    const confirmed = window.confirm(`Retirar o cargo de administrador de ${u.displayName}?`);
+    if (!confirmed) return;
     try {
-      await deleteDoc(doc(db, 'admins', targetUid));
-      setConfirmRevokeUid(null);
-      setActionMsg(`Permissão de administrador removida de ${targetLabel || targetUid}.`);
+      await deleteDoc(doc(db, 'admins', u.uid));
+      setActionMsg(`Permissão de administrador removida de ${u.displayName}.`);
     } catch (err) {
       setActionErr(extractReadableError(err, 'Erro ao remover administrador.'));
-    } finally {
-      setAdminActionBusyUid(null);
     }
   };
 
@@ -1549,10 +1431,11 @@ export const AdminPanel: React.FC = React.memo(() => {
 
   const deleteGlobalChatMessage = async (message: { id: string; senderName?: string; text?: string }) => {
     if (!isAdmin) return;
+    const confirmed = window.confirm(`Excluir a mensagem de ${message.senderName || 'jogador'}? Esta ação não pode ser desfeita.`);
+    if (!confirmed) return;
     try {
       await deleteDoc(doc(db, 'globalMessages', message.id));
-      setConfirmDeleteMsgId(null);
-      setActionMsg(`Mensagem de ${message.senderName || 'jogador'} excluída do chat global.`);
+      setActionMsg('Mensagem excluída do chat global.');
     } catch (err) {
       setActionErr(extractReadableError(err, 'Não foi possível excluir a mensagem.'));
     }
@@ -1566,95 +1449,13 @@ export const AdminPanel: React.FC = React.memo(() => {
   startOfToday.setHours(0, 0, 0, 0);
   const newUsersToday = users.filter((user) => timestampToMillis(user.createdAt) >= startOfToday.getTime()).length;
 
-  const handleApproveVerification = async (req: VerificationRequest) => {
-    if (verificationBusyUid) return;
-    setActionErr(null);
-    setActionMsg(null);
-    setVerificationBusyUid(req.uid);
-    try {
-      await approveVerificationRequest(req.uid);
-      setActionMsg(
-        `Verificado Azul de ${req.displayName} aprovado com sucesso! Selo ativado sem bônus de pontos.`
-      );
-    } catch (err) {
-      setActionErr(extractReadableError(err, 'Erro ao aprovar Verificado Azul.'));
-    } finally {
-      setVerificationBusyUid(null);
-    }
-  };
-
-  const handleRejectVerification = async (req: VerificationRequest) => {
-    if (verificationBusyUid) return;
-    const reason = (verificationRejectReasons[req.uid] || '').trim();
-    if (reason.length < 3) {
-      setActionErr('Informe o motivo da recusa antes de recusar a solicitação.');
-      return;
-    }
-    setActionErr(null);
-    setActionMsg(null);
-    setVerificationBusyUid(req.uid);
-    try {
-      await rejectVerificationRequest(req.uid, reason);
-      setVerificationRejectReasons((prev) => ({ ...prev, [req.uid]: '' }));
-      setActionMsg(`Solicitação de Verificado Azul de ${req.displayName} recusada.`);
-    } catch (err) {
-      setActionErr(extractReadableError(err, 'Erro ao recusar solicitação.'));
-    } finally {
-      setVerificationBusyUid(null);
-    }
-  };
-
-  const handleToggleBlueVerified = async (u: UserAccount) => {
-    if (blueToggleBusyUid) return;
-    const currentTier = resolveVerifiedBadgeTier(u.verifiedBadge, u.identityVerified);
-    if (currentTier === 'owner') {
-      setActionErr('O selo oficial do Dono é exclusivo e protegido.');
-      return;
-    }
-    const nextGranted = currentTier !== 'blue';
-    setActionErr(null);
-    setActionMsg(null);
-    setBlueToggleBusyUid(u.uid);
-    try {
-      await setUserBlueVerified(u.uid, nextGranted);
-      setActionMsg(
-        nextGranted
-          ? `Verificado Azul ativado para ${u.displayName}!`
-          : `Verificado Azul removido de ${u.displayName}.`
-      );
-    } catch (err) {
-      setActionErr(extractReadableError(err, 'Não foi possível atualizar o Verificado Azul.'));
-    } finally {
-      setBlueToggleBusyUid(null);
-    }
-  };
-
-  const pendingVerificationCount = useMemo(
-    () => verificationRequests.filter((f) => f.status === 'pending').length,
-    [verificationRequests]
-  );
-
-  const filteredVerificationRequests = useMemo(
-    () =>
-      verificationRequests.filter((f) =>
-        verificationFilter === 'all' ? true : f.status === verificationFilter
-      ),
-    [verificationRequests, verificationFilter]
-  );
-
   const ADMIN_TABS: Array<{
     id: AdminTab;
     label: string;
     Icon: React.FC<{ className?: string }>;
     badge?: number;
   }> = [
-    { id: 'overview', label: isOwner ? 'Visão Geral & Manutenção' : 'Visão Geral', Icon: LayoutDashboard },
-    {
-      id: 'verification',
-      label: 'Verificação Azul',
-      Icon: BadgeCheck,
-      badge: pendingVerificationCount || undefined,
-    },
+    { id: 'overview', label: 'Visão Geral & Manutenção', Icon: LayoutDashboard },
     {
       id: 'payouts',
       label: 'Saques Pix & Logs',
@@ -1676,7 +1477,7 @@ export const AdminPanel: React.FC = React.memo(() => {
       Icon: ShieldCheck,
       badge: fraudLogs.filter((f) => !f.resolved).length || undefined,
     },
-    ...(isOwner ? [{ id: 'api' as AdminTab, label: 'API & SMTP', Icon: Webhook }] : []),
+    { id: 'api', label: 'API & SMTP', Icon: Webhook },
   ];
 
   return (
@@ -1812,11 +1613,10 @@ export const AdminPanel: React.FC = React.memo(() => {
             </div>
           </div>
 
-          {isOwner && (
-            <form
-              onSubmit={handleSaveMaintenance}
-              className="bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 sm:p-6 space-y-5 shadow-sm"
-            >
+          <form
+            onSubmit={handleSaveMaintenance}
+            className="bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 sm:p-6 space-y-5 shadow-sm"
+          >
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 dark:border-zinc-800 pb-4">
               <div className="flex items-start gap-3">
                 <div className="w-10 h-10 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-600 dark:text-lime-400 flex items-center justify-center shrink-0">
@@ -1906,7 +1706,6 @@ export const AdminPanel: React.FC = React.memo(() => {
               </button>
             </div>
           </form>
-          )}
         </div>
       )}
 
@@ -1938,8 +1737,7 @@ export const AdminPanel: React.FC = React.memo(() => {
 
         return (
           <div className="space-y-6">
-            {/* Configurable Pix Withdrawal Minimums (Exclusivo do Dono) */}
-            {isOwner && (
+            {/* Configurable Pix Withdrawal Minimums */}
             <form
               onSubmit={handleSaveWithdrawalSettings}
               className="bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 sm:p-6 space-y-5"
@@ -2061,7 +1859,6 @@ export const AdminPanel: React.FC = React.memo(() => {
                 </div>
               )}
             </form>
-            )}
 
             {/* Solicitações de Saque Pix */}
             <div className="bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 sm:p-6 space-y-4">
@@ -2404,318 +2201,155 @@ export const AdminPanel: React.FC = React.memo(() => {
 
       {/* TAB 3: USUÁRIOS & MODERAÇÃO */}
       {tab === 'users' && (
-        <div className="space-y-5">
-          {isOwner && (
-            <div className="bg-amber-50/70 dark:bg-amber-950/20 border border-amber-300/70 dark:border-amber-700/50 rounded-3xl p-5 sm:p-6 space-y-4">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div>
-                  <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                    <ShieldCheck className="w-5 h-5 text-amber-500" />
-                    Administradores Ativos (Exclusivo do Dono)
-                  </h3>
-                  <p className="text-xs text-slate-600 dark:text-zinc-400 mt-0.5">
-                    Apenas você ({ADMIN_BOOTSTRAP_EMAIL}) pode conceder ou remover o cargo de administrador. Admins limitados nunca podem alterar o Dono nem promover/remover outros administradores.
-                  </p>
-                </div>
-                <span className="px-2.5 py-1 rounded-xl bg-amber-500/15 border border-amber-500/35 text-[11px] font-mono font-bold text-amber-800 dark:text-amber-300 tabular-nums">
-                  {adminRecords.filter((r) => r.uid !== PRIMARY_OWNER_UID).length} delegados
-                </span>
-              </div>
+        <div className="bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 sm:p-6 space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <h3 className="text-base font-bold text-slate-900 dark:text-white">
+              Controle de Usuários ({filteredUsers.length})
+            </h3>
+            <div className="relative w-full sm:w-72">
+              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                type="text"
+                value={userSearch}
+                onChange={(e) => setUserSearch(e.target.value)}
+                placeholder="Buscar por nome, e-mail ou UID..."
+                className="w-full min-h-[42px] pl-9 pr-3 py-2 text-xs bg-white dark:bg-[#090d12] border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-xl"
+              />
+            </div>
+          </div>
 
-              <div className="space-y-2">
-                <div className="p-3.5 rounded-2xl bg-white dark:bg-[#0e1319] border border-amber-300/70 dark:border-amber-600/40 flex flex-wrap items-center justify-between gap-3 text-xs">
-                  <div className="min-w-0 space-y-0.5">
-                    <div className="font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                      <span>{userAccount?.displayName || 'Dono Oficial'}</span>
-                      <VerifiedBadge tier="owner" showLabel size="xs" />
-                    </div>
-                    <div className="font-mono text-[11px] text-slate-500 dark:text-zinc-400 break-all">
-                      {ADMIN_BOOTSTRAP_EMAIL} · UID: {PRIMARY_OWNER_UID}
-                    </div>
-                  </div>
-                  <span className="px-2.5 py-1 rounded-xl bg-amber-500/15 text-amber-800 dark:text-amber-300 font-bold text-[11px]">
-                    Controle Permanente Protegido
-                  </span>
-                </div>
-
-                {adminRecords
-                  .filter((rec) => !isOwnerIdentity(rec.email, rec.uid))
-                  .map((rec) => {
-                    const matchedUser = users.find((candidate) => candidate.uid === rec.uid);
-                    const displayLabel = matchedUser?.displayName || rec.email || rec.uid;
-                    const resolvedEmail = privateMap[rec.uid]?.email || rec.email || 'Sem e-mail registrado';
-                    const isConfirming = confirmRevokeUid === rec.uid;
-                    const isBusy = adminActionBusyUid === rec.uid;
-                    return (
-                      <div
-                        key={rec.uid}
-                        className="p-3.5 rounded-2xl bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 flex flex-wrap items-center justify-between gap-3 text-xs"
+          <div className="space-y-3">
+            {filteredUsers.map((u) => {
+              const userBanHistory = fraudLogs.filter(
+                (f) =>
+                  f.userId === u.uid &&
+                  (f.eventType === 'admin_ban' || f.eventType === 'profanity_username_ban')
+              );
+              return (
+                <div
+                  key={u.uid}
+                  className="p-4 rounded-2xl border border-slate-200 dark:border-zinc-800 bg-slate-50/70 dark:bg-[#090d12] flex flex-col lg:flex-row lg:items-center justify-between gap-4 text-xs"
+                >
+                  <div className="space-y-1.5 min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-bold text-slate-900 dark:text-white break-words">
+                        {u.displayName}
+                      </span>
+                      {adminUids.includes(u.uid) && (
+                        <span className="px-2 py-0.5 rounded-lg text-[11px] font-bold bg-lime-100 dark:bg-lime-500/15 text-lime-800 dark:text-lime-300">
+                          Administrador
+                        </span>
+                      )}
+                      <span
+                        className={`px-2 py-0.5 rounded-lg text-[11px] font-bold ${
+                          u.status === 'active'
+                            ? 'bg-emerald-50 dark:bg-lime-500/15 text-emerald-700 dark:text-lime-400'
+                            : 'bg-red-50 dark:bg-red-950/50 text-red-700 dark:text-red-300'
+                        }`}
                       >
-                        <div className="min-w-0 space-y-0.5">
-                          <div className="font-bold text-slate-900 dark:text-white flex items-center gap-2 flex-wrap">
-                            <span>{displayLabel}</span>
-                            <span className="px-2 py-0.5 rounded-lg bg-lime-100 dark:bg-lime-500/15 text-lime-800 dark:text-lime-300 text-[10px] font-bold">
-                              Admin Limitado
-                            </span>
-                          </div>
-                          <div className="font-mono text-[11px] text-slate-500 dark:text-zinc-400 break-all">
-                            {resolvedEmail} · UID: {rec.uid}
-                          </div>
-                        </div>
-
-                        <div className="flex items-center gap-2 shrink-0">
-                          {isConfirming ? (
-                            <>
-                              <button
-                                type="button"
-                                disabled={isBusy}
-                                onClick={() => revokeAdminByUid(rec.uid, displayLabel)}
-                                className="min-h-[38px] px-3 py-1.5 bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white rounded-xl font-bold cursor-pointer"
-                              >
-                                {isBusy ? 'Removendo...' : 'Confirmar Remoção'}
-                              </button>
-                              <button
-                                type="button"
-                                disabled={isBusy}
-                                onClick={() => setConfirmRevokeUid(null)}
-                                className="min-h-[38px] px-3 py-1.5 border border-slate-200 dark:border-zinc-700 text-slate-600 dark:text-zinc-300 rounded-xl font-semibold cursor-pointer"
-                              >
-                                Cancelar
-                              </button>
-                            </>
-                          ) : (
-                            <button
-                              type="button"
-                              disabled={isBusy}
-                              onClick={() => setConfirmRevokeUid(rec.uid)}
-                              className="min-h-[38px] px-3 py-1.5 bg-red-50 dark:bg-red-950/50 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800 rounded-xl font-bold cursor-pointer"
-                            >
-                              Remover Admin
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-
-                {adminRecords.filter((rec) => !isOwnerIdentity(rec.email, rec.uid)).length === 0 && (
-                  <p className="text-xs text-slate-500 dark:text-zinc-400 py-2">
-                    Nenhum administrador delegado ativo no momento. Apenas você possui acesso administrativo.
-                  </p>
-                )}
-              </div>
-            </div>
-          )}
-
-          <div className="bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 sm:p-6 space-y-4">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <h3 className="text-base font-bold text-slate-900 dark:text-white">
-                Controle de Usuários ({filteredUsers.length})
-              </h3>
-              <div className="relative w-full sm:w-72">
-                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-                <input
-                  type="text"
-                  value={userSearch}
-                  onChange={(e) => setUserSearch(e.target.value)}
-                  placeholder="Buscar por nome, e-mail ou UID..."
-                  className="w-full min-h-[42px] pl-9 pr-3 py-2 text-xs bg-white dark:bg-[#090d12] border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-xl"
-                />
-              </div>
-            </div>
-
-            <div className="space-y-3">
-              {filteredUsers.map((u) => {
-                const targetIsOwner = isUserProtectedOwner(u);
-                const targetIsDelegatedAdmin = adminUids.includes(u.uid) && !targetIsOwner;
-                const userBanHistory = fraudLogs.filter(
-                  (f) =>
-                    f.userId === u.uid &&
-                    (f.eventType === 'admin_ban' || f.eventType === 'profanity_username_ban')
-                );
-                return (
-                  <div
-                    key={u.uid}
-                    className="p-4 rounded-2xl border border-slate-200 dark:border-zinc-800 bg-slate-50/70 dark:bg-[#090d12] flex flex-col lg:flex-row lg:items-center justify-between gap-4 text-xs"
-                  >
-                    <div className="space-y-1.5 min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="text-sm font-bold text-slate-900 dark:text-white break-words">
-                          {u.displayName}
-                        </span>
-                        <VerifiedBadge
-                          tier={u.verifiedBadge}
-                          legacyVerified={u.identityVerified}
-                          showLabel
-                          size="xs"
-                        />
-                        {targetIsDelegatedAdmin && (
-                          <span className="px-2 py-0.5 rounded-lg text-[11px] font-bold bg-lime-100 dark:bg-lime-500/15 text-lime-800 dark:text-lime-300">
-                            Administrador
-                          </span>
-                        )}
-                        <span
-                          className={`px-2 py-0.5 rounded-lg text-[11px] font-bold ${
-                            u.status === 'active'
-                              ? 'bg-emerald-50 dark:bg-lime-500/15 text-emerald-700 dark:text-lime-400'
-                              : 'bg-red-50 dark:bg-red-950/50 text-red-700 dark:text-red-300'
-                          }`}
-                        >
-                          {u.status === 'active' ? 'Ativo' : u.suspensionUntil && timestampToMillis(u.suspensionUntil) > Date.now() ? 'Bloqueado temporariamente' : 'Banido'}
-                        </span>
-                      </div>
-
-                      <div className="font-mono text-[11px] text-slate-500 dark:text-zinc-400 break-all">
-                        {privateMap[u.uid]?.email ? `${privateMap[u.uid].email} · ` : ''}UID: {u.uid}
-                      </div>
-
-                      <div className="flex flex-wrap gap-x-4 gap-y-1 font-mono text-[11px] pt-1">
-                        <span className="text-slate-700 dark:text-zinc-300">
-                          Pontos: <strong>{formatPoints(u.pointsBalance)}</strong>
-                        </span>
-                        <span className="text-emerald-700 dark:text-lime-400">
-                          Saldo: <strong>{formatBRL(u.brlBalanceCents)}</strong>
-                        </span>
-                        <span className="text-slate-700 dark:text-zinc-300">
-                          Sacado: <strong>{formatBRL(u.totalWithdrawnCents)}</strong>
-                        </span>
-                        <span className="text-slate-700 dark:text-zinc-300">
-                          Risco: <strong>{u.riskScore}/100</strong>
-                        </span>
-                      </div>
-
-                      {u.status === 'suspended' && (u.banReason || u.banExplanation) && (
-                        <div className="mt-1.5 text-[11px] text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/70 rounded-xl p-2.5 space-y-0.5">
-                          {u.banReason && (
-                            <div>
-                              <strong>Motivo:</strong> {u.banReason}
-                            </div>
-                          )}
-                          {u.banExplanation && (
-                            <div>
-                              <strong>Por quê:</strong> {u.banExplanation}
-                            </div>
-                          )}
-                          {Boolean(u.suspensionUntil) && timestampToMillis(u.suspensionUntil) > Date.now() && (
-                            <div>
-                              <strong>Bloqueado até:</strong> {formatAttemptTimestamp(u.suspensionUntil)}
-                            </div>
-                          )}
-                        </div>
-                      )}
-
-                      {u.status === 'active' && userBanHistory.length > 0 && (
-                        <div className="text-[11px] text-amber-700 dark:text-amber-300">
-                          Histórico anterior ({userBanHistory.length}): {userBanHistory[0].details}
-                        </div>
-                      )}
+                        {u.status === 'active' ? 'Ativo' : u.suspensionUntil && timestampToMillis(u.suspensionUntil) > Date.now() ? 'Bloqueado temporariamente' : 'Banido'}
+                      </span>
                     </div>
 
-                    <div className="flex flex-wrap items-center gap-2 shrink-0">
-                      {targetIsOwner && !isOwner ? (
-                        <span className="min-h-[40px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/15 border border-amber-500/35 text-amber-800 dark:text-amber-300 text-[11px] font-extrabold">
-                          <ShieldCheck className="w-3.5 h-3.5" />
-                          Dono Protegido
+                    <div className="font-mono text-[11px] text-slate-500 dark:text-zinc-400 break-all">
+                      {privateMap[u.uid]?.email ? `${privateMap[u.uid].email} · ` : ''}UID: {u.uid}
+                    </div>
+
+                    <div className="flex flex-wrap gap-x-4 gap-y-1 font-mono text-[11px] pt-1">
+                      <span className="text-slate-700 dark:text-zinc-300">
+                        Pontos: <strong>{formatPoints(u.pointsBalance)}</strong>
+                      </span>
+                      <span className="text-emerald-700 dark:text-lime-400">
+                        Saldo: <strong>{formatBRL(u.brlBalanceCents)}</strong>
+                      </span>
+                      <span className="text-slate-700 dark:text-zinc-300">
+                        Sacado: <strong>{formatBRL(u.totalWithdrawnCents)}</strong>
+                      </span>
+                      <span className="text-slate-700 dark:text-zinc-300">
+                        Risco: <strong>{u.riskScore}/100</strong>
+                      </span>
+                    </div>
+
+                    {u.status === 'suspended' && (u.banReason || u.banExplanation) && (
+                      <div className="mt-1.5 text-[11px] text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/70 rounded-xl p-2.5 space-y-0.5">
+                        {u.banReason && (
+                          <div>
+                            <strong>Motivo:</strong> {u.banReason}
+                          </div>
+                        )}
+                        {u.banExplanation && (
+                          <div>
+                            <strong>Por quê:</strong> {u.banExplanation}
+                          </div>
+                        )}
+                        {Boolean(u.suspensionUntil) && timestampToMillis(u.suspensionUntil) > Date.now() && (
+                          <div>
+                            <strong>Bloqueado até:</strong> {formatAttemptTimestamp(u.suspensionUntil)}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {u.status === 'active' && userBanHistory.length > 0 && (
+                      <div className="text-[11px] text-amber-700 dark:text-amber-300">
+                        Histórico anterior ({userBanHistory.length}): {userBanHistory[0].details}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => openPointsModal(u)}
+                      className="min-h-[40px] px-3 py-1.5 bg-sky-50 dark:bg-sky-950/40 text-sky-700 dark:text-sky-300 border border-sky-200 dark:border-sky-800 rounded-xl font-bold cursor-pointer"
+                    >
+                      Ajustar pontos
+                    </button>
+                    {u.status === 'active' ? (
+                      <button
+                        type="button"
+                        onClick={() => openBanModal(u)}
+                        className="min-h-[40px] inline-flex items-center gap-1.5 px-3 py-1.5 bg-red-50 dark:bg-red-950/50 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800 rounded-xl font-bold cursor-pointer"
+                      >
+                        <Ban className="w-3.5 h-3.5" />
+                        Banir
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => reactivateUser(u)}
+                        className="min-h-[40px] px-3 py-1.5 bg-emerald-50 dark:bg-lime-500/15 text-emerald-700 dark:text-lime-400 border border-emerald-200 dark:border-lime-500/40 rounded-xl font-bold cursor-pointer"
+                      >
+                        Reativar
+                      </button>
+                    )}
+                    {adminUids.includes(u.uid) ? (
+                      u.uid === firebaseUser?.uid ? (
+                        <span className="min-h-[40px] inline-flex items-center px-3 py-1.5 text-slate-500 dark:text-zinc-400 text-[11px] font-semibold">
+                          Seu administrador
                         </span>
                       ) : (
-                        <>
-                          {!targetIsOwner && (
-                            <button
-                              type="button"
-                              disabled={blueToggleBusyUid === u.uid}
-                              onClick={() => handleToggleBlueVerified(u)}
-                              className={`min-h-[40px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border font-bold cursor-pointer disabled:opacity-50 ${
-                                resolveVerifiedBadgeTier(u.verifiedBadge, u.identityVerified) === 'blue'
-                                  ? 'bg-sky-600 text-white border-sky-500 hover:bg-sky-700'
-                                  : 'bg-sky-50 dark:bg-sky-950/40 text-sky-700 dark:text-sky-300 border-sky-200 dark:border-sky-800 hover:border-sky-400'
-                              }`}
-                            >
-                              <BadgeCheck className="w-3.5 h-3.5" />
-                              {blueToggleBusyUid === u.uid
-                                ? 'Salvando...'
-                                : resolveVerifiedBadgeTier(u.verifiedBadge, u.identityVerified) === 'blue'
-                                  ? 'Remover Verificado'
-                                  : 'Dar Verificado Azul'}
-                            </button>
-                          )}
-                          <button
-                            type="button"
-                            onClick={() => openPointsModal(u)}
-                            className="min-h-[40px] px-3 py-1.5 bg-sky-50 dark:bg-sky-950/40 text-sky-700 dark:text-sky-300 border border-sky-200 dark:border-sky-800 rounded-xl font-bold cursor-pointer"
-                          >
-                            Ajustar pontos
-                          </button>
-                          {!targetIsOwner && (
-                            u.status === 'active' ? (
-                              <button
-                                type="button"
-                                onClick={() => openBanModal(u)}
-                                className="min-h-[40px] inline-flex items-center gap-1.5 px-3 py-1.5 bg-red-50 dark:bg-red-950/50 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800 rounded-xl font-bold cursor-pointer"
-                              >
-                                <Ban className="w-3.5 h-3.5" />
-                                Banir
-                              </button>
-                            ) : (
-                              <button
-                                type="button"
-                                onClick={() => reactivateUser(u)}
-                                className="min-h-[40px] px-3 py-1.5 bg-emerald-50 dark:bg-lime-500/15 text-emerald-700 dark:text-lime-400 border border-emerald-200 dark:border-lime-500/40 rounded-xl font-bold cursor-pointer"
-                              >
-                                Reativar
-                              </button>
-                            )
-                          )}
-                          {targetIsOwner ? (
-                            <span className="min-h-[40px] inline-flex items-center px-3 py-1.5 text-amber-600 dark:text-amber-300 text-[11px] font-bold">
-                              Dono da Plataforma
-                            </span>
-                          ) : isOwner ? (
-                            targetIsDelegatedAdmin ? (
-                              confirmRevokeUid === u.uid ? (
-                                <div className="inline-flex items-center gap-1.5">
-                                  <button
-                                    type="button"
-                                    disabled={adminActionBusyUid === u.uid}
-                                    onClick={() => revokeAdminByUid(u.uid, u.displayName)}
-                                    className="min-h-[40px] px-3 py-1.5 bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white rounded-xl font-bold cursor-pointer"
-                                  >
-                                    {adminActionBusyUid === u.uid ? 'Removendo...' : 'Confirmar'}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => setConfirmRevokeUid(null)}
-                                    className="min-h-[40px] px-2.5 py-1.5 border border-slate-200 dark:border-zinc-700 text-slate-600 dark:text-zinc-300 rounded-xl font-semibold cursor-pointer"
-                                  >
-                                    Cancelar
-                                  </button>
-                                </div>
-                              ) : (
-                                <button
-                                  type="button"
-                                  onClick={() => setConfirmRevokeUid(u.uid)}
-                                  className="min-h-[40px] px-3 py-1.5 bg-red-50 dark:bg-red-950/50 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800 rounded-xl font-bold cursor-pointer"
-                                >
-                                  Retirar Admin
-                                </button>
-                              )
-                            ) : (
-                              <button
-                                type="button"
-                                disabled={adminActionBusyUid === u.uid}
-                                onClick={() => promoteAdmin(u)}
-                                className="min-h-[40px] px-3 py-1.5 bg-white dark:bg-zinc-800 text-slate-800 dark:text-zinc-200 border border-slate-200 dark:border-zinc-700 rounded-xl font-semibold hover:border-lime-400 cursor-pointer disabled:opacity-50"
-                              >
-                                {adminActionBusyUid === u.uid ? 'Promovendo...' : 'Tornar Admin'}
-                              </button>
-                            )
-                          ) : null}
-                        </>
-                      )}
-                    </div>
+                        <button
+                          type="button"
+                          onClick={() => revokeAdmin(u)}
+                          className="min-h-[40px] px-3 py-1.5 bg-red-50 dark:bg-red-950/50 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800 rounded-xl font-bold cursor-pointer"
+                        >
+                          Retirar Admin
+                        </button>
+                      )
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => promoteAdmin(u)}
+                        className="min-h-[40px] px-3 py-1.5 bg-white dark:bg-zinc-800 text-slate-800 dark:text-zinc-200 border border-slate-200 dark:border-zinc-700 rounded-xl font-semibold hover:border-lime-400 cursor-pointer"
+                      >
+                        Tornar Admin
+                      </button>
+                    )}
                   </div>
-                );
-              })}
-            </div>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
@@ -3274,48 +2908,29 @@ export const AdminPanel: React.FC = React.memo(() => {
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
             <div>
               <h3 className="text-base font-bold text-slate-900 dark:text-white">Moderação do Chat Global</h3>
-              <p className="text-xs text-slate-500 dark:text-zinc-400">Mensagens somem automaticamente após 5 minutos. Você também pode excluir mensagens inadequadas manualmente.</p>
+              <p className="text-xs text-slate-500 dark:text-zinc-400">Exclua mensagens inadequadas da conversa pública. A exclusão é permanente.</p>
             </div>
-            <span className="text-xs font-semibold text-slate-500 dark:text-zinc-400">{activeGlobalChatMessages.length} mensagens ativas (últimos 5 min)</span>
+            <span className="text-xs font-semibold text-slate-500 dark:text-zinc-400">{globalChatMessages.length} mensagens carregadas</span>
           </div>
-          {activeGlobalChatMessages.length === 0 ? (
-            <p className="text-xs text-slate-500 dark:text-zinc-400 py-8 text-center">Nenhuma mensagem ativa no chat global.</p>
+          {globalChatMessages.length === 0 ? (
+            <p className="text-xs text-slate-500 dark:text-zinc-400 py-8 text-center">Nenhuma mensagem encontrada no chat global.</p>
           ) : (
             <div className="space-y-2 max-h-[650px] overflow-y-auto pr-1">
-              {activeGlobalChatMessages.map((message) => (
+              {globalChatMessages.map((message) => (
                 <div key={message.id} className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 rounded-2xl border border-slate-200 dark:border-zinc-800 bg-slate-50/70 dark:bg-[#090d12] p-3.5">
                   <div className="min-w-0 space-y-1">
                     <div className="text-xs font-bold text-slate-900 dark:text-zinc-100">{message.senderName || 'Jogador'}</div>
                     <p className="text-sm text-slate-700 dark:text-zinc-300 break-words">{message.text || ''}</p>
                     <div className="text-[10px] text-slate-400 dark:text-zinc-500 font-mono break-all">ID: {message.id}</div>
                   </div>
-                  {confirmDeleteMsgId === message.id ? (
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      <button
-                        type="button"
-                        onClick={() => deleteGlobalChatMessage(message)}
-                        className="min-h-[36px] px-3 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-bold cursor-pointer"
-                      >
-                        Confirmar Exclusão
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setConfirmDeleteMsgId(null)}
-                        className="min-h-[36px] px-2.5 py-2 rounded-xl border border-slate-200 dark:border-zinc-700 text-slate-600 dark:text-zinc-300 text-xs font-semibold cursor-pointer"
-                      >
-                        Cancelar
-                      </button>
-                    </div>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => setConfirmDeleteMsgId(message.id)}
-                      className="inline-flex items-center justify-center gap-1.5 min-h-[36px] px-3 py-2 rounded-xl bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/60 text-red-700 dark:text-red-300 text-xs font-bold hover:bg-red-100 dark:hover:bg-red-950/50 shrink-0 cursor-pointer"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                      Excluir mensagem
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    onClick={() => deleteGlobalChatMessage(message)}
+                    className="inline-flex items-center justify-center gap-1.5 min-h-[36px] px-3 py-2 rounded-xl bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/60 text-red-700 dark:text-red-300 text-xs font-bold hover:bg-red-100 dark:hover:bg-red-950/50 shrink-0 cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    Excluir mensagem
+                  </button>
                 </div>
               ))}
             </div>
@@ -3404,8 +3019,8 @@ export const AdminPanel: React.FC = React.memo(() => {
         </div>
       )}
 
-      {/* TAB 7: API EMPRESARIAL & SMTP (Exclusivo do Dono) */}
-      {tab === 'api' && isOwner && (
+      {/* TAB 7: API EMPRESARIAL & SMTP */}
+      {tab === 'api' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           <div className="lg:col-span-5 bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 sm:p-6 space-y-4">
             <div className="flex items-center gap-2">
@@ -3622,165 +3237,6 @@ export const AdminPanel: React.FC = React.memo(() => {
               )}
             </div>
           </div>
-        </div>
-      )}
-
-      {/* TAB: VERIFICAÇÃO AZUL */}
-      {tab === 'verification' && (
-        <div className="bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 sm:p-6 space-y-5">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-zinc-800 pb-4">
-            <div>
-              <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                <BadgeCheck className="w-5 h-5 text-sky-500" />
-                Análise de Verificado Azul ({filteredVerificationRequests.length})
-              </h3>
-              <p className="text-xs text-slate-500 dark:text-zinc-400 mt-0.5">
-                Confira nome completo, CPF, data de nascimento e documento enviado nas Configurações. Ao aprovar, libera o selo Verificado Azul (sem bônus de pontos).
-              </p>
-            </div>
-
-            <div className="flex flex-wrap gap-1.5">
-              {(
-                [
-                  { id: 'pending', label: `Pendentes (${pendingVerificationCount})` },
-                  { id: 'approved', label: 'Aprovados' },
-                  { id: 'rejected', label: 'Recusados' },
-                  { id: 'all', label: 'Todos' },
-                ] as const
-              ).map((f) => (
-                <button
-                  key={f.id}
-                  type="button"
-                  onClick={() => setVerificationFilter(f.id)}
-                  className={`px-3 py-1.5 text-[11px] font-bold rounded-xl border transition-colors cursor-pointer ${
-                    verificationFilter === f.id
-                      ? 'bg-slate-900 dark:bg-lime-400 text-white dark:text-slate-950 border-transparent'
-                      : 'bg-slate-50 dark:bg-[#090d12] text-slate-600 dark:text-zinc-300 border-slate-200 dark:border-zinc-800'
-                  }`}
-                >
-                  {f.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {filteredVerificationRequests.length === 0 ? (
-            <p className="text-xs text-slate-500 dark:text-zinc-400 py-10 text-center">
-              Nenhuma solicitação de Verificado Azul neste filtro.
-            </p>
-          ) : (
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              {filteredVerificationRequests.map((req) => {
-                const email = privateMap[req.uid]?.email || '';
-                const busy = verificationBusyUid === req.uid;
-                return (
-                  <div
-                    key={req.uid}
-                    className="rounded-2xl border border-slate-200 dark:border-zinc-800 bg-slate-50/70 dark:bg-[#090d12] p-4 flex flex-col gap-3 text-xs"
-                  >
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div className="flex items-center gap-1.5 min-w-0">
-                        <FileCheck2 className="w-4 h-4 text-sky-500 shrink-0" />
-                        <span className="text-sm font-extrabold text-slate-900 dark:text-white truncate">
-                          {req.displayName}
-                        </span>
-                        {req.status === 'approved' && <VerifiedBadge tier="blue" size="xs" />}
-                      </div>
-                      <span
-                        className={`px-2 py-0.5 rounded-lg text-[11px] font-bold ${
-                          req.status === 'approved'
-                            ? 'bg-sky-500/15 text-sky-600 dark:text-sky-400'
-                            : req.status === 'rejected'
-                              ? 'bg-red-500/15 text-red-600 dark:text-red-400'
-                              : 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
-                        }`}
-                      >
-                        {req.status === 'approved'
-                          ? 'Aprovado'
-                          : req.status === 'rejected'
-                            ? 'Recusado'
-                            : 'Pendente'}
-                      </span>
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 rounded-xl bg-white dark:bg-[#0e1319] border border-slate-200/80 dark:border-zinc-800 p-3 text-[11px]">
-                      <div className="sm:col-span-2">
-                        <span className="text-slate-400 dark:text-zinc-500">Nome completo:</span>{' '}
-                        <strong className="text-slate-900 dark:text-zinc-100">{req.fullName}</strong>
-                      </div>
-                      <div>
-                        <span className="text-slate-400 dark:text-zinc-500">CPF:</span>{' '}
-                        <strong className="font-mono text-slate-900 dark:text-zinc-100">{req.cpf}</strong>
-                      </div>
-                      <div>
-                        <span className="text-slate-400 dark:text-zinc-500">Nascimento:</span>{' '}
-                        <strong className="font-mono text-slate-900 dark:text-zinc-100">
-                          {formatBirthDateBr(req.birthDate)}
-                        </strong>
-                      </div>
-                      <div className="sm:col-span-2">
-                        <span className="text-slate-400 dark:text-zinc-500">Documento:</span>{' '}
-                        <strong className="font-mono text-slate-900 dark:text-zinc-100">
-                          {VERIFICATION_DOCUMENT_LABELS[req.documentType]} · {req.documentNumber}
-                        </strong>
-                      </div>
-                    </div>
-
-                    <div className="space-y-0.5 text-[11px] text-slate-500 dark:text-zinc-400 font-mono break-all">
-                      {email && <div>{email}</div>}
-                      <div>UID: {req.uid}</div>
-                      <div>Enviado em: {formatAttemptTimestamp(req.submittedAt)}</div>
-                    </div>
-
-                    {req.status === 'rejected' && req.rejectionReason && (
-                      <div className="p-2 rounded-xl bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900 text-[11px] text-red-700 dark:text-red-300">
-                        <strong>Motivo da recusa:</strong> {req.rejectionReason}
-                      </div>
-                    )}
-
-                    {req.status === 'pending' && (
-                      <div className="space-y-2 pt-1">
-                        <button
-                          type="button"
-                          disabled={busy}
-                          onClick={() => handleApproveVerification(req)}
-                          className="w-full min-h-[40px] inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 disabled:opacity-45 text-white text-xs font-black cursor-pointer"
-                        >
-                          <CheckCircle2 className="w-4 h-4" />
-                          {busy ? 'Processando...' : 'Aprovar Verificado Azul'}
-                        </button>
-
-                        <div className="flex gap-1.5">
-                          <input
-                            type="text"
-                            maxLength={200}
-                            value={verificationRejectReasons[req.uid] || ''}
-                            onChange={(e) =>
-                              setVerificationRejectReasons((prev) => ({
-                                ...prev,
-                                [req.uid]: e.target.value,
-                              }))
-                            }
-                            placeholder="Motivo da recusa (ex: CPF divergente / documento incompleto)"
-                            className="flex-1 min-h-[38px] px-3 py-1.5 text-xs bg-white dark:bg-[#0e1319] border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 rounded-xl"
-                          />
-                          <button
-                            type="button"
-                            disabled={busy || (verificationRejectReasons[req.uid] || '').trim().length < 3}
-                            onClick={() => handleRejectVerification(req)}
-                            className="min-h-[38px] inline-flex items-center gap-1 px-3 py-1.5 rounded-xl bg-red-50 dark:bg-red-950/50 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 text-xs font-bold disabled:opacity-40 cursor-pointer shrink-0"
-                          >
-                            <XCircle className="w-3.5 h-3.5" />
-                            Recusar
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
         </div>
       )}
 

@@ -28,22 +28,7 @@ export interface ServerPlayer {
   isHost: boolean;
   acceptedRules: boolean;
   score: number;
-  verified: boolean;
-  verifiedBadge: 'none' | 'blue' | 'owner';
   ws: WebSocket | null;
-}
-
-export interface GlobalMatchListing {
-  roomCode: string;
-  hostUid: string;
-  hostName: string;
-  hostPhotoURL: string;
-  hostVerified: boolean;
-  hostVerifiedBadge: 'none' | 'blue' | 'owner';
-  gameId: MultiplayerGameId;
-  totalRounds: number;
-  stakePoints: number;
-  createdAt: number;
 }
 
 export interface SettlementPayload {
@@ -64,11 +49,11 @@ interface RoomState {
   roomCode: string;
   hostUid: string;
   gameId: MultiplayerGameId;
-  visibility: RoomVisibility;
-  postedToGlobal: boolean;
   totalRounds: number;
   currentRound: number;
   status: 'lobby' | 'playing' | 'finished';
+  visibility: RoomVisibility;
+  postedToGlobal: boolean;
   stakePoints: number;
   proposedCounterPoints: number | null;
   counterProposedByUid: string | null;
@@ -204,38 +189,11 @@ function shuffleArray<T>(arr: T[]): T[] {
   return copy;
 }
 
-const SERVER_PROFANITY_ROOTS = [
-  'porra', 'poha', 'puta', 'puto', 'putinha', 'putao', 'putaria',
-  'merda', 'bosta', 'cuzao', 'cuzinho', 'cuzona', 'fdp', 'pqp', 'vsf', 'vtnc',
-  'caralho', 'karalho', 'buceta', 'boceta', 'xereca', 'chereca', 'arrombado', 'arrombada',
-  'piroca', 'filhodaputa', 'punheta', 'siririca', 'boquete', 'desgraca', 'desgracado',
-  'foder', 'fodase', 'fudido', 'fodido', 'viado', 'boiola', 'piranha', 'vadia', 'vagabundo',
-  'fuck', 'fucking', 'shit', 'bitch', 'asshole', 'pussy', 'cunt', 'whore', 'slut',
-  'faggot', 'nigger', 'nigga', 'nazi', 'hitler',
-];
-
-function sanitizeGlobalName(rawName: string): string {
-  const clean = String(rawName || 'Jogador').trim().slice(0, 40) || 'Jogador';
-  const normalized = clean
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .replace(/0/g, 'o')
-    .replace(/1/g, 'i')
-    .replace(/3/g, 'e')
-    .replace(/4/g, 'a')
-    .replace(/5/g, 's')
-    .replace(/[^a-z0-9]/g, '');
-  if (SERVER_PROFANITY_ROOTS.some((root) => normalized.includes(root))) {
-    return 'Jogador ***';
-  }
-  return clean;
-}
-
 export class MultiplayerEngine {
   private rooms = new Map<string, RoomState>();
   private socketToRoom = new Map<WebSocket, { roomCode: string; uid: string }>();
   private allSockets = new Set<WebSocket>();
+  private lastGlobalPostByUid = new Map<string, number>();
   private issuedSettlements = new Map<string, SettlementPayload>();
   private signingSecret: string;
 
@@ -310,7 +268,7 @@ export class MultiplayerEngine {
 
     wss.on('connection', (ws: WebSocket) => {
       this.allSockets.add(ws);
-      this.send(ws, 'global:matches', this.getOpenGlobalMatches());
+      this.sendDirectory(ws);
 
       ws.on('message', (raw) => {
         try {
@@ -328,43 +286,6 @@ export class MultiplayerEngine {
     });
   }
 
-  private getOpenGlobalMatches(): GlobalMatchListing[] {
-    const open: GlobalMatchListing[] = [];
-    for (const room of this.rooms.values()) {
-      if (
-        room.visibility === 'public' &&
-        room.postedToGlobal &&
-        room.status === 'lobby' &&
-        room.players.length === 1 &&
-        room.players[0]?.connected
-      ) {
-        const host = room.players[0];
-        open.push({
-          roomCode: room.roomCode,
-          hostUid: host.uid,
-          hostName: sanitizeGlobalName(host.displayName),
-          hostPhotoURL: host.photoURL,
-          hostVerified: Boolean(host.verified || host.verifiedBadge !== 'none'),
-          hostVerifiedBadge: host.verifiedBadge || (host.verified ? 'blue' : 'none'),
-          gameId: room.gameId,
-          totalRounds: room.totalRounds,
-          stakePoints: room.stakePoints,
-          createdAt: room.createdAt,
-        });
-      }
-    }
-    return open.sort((a, b) => b.createdAt - a.createdAt).slice(0, 40);
-  }
-
-  private broadcastGlobalMatches() {
-    const listings = this.getOpenGlobalMatches();
-    for (const sock of this.allSockets) {
-      if (sock.readyState === WebSocket.OPEN) {
-        this.send(sock, 'global:matches', listings);
-      }
-    }
-  }
-
   private send(ws: WebSocket | null, type: string, payload: unknown) {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     ws.send(JSON.stringify({ type, payload }));
@@ -372,6 +293,71 @@ export class MultiplayerEngine {
 
   private sendError(ws: WebSocket, message: string) {
     this.send(ws, 'error', { message });
+  }
+
+  private getDirectoryPayload() {
+    const publicRooms: Array<{
+      roomCode: string;
+      hostUid: string;
+      hostDisplayName: string;
+      hostPhotoURL: string;
+      gameId: MultiplayerGameId;
+      totalRounds: number;
+      stakePoints: number;
+      visibility: RoomVisibility;
+      postedToGlobal: boolean;
+      playerCount: number;
+      createdAt: number;
+      updatedAt: number;
+    }> = [];
+    const globalInvites: typeof publicRooms = [];
+
+    for (const room of this.rooms.values()) {
+      if (room.status !== 'lobby') continue;
+      if (room.players.length !== 1) continue;
+      const host = room.players[0];
+      if (!host || !host.connected) continue;
+
+      const summary = {
+        roomCode: room.roomCode,
+        hostUid: host.uid,
+        hostDisplayName: host.displayName,
+        hostPhotoURL: host.photoURL,
+        gameId: room.gameId,
+        totalRounds: room.totalRounds,
+        stakePoints: room.stakePoints,
+        visibility: room.visibility,
+        postedToGlobal: room.postedToGlobal,
+        playerCount: room.players.length,
+        createdAt: room.createdAt,
+        updatedAt: room.updatedAt,
+      };
+
+      if (room.visibility === 'public') {
+        publicRooms.push(summary);
+      }
+      if (room.postedToGlobal) {
+        globalInvites.push(summary);
+      }
+    }
+
+    publicRooms.sort((a, b) => b.createdAt - a.createdAt);
+    globalInvites.sort((a, b) => b.createdAt - a.createdAt);
+
+    return { publicRooms, globalInvites };
+  }
+
+  private sendDirectory(ws: WebSocket) {
+    this.send(ws, 'rooms:directory', this.getDirectoryPayload());
+  }
+
+  private broadcastDirectory() {
+    const payload = this.getDirectoryPayload();
+    for (const sock of this.allSockets) {
+      if (sock.readyState === WebSocket.OPEN) {
+        this.send(sock, 'rooms:directory', payload);
+      }
+    }
   }
 
   private broadcastRoom(room: RoomState) {
@@ -388,11 +374,11 @@ export class MultiplayerEngine {
       roomCode: room.roomCode,
       hostUid: room.hostUid,
       gameId: room.gameId,
-      visibility: room.visibility,
-      postedToGlobal: room.postedToGlobal,
       totalRounds: room.totalRounds,
       currentRound: room.currentRound,
       status: room.status,
+      visibility: room.visibility,
+      postedToGlobal: room.postedToGlobal,
       stakePoints: room.stakePoints,
       proposedCounterPoints: room.proposedCounterPoints,
       counterProposedByUid: room.counterProposedByUid,
@@ -406,8 +392,6 @@ export class MultiplayerEngine {
         isHost: p.isHost,
         acceptedRules: p.acceptedRules,
         score: p.score,
-        verified: Boolean(p.verified || p.verifiedBadge !== 'none'),
-        verifiedBadge: p.verifiedBadge || (p.verified ? 'blue' : 'none'),
       })),
       gameState: room.gameData ? this.sanitizeGameStateFor(room, viewerUid) : null,
       settlement: room.settlement,
@@ -581,20 +565,24 @@ export class MultiplayerEngine {
 
     if (room.players.every((p) => !p.connected)) {
       if (room.roundTimer) clearTimeout(room.roundTimer);
+      // Keep finished room slightly briefly, clean lobby if empty
       if (room.status === 'lobby') {
         this.rooms.delete(room.roomCode);
       }
-      this.broadcastGlobalMatches();
+      this.broadcastDirectory();
       return;
     }
 
     this.broadcastRoom(room);
-    this.broadcastGlobalMatches();
+    this.broadcastDirectory();
   }
 
   private handleMessage(ws: WebSocket, msg: any) {
     const { type, payload = {} } = msg || {};
     switch (type) {
+      case 'room:list_public':
+        this.sendDirectory(ws);
+        break;
       case 'room:create':
         this.createRoom(ws, payload);
         break;
@@ -610,11 +598,8 @@ export class MultiplayerEngine {
       case 'room:config':
         this.updateConfig(ws, payload);
         break;
-      case 'room:post_global':
-        this.postRoomToGlobal(ws);
-        break;
-      case 'room:unpost_global':
-        this.unpostRoomFromGlobal(ws);
+      case 'room:publish_global':
+        this.publishToGlobal(ws, payload);
         break;
       case 'room:stake_accept':
         this.acceptStake(ws);
@@ -650,39 +635,50 @@ export class MultiplayerEngine {
     if (!prev) return;
     const prevRoom = this.rooms.get(prev.roomCode);
     if (prevRoom) {
-      const p = prevRoom.players.find((item) => item.uid === prev.uid);
-      if (p) {
-        p.ws = null;
-        p.connected = false;
-      }
-      if (prevRoom.status === 'lobby' && prevRoom.players.every((item) => !item.connected)) {
-        if (prevRoom.roundTimer) clearTimeout(prevRoom.roundTimer);
-        this.rooms.delete(prevRoom.roomCode);
+      if (prevRoom.status === 'lobby') {
+        prevRoom.players = prevRoom.players.filter((item) => item.uid !== prev.uid);
+        if (prevRoom.players.length === 0) {
+          if (prevRoom.roundTimer) clearTimeout(prevRoom.roundTimer);
+          this.rooms.delete(prevRoom.roomCode);
+        } else {
+          if (prevRoom.hostUid === prev.uid) {
+            prevRoom.hostUid = prevRoom.players[0].uid;
+            prevRoom.players[0].isHost = true;
+          }
+          prevRoom.players.forEach((p) => {
+            p.acceptedRules = p.isHost;
+          });
+          prevRoom.stakeStatus = 'pending_opponent';
+          prevRoom.proposedCounterPoints = null;
+          this.broadcastRoom(prevRoom);
+        }
       } else {
+        const p = prevRoom.players.find((item) => item.uid === prev.uid);
+        if (p) {
+          p.ws = null;
+          p.connected = false;
+        }
         this.broadcastRoom(prevRoom);
       }
-      this.broadcastGlobalMatches();
+      this.broadcastDirectory();
     }
     this.socketToRoom.delete(ws);
   }
 
   private createRoom(ws: WebSocket, payload: any) {
     const uid = String(payload.uid || '').trim();
-    const displayName = sanitizeGlobalName(String(payload.displayName || 'Jogador'));
+    const displayName = String(payload.displayName || 'Jogador').trim().slice(0, 60);
     const photoURL = String(payload.photoURL || '').slice(0, 60000);
     const pointsBalance = Math.max(0, Math.floor(Number(payload.pointsBalance || 0)));
     const gameId = String(payload.gameId || 'domino') as MultiplayerGameId;
-    const visibility: RoomVisibility = payload.visibility === 'public' ? 'public' : 'private';
-    const postToGlobal = visibility === 'public' && payload.postToGlobal !== false;
-    const verifiedBadge: 'none' | 'blue' | 'owner' =
-      payload.verifiedBadge === 'owner'
-        ? 'owner'
-        : payload.verifiedBadge === 'blue' || payload.verified
-          ? 'blue'
-          : 'none';
-    const verified = verifiedBadge !== 'none';
     const totalRounds = [1, 3, 5, 7].includes(Number(payload.totalRounds)) ? Number(payload.totalRounds) : 3;
     const stakePoints = Math.max(0, Math.min(50000, Math.floor(Number(payload.stakePoints || 0))));
+    const postToGlobal = Boolean(payload.postToGlobal);
+    const visibility: RoomVisibility = postToGlobal
+      ? 'public'
+      : payload.visibility === 'public'
+        ? 'public'
+        : 'private';
 
     if (!uid) {
       this.sendError(ws, 'Faça login para criar uma sala.');
@@ -696,28 +692,28 @@ export class MultiplayerEngine {
       this.sendError(ws, 'Você não tem pontos suficientes para apostar essa quantia.');
       return;
     }
+    if (postToGlobal) {
+      const lastPost = this.lastGlobalPostByUid.get(uid) || 0;
+      if (Date.now() - lastPost < 3000) {
+        this.sendError(ws, 'Aguarde alguns segundos antes de enviar outra partida no Chat Global.');
+        return;
+      }
+      this.lastGlobalPostByUid.set(uid, Date.now());
+    }
 
     this.detachSocketFromCurrentRoom(ws);
 
-    // Ensure at most one active public global lobby per host
-    for (const [oldCode, oldRoom] of this.rooms.entries()) {
-      if (oldRoom.hostUid === uid && oldRoom.status === 'lobby' && oldRoom.players.length <= 1) {
-        if (oldRoom.roundTimer) clearTimeout(oldRoom.roundTimer);
-        this.rooms.delete(oldCode);
-      }
-    }
-
-    const roomCode = generateRoomCode(this.rooms);
     const now = Date.now();
+    const roomCode = generateRoomCode(this.rooms);
     const room: RoomState = {
       roomCode,
       hostUid: uid,
       gameId,
-      visibility,
-      postedToGlobal: postToGlobal,
       totalRounds,
       currentRound: 0,
       status: 'lobby',
+      visibility,
+      postedToGlobal: postToGlobal,
       stakePoints,
       proposedCounterPoints: null,
       counterProposedByUid: null,
@@ -725,15 +721,13 @@ export class MultiplayerEngine {
       players: [
         {
           uid,
-          displayName,
+          displayName: displayName || 'Jogador',
           photoURL,
           pointsBalance,
           connected: true,
           isHost: true,
           acceptedRules: true,
           score: 0,
-          verified,
-          verifiedBadge,
           ws,
         },
       ],
@@ -750,21 +744,14 @@ export class MultiplayerEngine {
     this.rooms.set(roomCode, room);
     this.socketToRoom.set(ws, { roomCode, uid });
     this.broadcastRoom(room);
-    this.broadcastGlobalMatches();
+    this.broadcastDirectory();
   }
 
   private joinRoom(ws: WebSocket, payload: any) {
     const roomCode = String(payload.roomCode || '').trim().toUpperCase();
     const uid = String(payload.uid || '').trim();
-    const displayName = sanitizeGlobalName(String(payload.displayName || 'Jogador'));
+    const displayName = String(payload.displayName || 'Jogador').trim().slice(0, 60);
     const photoURL = String(payload.photoURL || '').slice(0, 60000);
-    const verifiedBadge: 'none' | 'blue' | 'owner' =
-      payload.verifiedBadge === 'owner'
-        ? 'owner'
-        : payload.verifiedBadge === 'blue' || payload.verified
-          ? 'blue'
-          : 'none';
-    const verified = verifiedBadge !== 'none';
     const pointsBalance = Math.max(0, Math.floor(Number(payload.pointsBalance || 0)));
 
     if (!uid || !roomCode) {
@@ -775,7 +762,6 @@ export class MultiplayerEngine {
     const room = this.rooms.get(roomCode);
     if (!room) {
       this.sendError(ws, 'Sala não encontrada ou já encerrada.');
-      this.broadcastGlobalMatches();
       return;
     }
 
@@ -786,13 +772,10 @@ export class MultiplayerEngine {
       existing.displayName = displayName || existing.displayName;
       existing.photoURL = photoURL || existing.photoURL;
       existing.pointsBalance = pointsBalance;
-      existing.verified = verified;
-      existing.verifiedBadge = verifiedBadge;
       existing.connected = true;
       existing.ws = ws;
       this.socketToRoom.set(ws, { roomCode, uid });
       this.broadcastRoom(room);
-      this.broadcastGlobalMatches();
       return;
     }
 
@@ -802,7 +785,6 @@ export class MultiplayerEngine {
     }
     if (room.players.length >= 2) {
       this.sendError(ws, 'Esta sala já está cheia (2/2 jogadores).');
-      this.broadcastGlobalMatches();
       return;
     }
 
@@ -815,19 +797,17 @@ export class MultiplayerEngine {
       isHost: false,
       acceptedRules: false,
       score: 0,
-      verified,
-      verifiedBadge,
       ws,
     });
-    // Remove immediately from Global Match Chat as soon as opponent accepts/joins!
-    room.postedToGlobal = false;
     room.stakeStatus = 'pending_opponent';
     room.proposedCounterPoints = null;
     room.counterProposedByUid = null;
+    // Immediately remove from Global Chat as soon as an opponent accepts/joins
+    room.postedToGlobal = false;
 
     this.socketToRoom.set(ws, { roomCode, uid });
     this.broadcastRoom(room);
-    this.broadcastGlobalMatches();
+    this.broadcastDirectory();
   }
 
   private leaveRoom(ws: WebSocket) {
@@ -839,6 +819,7 @@ export class MultiplayerEngine {
     if (!room) return;
 
     if (room.status === 'playing') {
+      // Leaving an active match treats as forfeit so opponent doesn't get stuck
       const opponent = room.players.find((p) => p.uid !== info.uid);
       room.players = room.players.filter((p) => p.uid !== info.uid);
       if (opponent) {
@@ -848,7 +829,7 @@ export class MultiplayerEngine {
         this.rooms.delete(room.roomCode);
       }
       this.send(ws, 'room:left', { roomCode: info.roomCode });
-      this.broadcastGlobalMatches();
+      this.broadcastDirectory();
       return;
     }
 
@@ -861,7 +842,6 @@ export class MultiplayerEngine {
         room.hostUid = room.players[0].uid;
         room.players[0].isHost = true;
       }
-      room.postedToGlobal = false;
       room.players.forEach((p) => {
         p.acceptedRules = p.isHost;
       });
@@ -870,7 +850,7 @@ export class MultiplayerEngine {
       this.broadcastRoom(room);
     }
     this.send(ws, 'room:left', { roomCode: info.roomCode });
-    this.broadcastGlobalMatches();
+    this.broadcastDirectory();
   }
 
   private getSocketContext(ws: WebSocket): { room: RoomState; player: ServerPlayer } | null {
@@ -929,36 +909,40 @@ export class MultiplayerEngine {
       p.acceptedRules = p.isHost;
     });
     this.broadcastRoom(room);
-    this.broadcastGlobalMatches();
+    this.broadcastDirectory();
   }
 
-  private postRoomToGlobal(ws: WebSocket) {
+  private publishToGlobal(ws: WebSocket, payload: any) {
     const ctx = this.getSocketContext(ws);
     if (!ctx) return;
     const { room, player } = ctx;
+    if (room.status !== 'lobby') {
+      this.sendError(ws, 'Apenas salas aguardando no lobby podem ser publicadas no Chat Global.');
+      return;
+    }
     if (!player.isHost) {
-      this.sendError(ws, 'Apenas o anfitrião pode publicar a partida no Chat Global.');
+      this.sendError(ws, 'Apenas o anfitrião pode publicar ou remover a partida do Chat Global.');
       return;
     }
-    if (room.status !== 'lobby' || room.players.length >= 2) {
-      this.sendError(ws, 'Só é possível publicar salas abertas aguardando adversário.');
-      return;
+    const publish = Boolean(payload.publish);
+    if (publish) {
+      if (room.players.length >= 2) {
+        this.sendError(ws, 'Sua sala já tem um adversário.');
+        return;
+      }
+      const lastPost = this.lastGlobalPostByUid.get(player.uid) || 0;
+      if (!room.postedToGlobal && Date.now() - lastPost < 3000) {
+        this.sendError(ws, 'Aguarde alguns segundos antes de enviar outra partida no Chat Global.');
+        return;
+      }
+      this.lastGlobalPostByUid.set(player.uid, Date.now());
+      room.visibility = 'public';
+      room.postedToGlobal = true;
+    } else {
+      room.postedToGlobal = false;
     }
-    room.visibility = 'public';
-    room.postedToGlobal = true;
-    room.createdAt = Date.now();
     this.broadcastRoom(room);
-    this.broadcastGlobalMatches();
-  }
-
-  private unpostRoomFromGlobal(ws: WebSocket) {
-    const ctx = this.getSocketContext(ws);
-    if (!ctx) return;
-    const { room, player } = ctx;
-    if (!player.isHost) return;
-    room.postedToGlobal = false;
-    this.broadcastRoom(room);
-    this.broadcastGlobalMatches();
+    this.broadcastDirectory();
   }
 
   private acceptStake(ws: WebSocket) {
@@ -1069,7 +1053,7 @@ export class MultiplayerEngine {
     });
     this.initRound(room);
     this.broadcastRoom(room);
-    this.broadcastGlobalMatches();
+    this.broadcastDirectory();
   }
 
   private resetToLobby(ws: WebSocket) {
@@ -1093,7 +1077,7 @@ export class MultiplayerEngine {
       p.acceptedRules = p.isHost;
     });
     this.broadcastRoom(room);
-    this.broadcastGlobalMatches();
+    this.broadcastDirectory();
   }
 
   private forfeitMatch(ws: WebSocket) {

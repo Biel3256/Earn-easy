@@ -22,12 +22,6 @@
         "lastPromoCode": { "type": "string", "maxLength": 128 },
         "firstWithdrawalUsed": { "type": "boolean" },
         "lastMpMatchId": { "type": "string", "maxLength": 128 },
-        "lastCasinoSessionId": { "type": "string", "maxLength": 128 },
-        "identityVerified": { "type": "boolean" },
-        "verifiedBadge": { "type": "string", "enum": ["none", "blue", "owner"] },
-        "verificationStatus": { "type": "string", "enum": ["none", "pending", "approved", "rejected"] },
-        "verificationNote": { "type": "string", "maxLength": 240 },
-        "verifiedAt": { "type": "string", "format": "date-time" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -250,8 +244,6 @@
         "lifetimePoints": { "type": "number" },
         "gamesPlayed": { "type": "number" },
         "status": { "type": "string", "enum": ["active", "suspended", "flagged"] },
-        "identityVerified": { "type": "boolean" },
-        "verifiedBadge": { "type": "string", "enum": ["none", "blue", "owner"] },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": [
@@ -629,46 +621,6 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["matchId", "roomCode", "gameId", "participantUids", "winnerUid", "loserUid", "stakePoints", "settledByUid", "integrityHash", "createdAt"]
-    },
-    "VerificationRequest": {
-      "title": "VerificationRequest",
-      "description": "Private CPF and document verification request reviewed by admins for granting the Blue Verified badge (0 bonus points).",
-      "type": "object",
-      "properties": {
-        "uid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "displayName": { "type": "string", "minLength": 1, "maxLength": 80 },
-        "fullName": { "type": "string", "minLength": 5, "maxLength": 120 },
-        "cpf": { "type": "string", "pattern": "^\\d{3}\\.\\d{3}\\.\\d{3}-\\d{2}$" },
-        "birthDate": { "type": "string", "maxLength": 10, "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
-        "documentType": { "type": "string", "enum": ["rg", "cnh", "passaporte", "outro"] },
-        "documentNumber": { "type": "string", "minLength": 4, "maxLength": 32 },
-        "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
-        "rejectionReason": { "type": "string", "maxLength": 240 },
-        "reviewedBy": { "type": "string", "maxLength": 160 },
-        "submittedAt": { "type": "string", "format": "date-time" },
-        "reviewedAt": { "type": "string", "format": "date-time" }
-      },
-      "required": ["uid", "displayName", "fullName", "cpf", "birthDate", "documentType", "documentNumber", "status", "rejectionReason", "reviewedBy", "submittedAt", "reviewedAt"]
-    },
-    "CasinoSession": {
-      "title": "CasinoSession",
-      "description": "Double or Mines in-app session wagered strictly with points or Earn Easy BRL wallet balance.",
-      "type": "object",
-      "properties": {
-        "sessionId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "gameType": { "type": "string", "enum": ["double", "mines"] },
-        "currency": { "type": "string", "enum": ["points", "brl"] },
-        "stakeAmount": { "type": "number" },
-        "payoutAmount": { "type": "number" },
-        "multiplier": { "type": "number" },
-        "status": { "type": "string", "enum": ["active", "won", "lost"] },
-        "details": { "type": "string", "maxLength": 200 },
-        "integrityHash": { "type": "string", "minLength": 16, "maxLength": 128 },
-        "createdAt": { "type": "string", "format": "date-time" },
-        "settledAt": { "type": "string", "format": "date-time" }
-      },
-      "required": ["sessionId", "userId", "gameType", "currency", "stakeAmount", "payoutAmount", "multiplier", "status", "details", "integrityHash", "createdAt", "settledAt"]
     }
   },
   "firestore": {
@@ -779,14 +731,6 @@
     "/multiplayerMatches/{matchId}": {
       "schema": { "$ref": "#/entities/MultiplayerMatchRecord" },
       "description": "Authoritative multiplayer match results and atomic points settlements."
-    },
-    "/verificationRequests/{userId}": {
-      "schema": { "$ref": "#/entities/VerificationRequest" },
-      "description": "Private identity verification requests reviewed by admins to grant the Blue Verified badge."
-    },
-    "/casinoSessions/{sessionId}": {
-      "schema": { "$ref": "#/entities/CasinoSession" },
-      "description": "Double and Mines game sessions using points or Earn Easy BRL wallet balance."
     }
   }
 }

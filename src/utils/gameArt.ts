@@ -4,12 +4,10 @@ import gameCardsImg from '../assets/images/game_cards_icon_1795186544220.jpg';
 import gameConnect4SoloImg from '../assets/images/game_connect4_solo_1795250045692.jpg';
 import gameDominoSoloImg from '../assets/images/game_domino_solo_1795250041011.jpg';
 import gameDotLinkImg from '../assets/images/game_dotlink_icon_1795186545139.jpg';
-import gameDoubleCasinoImg from '../assets/images/game_double_casino_1795342491485.jpg';
 import gameDrawGuessSoloImg from '../assets/images/game_draw_guess_solo_1795250046182.jpg';
 import gameGuessNumberSoloImg from '../assets/images/game_guess_number_solo_1795250045923.jpg';
 import gameMathImg from '../assets/images/game_math_icon_1795186543447.jpg';
 import gameMemoryImg from '../assets/images/game_memory_icon_1795186544976.jpg';
-import gameMinesCasinoImg from '../assets/images/game_mines_casino_1795342490600.jpg';
 import gameQuizSoloImg from '../assets/images/game_quiz_solo_1795250045668.jpg';
 import gameReflexImg from '../assets/images/game_reflex_icon_1795186544995.jpg';
 import gameRpsSoloImg from '../assets/images/game_rps_solo_1795250046341.jpg';
@@ -17,7 +15,7 @@ import gameStopSoloImg from '../assets/images/game_stop_solo_1795250042532.jpg';
 import gameTicTacToeImg from '../assets/images/game_tictactoe_icon_1795186544275.jpg';
 import gameWordSearchImg from '../assets/images/game_wordsearch_icon_1795186544984.jpg';
 import heroGamingBannerImg from '../assets/images/hero_gaming_banner_1795186544377.jpg';
-import { CasinoGameId, GameCategory } from '../types/earneasy';
+import { GameCategory } from '../types/earneasy';
 
 export { heroGamingBannerImg };
 
@@ -38,9 +36,4 @@ export const GAME_THUMBNAILS: Record<GameCategory, string> = {
   quiz_solo: gameQuizSoloImg,
   rps_solo: gameRpsSoloImg,
   guess_number_solo: gameGuessNumberSoloImg,
-};
-
-export const CASINO_THUMBNAILS: Record<CasinoGameId, string> = {
-  double: gameDoubleCasinoImg,
-  mines: gameMinesCasinoImg,
 };

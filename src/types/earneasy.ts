@@ -19,9 +19,6 @@ export type GameCategory =
 export type AccountStatus = 'active' | 'suspended' | 'flagged';
 export type PixKeyType = 'cpf' | 'email' | 'phone' | 'random';
 export type WithdrawalStatus = 'pending' | 'approved' | 'paid' | 'rejected';
-export type VerifiedBadgeTier = 'none' | 'blue' | 'owner';
-export type VerificationStatus = 'none' | 'pending' | 'approved' | 'rejected';
-export type VerificationDocumentType = 'rg' | 'cnh' | 'passaporte' | 'outro';
 
 export interface UserAccount {
   uid: string;
@@ -41,30 +38,9 @@ export interface UserAccount {
   suspensionUntil?: unknown;
   lastPromoCode?: string;
   lastMpMatchId?: string;
-  lastCasinoSessionId?: string;
   firstWithdrawalUsed?: boolean;
-  identityVerified?: boolean;
-  verifiedBadge?: VerifiedBadgeTier;
-  verificationStatus?: VerificationStatus;
-  verificationNote?: string;
-  verifiedAt?: unknown;
   createdAt: unknown;
   updatedAt: unknown;
-}
-
-export interface VerificationRequest {
-  uid: string;
-  displayName: string;
-  fullName: string;
-  cpf: string;
-  birthDate: string;
-  documentType: VerificationDocumentType;
-  documentNumber: string;
-  status: 'pending' | 'approved' | 'rejected';
-  rejectionReason: string;
-  reviewedBy: string;
-  submittedAt: unknown;
-  reviewedAt: unknown;
 }
 
 export interface UserPrivateInfo {
@@ -179,8 +155,6 @@ export interface LeaderboardEntry {
   lifetimePoints?: number;
   gamesPlayed: number;
   status: AccountStatus;
-  identityVerified?: boolean;
-  verifiedBadge?: VerifiedBadgeTier;
   updatedAt: unknown;
 }
 
@@ -346,39 +320,6 @@ export interface MultiplayerPlayerInfo {
   isHost: boolean;
   acceptedRules: boolean;
   score: number;
-  verified?: boolean;
-  verifiedBadge?: VerifiedBadgeTier;
-}
-
-export interface GlobalMatchListing {
-  roomCode: string;
-  hostUid: string;
-  hostName: string;
-  hostPhotoURL: string;
-  hostVerified: boolean;
-  hostVerifiedBadge?: VerifiedBadgeTier;
-  gameId: MultiplayerGameId;
-  totalRounds: number;
-  stakePoints: number;
-  createdAt: number;
-}
-
-export type CasinoGameId = 'double' | 'mines';
-export type CasinoCurrency = 'points' | 'brl';
-
-export interface CasinoSession {
-  sessionId: string;
-  userId: string;
-  gameType: CasinoGameId;
-  currency: CasinoCurrency;
-  stakeAmount: number;
-  payoutAmount: number;
-  multiplier: number;
-  status: 'active' | 'won' | 'lost';
-  details: string;
-  integrityHash: string;
-  createdAt: unknown;
-  settledAt: unknown | null;
 }
 
 export interface MultiplayerSettlementPayload {
@@ -408,15 +349,30 @@ export interface MultiplayerMatchRecord {
   createdAt: unknown;
 }
 
+export interface PublicMultiplayerRoomSummary {
+  roomCode: string;
+  hostUid: string;
+  hostDisplayName: string;
+  hostPhotoURL: string;
+  gameId: MultiplayerGameId;
+  totalRounds: number;
+  stakePoints: number;
+  visibility: RoomVisibility;
+  postedToGlobal: boolean;
+  playerCount: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface MultiplayerRoomSnapshot {
   roomCode: string;
   hostUid: string;
   gameId: MultiplayerGameId;
-  visibility: RoomVisibility;
-  postedToGlobal: boolean;
   totalRounds: number;
   currentRound: number;
   status: 'lobby' | 'playing' | 'finished';
+  visibility: RoomVisibility;
+  postedToGlobal: boolean;
   stakePoints: number;
   proposedCounterPoints: number | null;
   counterProposedByUid: string | null;
@@ -520,3 +476,4 @@ export const STREAK_REWARD_CENTS = 1000;
 export const REFERRAL_SIGNUP_BONUS_POINTS = 500;
 export const REFERRAL_COMMISSION_RATE = 0.12;
 export const MAX_PROMO_CODE_POINTS = 100000;
+

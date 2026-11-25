@@ -8,7 +8,6 @@ import {
   Coins,
   Copy,
   Dices,
-  Flame,
   Gamepad2,
   Inbox,
   Layers,
@@ -26,8 +25,8 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
-import { CasinoGameId, GAME_LABELS, GameCategory, LeaderboardEntry } from '../types/earneasy';
-import { CASINO_THUMBNAILS, GAME_THUMBNAILS, heroGamingBannerImg } from '../utils/gameArt';
+import { GAME_LABELS, GameCategory, LeaderboardEntry } from '../types/earneasy';
+import { GAME_THUMBNAILS, heroGamingBannerImg } from '../utils/gameArt';
 import { calculatePlayerLevel } from '../utils/levels';
 import {
   extractReadableError,
@@ -44,13 +43,11 @@ import { BlockBritzGame } from './games/BlockBritzGame';
 import { Connect4SoloGame } from './games/Connect4SoloGame';
 import { DominoSoloGame } from './games/DominoSoloGame';
 import { DotLinkGame } from './games/DotLinkGame';
-import { DoubleCasinoGame } from './games/DoubleCasinoGame';
 import { DrawGuessSoloGame } from './games/DrawGuessSoloGame';
 import { GuessNumberSoloGame } from './games/GuessNumberSoloGame';
 import { HighLowCardsGame } from './games/HighLowCardsGame';
 import { MathSprintGame } from './games/MathSprintGame';
 import { MemoryMatchGame } from './games/MemoryMatchGame';
-import { MinesCasinoGame } from './games/MinesCasinoGame';
 import { QuickReflexGame } from './games/QuickReflexGame';
 import { QuizSoloGame } from './games/QuizSoloGame';
 import { RpsSoloGame } from './games/RpsSoloGame';
@@ -60,7 +57,6 @@ import { WordSearchGame } from './games/WordSearchGame';
 
 type FilterGroupId =
   | 'all'
-  | 'casino'
   | 'raciocinio'
   | 'reflexo'
   | 'cartas'
@@ -82,38 +78,11 @@ const FILTER_TABS: Array<{
   Icon: React.FC<{ className?: string }>;
 }> = [
   { id: 'all', label: 'Todos', Icon: Sparkles },
-  { id: 'casino', label: 'Cassino', Icon: Flame },
   { id: 'raciocinio', label: 'Raciocínio', Icon: Brain },
   { id: 'reflexo', label: 'Reflexo', Icon: Zap },
   { id: 'cartas', label: 'Cartas', Icon: Layers },
   { id: 'palavras', label: 'Palavras', Icon: Search },
   { id: 'estrategia', label: 'Estratégia', Icon: Target },
-];
-
-const CASINO_CATALOG: Array<{
-  id: CasinoGameId;
-  title: string;
-  subtitle: string;
-  rewardRange: string;
-  avgTime: string;
-  badgeText: string;
-}> = [
-  {
-    id: 'double',
-    title: 'Double Earn Easy',
-    subtitle: 'Roleta de 15 casas (Vermelho 2x, Preto 2x e Branco 14x). Aposte Pontos ou Saldo da Carteira!',
-    rewardRange: 'Até 14x',
-    avgTime: 'Pontos / R$',
-    badgeText: 'Cassino App',
-  },
-  {
-    id: 'mines',
-    title: 'Mines Earn Easy',
-    subtitle: 'Campo 5×5 com 1 a 24 bombas: ache diamantes, multiplique ganhos e retire quando quiser!',
-    rewardRange: 'Até 50x',
-    avgTime: 'Pontos / R$',
-    badgeText: 'Cassino App',
-  },
 ];
 
 const GAME_CATALOG: GameCatalogItem[] = [
@@ -289,7 +258,6 @@ export const GamesHub: React.FC<GamesHubProps> = React.memo(({
   } = useAuth();
 
   const [activeGame, setActiveGame] = useState<GameCategory | null>(null);
-  const [activeCasinoGame, setActiveCasinoGame] = useState<CasinoGameId | null>(null);
   const [selectedGroup, setSelectedGroup] = useState<FilterGroupId>('all');
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [copiedLink, setCopiedLink] = useState(false);
@@ -333,23 +301,10 @@ export const GamesHub: React.FC<GamesHubProps> = React.memo(({
   }, [mySessions]);
 
   const filteredGames = useMemo(() => {
-    if (selectedGroup === 'casino') return [];
     const term = searchQuery.trim().toLowerCase();
     return GAME_CATALOG.filter((game) => {
       const matchesGroup = selectedGroup === 'all' || game.groups.includes(selectedGroup);
       if (!matchesGroup) return false;
-      if (!term) return true;
-      return (
-        game.title.toLowerCase().includes(term) ||
-        game.subtitle.toLowerCase().includes(term)
-      );
-    });
-  }, [selectedGroup, searchQuery]);
-
-  const filteredCasinoGames = useMemo(() => {
-    if (selectedGroup !== 'all' && selectedGroup !== 'casino') return [];
-    const term = searchQuery.trim().toLowerCase();
-    return CASINO_CATALOG.filter((game) => {
       if (!term) return true;
       return (
         game.title.toLowerCase().includes(term) ||
@@ -444,28 +399,6 @@ export const GamesHub: React.FC<GamesHubProps> = React.memo(({
       movesCount,
     });
   };
-
-  const handlePlayCasinoClick = (casinoId: CasinoGameId) => {
-    if (!firebaseUser) {
-      signInWithGoogle();
-      return;
-    }
-    setActiveGame(null);
-    setActiveCasinoGame(casinoId);
-  };
-
-  if (activeCasinoGame) {
-    return (
-      <div className="space-y-6">
-        {activeCasinoGame === 'double' && (
-          <DoubleCasinoGame onBack={() => setActiveCasinoGame(null)} />
-        )}
-        {activeCasinoGame === 'mines' && (
-          <MinesCasinoGame onBack={() => setActiveCasinoGame(null)} />
-        )}
-      </div>
-    );
-  }
 
   if (activeGame) {
     return (
@@ -602,7 +535,7 @@ export const GamesHub: React.FC<GamesHubProps> = React.memo(({
             </h1>
 
             <p className="text-xs sm:text-sm text-zinc-200/90 leading-relaxed max-w-md">
-              16 jogos solo gratuitos, modos Double &amp; Mines no app, arenas multiplayer com amigos e saque direto via Pix!
+              16 jogos solo gratuitos, fases infinitas, arenas multiplayer com amigos e saque direto via Pix!
             </p>
           </div>
 
@@ -744,10 +677,8 @@ export const GamesHub: React.FC<GamesHubProps> = React.memo(({
               const active = selectedGroup === id;
               const count =
                 id === 'all'
-                  ? GAME_CATALOG.length + CASINO_CATALOG.length
-                  : id === 'casino'
-                    ? CASINO_CATALOG.length
-                    : GAME_CATALOG.filter((g) => g.groups.includes(id)).length;
+                  ? GAME_CATALOG.length
+                  : GAME_CATALOG.filter((g) => g.groups.includes(id)).length;
               return (
                 <button
                   key={id}
@@ -780,7 +711,7 @@ export const GamesHub: React.FC<GamesHubProps> = React.memo(({
           </div>
         </div>
 
-        {filteredGames.length === 0 && filteredCasinoGames.length === 0 ? (
+        {filteredGames.length === 0 ? (
           <div className="rounded-3xl border border-slate-200 dark:border-zinc-800 bg-white/95 dark:bg-[#0e1319]/95 p-8 text-center space-y-3">
             <p className="text-sm font-semibold text-slate-700 dark:text-zinc-300">
               Nenhum jogo encontrado para essa busca ou categoria.
@@ -793,58 +724,11 @@ export const GamesHub: React.FC<GamesHubProps> = React.memo(({
               }}
               className="min-h-[42px] px-4 py-2 rounded-xl bg-lime-400 hover:bg-lime-300 text-slate-950 text-xs font-bold cursor-pointer"
             >
-              Mostrar Todos os {GAME_CATALOG.length + CASINO_CATALOG.length} Jogos
+              Mostrar Todos os {GAME_CATALOG.length} Jogos
             </button>
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-            {filteredCasinoGames.map((casinoGame) => (
-              <article
-                key={casinoGame.id}
-                className="group rounded-3xl border border-amber-400/35 dark:border-amber-400/30 bg-white/95 dark:bg-[#0e1319]/95 backdrop-blur-md overflow-hidden flex flex-col justify-between hover:border-amber-400 transition-all duration-150 hover:-translate-y-0.5 shadow-sm shadow-slate-900/5 dark:shadow-black/50"
-              >
-                <div>
-                  <div className="relative h-36 sm:h-40 w-full bg-[#090d12] overflow-hidden">
-                    <img
-                      src={CASINO_THUMBNAILS[casinoGame.id]}
-                      alt={casinoGame.title}
-                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                    />
-                    <div
-                      className="absolute inset-0 bg-gradient-to-t from-[#0e1319] via-[#0e1319]/20 to-transparent opacity-90"
-                      aria-hidden="true"
-                    />
-                    <span className="absolute top-3 right-3 px-2.5 py-1 rounded-lg bg-amber-400 text-slate-950 text-[11px] font-mono font-extrabold whitespace-nowrap shadow-sm">
-                      {casinoGame.badgeText}
-                    </span>
-                  </div>
-
-                  <div className="px-4 pt-3 pb-2 space-y-1.5">
-                    <h3 className="text-base font-display font-extrabold text-slate-900 dark:text-white leading-snug">
-                      {casinoGame.title}
-                    </h3>
-                    <p className="text-xs text-slate-600 dark:text-zinc-300 leading-relaxed">
-                      {casinoGame.subtitle}
-                    </p>
-                    <div className="pt-1 text-[11px] font-mono text-amber-600 dark:text-amber-300 font-semibold tabular-nums">
-                      {casinoGame.rewardRange} · {casinoGame.avgTime}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="p-4 pt-2">
-                  <button
-                    type="button"
-                    onClick={() => handlePlayCasinoClick(casinoGame.id)}
-                    className="w-full min-h-[44px] inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs sm:text-sm font-extrabold rounded-xl transition-colors shadow-sm shadow-amber-500/20 cursor-pointer"
-                  >
-                    <Play className="w-3.5 h-3.5 fill-current" />
-                    {firebaseUser ? 'Jogar Cassino' : 'Entrar e Jogar'}
-                  </button>
-                </div>
-              </article>
-            ))}
-
             {filteredGames.map((game) => {
               const phase = phaseByCategory[game.id] || 1;
               return (
@@ -960,7 +844,7 @@ export const GamesHub: React.FC<GamesHubProps> = React.memo(({
               Caixa de Correio{unreadMailboxCount > 0 ? ` (${unreadMailboxCount})` : ''}
             </div>
             <div className="text-[11px] text-slate-500 dark:text-zinc-400 leading-snug">
-              Avisos e mensagens oficiais
+              Avisos e mensagens do ADM
             </div>
           </div>
           <Inbox className="w-5 h-5 text-emerald-600 dark:text-lime-400 shrink-0" />

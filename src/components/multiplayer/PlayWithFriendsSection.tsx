@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { motion } from 'motion/react';
 import {
   Check,
@@ -19,7 +19,6 @@ import {
   Play,
   Plus,
   RefreshCw,
-  ShieldAlert,
   ShieldCheck,
   Swords,
   Users,
@@ -28,17 +27,15 @@ import {
   XCircle,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
+import { useMultiplayer } from '../../context/MultiplayerContext';
 import { useToast } from '../../context/ToastContext';
 import {
-  GlobalMatchListing,
   MULTIPLAYER_GAME_LABELS,
   MultiplayerGameId,
-  MultiplayerRoomSnapshot,
   RoomVisibility,
 } from '../../types/earneasy';
 import { formatPoints } from '../../utils/pix';
 import { ProfileAvatar } from '../PlayerProfile';
-import { resolveVerifiedBadgeTier, VerifiedBadge } from '../VerifiedBadge';
 import { MultiplayerGameBoards } from './MultiplayerGameBoards';
 import { MULTIPLAYER_CATALOG } from './multiplayerCatalog';
 
@@ -46,204 +43,41 @@ const ROUND_OPTIONS = [1, 3, 5, 7];
 const STAKE_PRESETS = [0, 50, 100, 250, 500, 1000];
 
 export const PlayWithFriendsSection: React.FC = React.memo(() => {
+  const { userAccount, myMultiplayerMatches } = useAuth();
   const {
-    firebaseUser,
-    userAccount,
-    myMultiplayerMatches,
-    settleMultiplayerMatch,
-  } = useAuth();
+    wsConnected,
+    room,
+    publicRooms,
+    settlingMatchId,
+    settledSummary,
+    clearSettledSummary,
+    sendWs,
+    createRoom,
+    joinRoom,
+    leaveRoom,
+    publishToGlobal,
+  } = useMultiplayer();
   const { showToast } = useToast();
 
-  const [wsConnected, setWsConnected] = useState(false);
-  const [room, setRoom] = useState<MultiplayerRoomSnapshot | null>(null);
-  const [globalMatches, setGlobalMatches] = useState<GlobalMatchListing[]>([]);
   const [joinCodeInput, setJoinCodeInput] = useState('');
   const [selectedCreateGame, setSelectedCreateGame] = useState<MultiplayerGameId>('domino');
-  const [createVisibility, setCreateVisibility] = useState<RoomVisibility>('public');
   const [createRounds, setCreateRounds] = useState<number>(3);
   const [createStake, setCreateStake] = useState<string>('100');
+  const [createVisibility, setCreateVisibility] = useState<RoomVisibility>('public');
+  const [alsoPostGlobal, setAlsoPostGlobal] = useState<boolean>(true);
+  const [publicFilterGame, setPublicFilterGame] = useState<string>('all');
   const [counterStakeInput, setCounterStakeInput] = useState<string>('');
   const [copiedRoomCode, setCopiedRoomCode] = useState(false);
-  const [settlingMatchId, setSettlingMatchId] = useState<string | null>(null);
-  const [settledSummary, setSettledSummary] = useState<{
-    matchId: string;
-    transferredPoints: number;
-    alreadySettled: boolean;
-  } | null>(null);
-
-  const wsRef = useRef<WebSocket | null>(null);
-  const roomRef = useRef<MultiplayerRoomSnapshot | null>(null);
-  const settledIdsRef = useRef<Set<string>>(new Set());
-  const pendingSendQueueRef = useRef<Array<{ type: string; payload: unknown }>>([]);
-
-  useEffect(() => {
-    roomRef.current = room;
-  }, [room]);
-
-  const sendWs = useCallback((type: string, payload: unknown = {}) => {
-    const ws = wsRef.current;
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type, payload }));
-      return true;
-    }
-    pendingSendQueueRef.current.push({ type, payload });
-    return false;
-  }, []);
-
-  // Connect to /ws/multiplayer
-  useEffect(() => {
-    if (!firebaseUser || !userAccount) return;
-
-    let cancelled = false;
-    let reconnectTimer: number | null = null;
-
-    const connect = () => {
-      if (cancelled) return;
-      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const url = `${proto}//${window.location.host}/ws/multiplayer`;
-      const ws = new WebSocket(url);
-      wsRef.current = ws;
-
-      ws.onopen = () => {
-        if (cancelled) {
-          ws.close();
-          return;
-        }
-        setWsConnected(true);
-        // Rejoin room seamlessly if user was already in one
-        const activeRoom = roomRef.current;
-        if (activeRoom) {
-          ws.send(
-            JSON.stringify({
-              type: 'room:join',
-              payload: {
-                roomCode: activeRoom.roomCode,
-                uid: userAccount.uid,
-                displayName: userAccount.displayName,
-                photoURL: userAccount.photoURL,
-                pointsBalance: userAccount.pointsBalance,
-                verified: resolveVerifiedBadgeTier(userAccount.verifiedBadge, userAccount.identityVerified) !== 'none',
-                verifiedBadge: resolveVerifiedBadgeTier(userAccount.verifiedBadge, userAccount.identityVerified),
-              },
-            })
-          );
-        }
-        while (pendingSendQueueRef.current.length > 0) {
-          const item = pendingSendQueueRef.current.shift();
-          if (item) {
-            ws.send(JSON.stringify(item));
-          }
-        }
-      };
-
-      ws.onmessage = (event) => {
-        try {
-          const msg = JSON.parse(event.data);
-          if (msg.type === 'room:state') {
-            setRoom(msg.payload as MultiplayerRoomSnapshot);
-          } else if (msg.type === 'global:matches') {
-            setGlobalMatches(Array.isArray(msg.payload) ? (msg.payload as GlobalMatchListing[]) : []);
-          } else if (msg.type === 'room:left') {
-            setRoom(null);
-            setSettledSummary(null);
-          } else if (msg.type === 'error' && msg.payload?.message) {
-            showToast({ type: 'error', title: 'Sala Multiplayer', message: String(msg.payload.message) });
-          }
-        } catch {
-          // Ignore malformed frame
-        }
-      };
-
-      ws.onclose = () => {
-        setWsConnected(false);
-        if (!cancelled) {
-          reconnectTimer = window.setTimeout(connect, 2200);
-        }
-      };
-
-      ws.onerror = () => {
-        setWsConnected(false);
-      };
-    };
-
-    connect();
-
-    return () => {
-      cancelled = true;
-      if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
-      if (wsRef.current) {
-        wsRef.current.close();
-        wsRef.current = null;
-      }
-    };
-  }, [firebaseUser, userAccount?.uid, showToast]);
-
-  // Keep server room synced when player's real Firestore pointsBalance changes
-  useEffect(() => {
-    if (!room || !userAccount || !wsConnected) return;
-    sendWs('room:update_balance', { pointsBalance: userAccount.pointsBalance });
-  }, [userAccount?.pointsBalance, wsConnected, Boolean(room), sendWs]);
-
-  // Trigger atomic server-verified settlement once match finishes
-  useEffect(() => {
-    if (!room || room.status !== 'finished' || !room.settlement || !userAccount) return;
-    const settlement = room.settlement;
-    if (settledIdsRef.current.has(settlement.matchId)) return;
-
-    settledIdsRef.current.add(settlement.matchId);
-    setSettlingMatchId(settlement.matchId);
-
-    settleMultiplayerMatch(settlement)
-      .then((res) => {
-        setSettledSummary({
-          matchId: settlement.matchId,
-          transferredPoints: res.transferredPoints,
-          alreadySettled: res.alreadySettled,
-        });
-        if (!res.alreadySettled) {
-          if (settlement.isDraw) {
-            showToast({
-              type: 'info',
-              title: 'Partida Empatada!',
-              message: 'Nenhum ponto foi descontado ou transferido.',
-            });
-          } else if (settlement.winnerUid === userAccount.uid && res.transferredPoints > 0) {
-            showToast({
-              type: 'success',
-              title: 'Vitória Confirmada!',
-              message: `+${formatPoints(res.transferredPoints)} pontos ganhos na partida!`,
-            });
-          } else if (res.transferredPoints > 0) {
-            showToast({
-              type: 'info',
-              title: 'Partida Encerrada',
-              message: `${formatPoints(res.transferredPoints)} pontos combinados transferidos ao vencedor.`,
-            });
-          }
-        }
-      })
-      .catch((err) => {
-        settledIdsRef.current.delete(settlement.matchId);
-        showToast({
-          type: 'error',
-          title: 'Erro ao validar resultado',
-          message: err instanceof Error ? err.message : 'Tente novamente.',
-        });
-      })
-      .finally(() => {
-        setSettlingMatchId(null);
-      });
-  }, [room?.status, room?.settlement?.matchId, userAccount?.uid, settleMultiplayerMatch, showToast]);
 
   const myPlayer = useMemo(() => {
     if (!room || !userAccount) return null;
     return room.players.find((p) => p.uid === userAccount.uid) || null;
   }, [room, userAccount]);
 
-  const opponentPlayer = useMemo(() => {
-    if (!room || !userAccount) return null;
-    return room.players.find((p) => p.uid !== userAccount.uid) || null;
-  }, [room, userAccount]);
+  const filteredPublicRooms = useMemo(() => {
+    if (publicFilterGame === 'all') return publicRooms;
+    return publicRooms.filter((r) => r.gameId === publicFilterGame);
+  }, [publicRooms, publicFilterGame]);
 
   const handleCreateRoom = (gameOverride?: MultiplayerGameId) => {
     if (!userAccount) return;
@@ -257,63 +91,19 @@ export const PlayWithFriendsSection: React.FC = React.memo(() => {
       });
       return;
     }
-    setSettledSummary(null);
-    sendWs('room:create', {
-      uid: userAccount.uid,
-      displayName: userAccount.displayName,
-      photoURL: userAccount.photoURL,
-      pointsBalance: userAccount.pointsBalance,
-      verified: resolveVerifiedBadgeTier(userAccount.verifiedBadge, userAccount.identityVerified) !== 'none',
-      verifiedBadge: resolveVerifiedBadgeTier(userAccount.verifiedBadge, userAccount.identityVerified),
+    createRoom({
       gameId,
-      visibility: createVisibility,
-      postToGlobal: createVisibility === 'public',
       totalRounds: createRounds,
       stakePoints: stake,
+      visibility: createVisibility,
+      postToGlobal: createVisibility === 'public' && alsoPostGlobal,
     });
   };
 
   const handleJoinRoom = (e: React.FormEvent) => {
     e.preventDefault();
     if (!userAccount) return;
-    const clean = joinCodeInput.trim().toUpperCase();
-    if (!clean) {
-      showToast({ type: 'error', title: 'Código obrigatório', message: 'Digite o código da sala (ex: EE-AB12CD).' });
-      return;
-    }
-    setSettledSummary(null);
-    sendWs('room:join', {
-      roomCode: clean,
-      uid: userAccount.uid,
-      displayName: userAccount.displayName,
-      photoURL: userAccount.photoURL,
-      pointsBalance: userAccount.pointsBalance,
-      verified: resolveVerifiedBadgeTier(userAccount.verifiedBadge, userAccount.identityVerified) !== 'none',
-      verifiedBadge: resolveVerifiedBadgeTier(userAccount.verifiedBadge, userAccount.identityVerified),
-    });
-  };
-
-  const handleAcceptGlobalMatch = (listing: GlobalMatchListing) => {
-    if (!userAccount) return;
-    if (listing.hostUid === userAccount.uid) return;
-    if (userAccount.pointsBalance < listing.stakePoints) {
-      showToast({
-        type: 'error',
-        title: 'Saldo insuficiente',
-        message: `Você precisa de pelo menos ${formatPoints(listing.stakePoints)} pts para aceitar este desafio.`,
-      });
-      return;
-    }
-    setSettledSummary(null);
-    sendWs('room:join', {
-      roomCode: listing.roomCode,
-      uid: userAccount.uid,
-      displayName: userAccount.displayName,
-      photoURL: userAccount.photoURL,
-      pointsBalance: userAccount.pointsBalance,
-      verified: resolveVerifiedBadgeTier(userAccount.verifiedBadge, userAccount.identityVerified) !== 'none',
-      verifiedBadge: resolveVerifiedBadgeTier(userAccount.verifiedBadge, userAccount.identityVerified),
-    });
+    joinRoom(joinCodeInput);
   };
 
   const handleCopyRoomCode = async () => {
@@ -366,6 +156,22 @@ export const PlayWithFriendsSection: React.FC = React.memo(() => {
                   {copiedRoomCode ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
                   {room.roomCode}
                 </button>
+                <span
+                  className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-xl text-[11px] font-bold border ${
+                    room.visibility === 'public'
+                      ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-500'
+                      : 'bg-slate-200/70 dark:bg-zinc-800 border-slate-300 dark:border-zinc-700 text-slate-700 dark:text-zinc-300'
+                  }`}
+                >
+                  {room.visibility === 'public' ? <Globe className="w-3 h-3" /> : <Lock className="w-3 h-3" />}
+                  {room.visibility === 'public' ? 'Sala Pública' : 'Sala Privada'}
+                </span>
+                {room.postedToGlobal && room.players.length < 2 && (
+                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl text-[11px] font-bold bg-amber-500/15 border border-amber-400/40 text-amber-400">
+                    <Megaphone className="w-3 h-3" />
+                    No Chat Global
+                  </span>
+                )}
               </div>
               <p className="text-xs text-slate-500 dark:text-zinc-400 mt-0.5">
                 {room.status === 'lobby'
@@ -402,7 +208,7 @@ export const PlayWithFriendsSection: React.FC = React.memo(() => {
 
             <button
               type="button"
-              onClick={() => sendWs('room:leave')}
+              onClick={leaveRoom}
               className="min-h-[38px] px-3 py-1.5 rounded-xl border border-red-500/40 bg-red-500/10 hover:bg-red-500/20 text-red-400 text-xs font-bold flex items-center gap-1.5 cursor-pointer"
             >
               <LogOut className="w-3.5 h-3.5" />
@@ -427,10 +233,19 @@ export const PlayWithFriendsSection: React.FC = React.memo(() => {
                     </div>
                     <div>
                       <p className="text-xs font-bold text-slate-700 dark:text-zinc-200">
-                        Aguardando amigo entrar...
+                        {room.visibility === 'public'
+                          ? 'Aguardando adversário aceitar...'
+                          : 'Aguardando amigo entrar...'}
                       </p>
                       <p className="text-[11px] text-slate-500 dark:text-zinc-400">
-                        Compartilhe o código <span className="font-mono font-bold text-lime-500">{room.roomCode}</span>
+                        {room.visibility === 'public'
+                          ? room.postedToGlobal
+                            ? 'Partida visível nas Salas Públicas e no Chat Global (some ao aceitar).'
+                            : 'Visível na lista de Salas Públicas ou pelo código '
+                          : 'Compartilhe o código '}
+                        {(!room.postedToGlobal || room.visibility === 'private') && (
+                          <span className="font-mono font-bold text-lime-500">{room.roomCode}</span>
+                        )}
                       </p>
                     </div>
                   </div>
@@ -460,15 +275,6 @@ export const PlayWithFriendsSection: React.FC = React.memo(() => {
                       <span className="text-sm font-extrabold text-slate-900 dark:text-white truncate">
                         {p.displayName} {isMe ? '(Você)' : ''}
                       </span>
-                      <VerifiedBadge
-                        tier={
-                          isMe
-                            ? resolveVerifiedBadgeTier(userAccount.verifiedBadge, userAccount.identityVerified)
-                            : p.verifiedBadge
-                        }
-                        legacyVerified={p.verified || (isMe && userAccount.identityVerified)}
-                        size="xs"
-                      />
                       {p.isHost && (
                         <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md bg-amber-400/20 text-amber-400 text-[10px] font-bold">
                           <Crown className="w-3 h-3" /> Anfitrião
@@ -603,57 +409,49 @@ export const PlayWithFriendsSection: React.FC = React.memo(() => {
                     </div>
                   </div>
 
-                  {/* Visibilidade & Publicação no Chat Global de Partidas */}
-                  <div className="pt-2 border-t border-slate-200 dark:border-zinc-800 flex flex-wrap items-center justify-between gap-2.5">
-                    <div className="inline-flex items-center gap-1 p-1 rounded-xl bg-slate-100 dark:bg-[#090d12] border border-slate-200 dark:border-zinc-800">
+                  {room.players.length < 2 && (
+                    <div className="rounded-2xl border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-[#090d12] p-3 flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => sendWs('room:config', { visibility: 'public' })}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer border transition-colors ${
+                            room.visibility === 'public'
+                              ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-500'
+                              : 'bg-transparent border-slate-300 dark:border-zinc-700 text-slate-500 dark:text-zinc-400'
+                          }`}
+                        >
+                          <Globe className="w-3.5 h-3.5" />
+                          Pública
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => sendWs('room:config', { visibility: 'private' })}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer border transition-colors ${
+                            room.visibility === 'private'
+                              ? 'bg-slate-900 dark:bg-zinc-800 border-slate-700 text-white'
+                              : 'bg-transparent border-slate-300 dark:border-zinc-700 text-slate-500 dark:text-zinc-400'
+                          }`}
+                        >
+                          <Lock className="w-3.5 h-3.5" />
+                          Privada
+                        </button>
+                      </div>
+
                       <button
                         type="button"
-                        onClick={() => sendWs('room:config', { visibility: 'private' })}
-                        className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-bold cursor-pointer ${
-                          room.visibility === 'private'
-                            ? 'bg-white dark:bg-zinc-800 text-slate-900 dark:text-white shadow-xs'
-                            : 'text-slate-500 dark:text-zinc-400'
+                        onClick={() => publishToGlobal(!room.postedToGlobal)}
+                        className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold flex items-center gap-1.5 cursor-pointer transition-colors ${
+                          room.postedToGlobal
+                            ? 'bg-amber-500/20 border border-amber-400/50 text-amber-400 hover:bg-amber-500/30'
+                            : 'bg-lime-400 hover:bg-lime-300 text-slate-950'
                         }`}
                       >
-                        <Lock className="w-3 h-3" />
-                        Privada
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => sendWs('room:config', { visibility: 'public' })}
-                        className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-bold cursor-pointer ${
-                          room.visibility === 'public'
-                            ? 'bg-lime-400 text-slate-950 shadow-xs'
-                            : 'text-slate-500 dark:text-zinc-400'
-                        }`}
-                      >
-                        <Globe className="w-3 h-3" />
-                        Pública
+                        <Megaphone className="w-3.5 h-3.5" />
+                        {room.postedToGlobal ? 'Remover do Chat Global' : 'Enviar Partida no Chat Global'}
                       </button>
                     </div>
-
-                    {room.players.length < 2 && (
-                      room.postedToGlobal ? (
-                        <button
-                          type="button"
-                          onClick={() => sendWs('room:unpost_global')}
-                          className="min-h-[38px] inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl border border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-300 text-xs font-bold cursor-pointer"
-                        >
-                          <Megaphone className="w-3.5 h-3.5" />
-                          Retirar do Global
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => sendWs('room:post_global')}
-                          className="min-h-[38px] inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold cursor-pointer"
-                        >
-                          <Megaphone className="w-3.5 h-3.5" />
-                          Enviar Partida no Global
-                        </button>
-                      )
-                    )}
-                  </div>
+                  )}
                 </div>
               )}
 
@@ -865,7 +663,7 @@ export const PlayWithFriendsSection: React.FC = React.memo(() => {
               <button
                 type="button"
                 onClick={() => {
-                  setSettledSummary(null);
+                  clearSettledSummary();
                   sendWs('room:rematch');
                 }}
                 className="min-h-[44px] px-5 py-2.5 rounded-xl bg-lime-400 hover:bg-lime-300 text-slate-950 text-xs font-black flex items-center gap-2 cursor-pointer"
@@ -875,7 +673,7 @@ export const PlayWithFriendsSection: React.FC = React.memo(() => {
               </button>
               <button
                 type="button"
-                onClick={() => sendWs('room:leave')}
+                onClick={leaveRoom}
                 className="min-h-[44px] px-5 py-2.5 rounded-xl border border-zinc-700 hover:bg-zinc-800 text-zinc-200 text-xs font-bold flex items-center gap-2 cursor-pointer"
               >
                 <DoorOpen className="w-4 h-4" />
@@ -895,7 +693,7 @@ export const PlayWithFriendsSection: React.FC = React.memo(() => {
     <div className="space-y-6">
       {/* Hero & Lobby Controls */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
-        {/* Criar Sala Privada */}
+        {/* Criar Sala (Pública ou Privada) */}
         <div className="lg:col-span-7 rounded-3xl border border-emerald-500/30 bg-gradient-to-br from-[#0e1a12] via-[#0b1016] to-[#080c10] p-5 sm:p-6 text-white shadow-xl space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2.5">
@@ -903,9 +701,9 @@ export const PlayWithFriendsSection: React.FC = React.memo(() => {
                 <Swords className="w-5 h-5" />
               </div>
               <div>
-                <h2 className="text-lg sm:text-xl font-black tracking-tight">JOGAR COM AMIGOS</h2>
+                <h2 className="text-lg sm:text-xl font-black tracking-tight">JOGAR ONLINE</h2>
                 <p className="text-xs text-zinc-400">
-                  11 jogos multiplayer em tempo real com salas privadas e aposta segura
+                  11 jogos multiplayer com Salas Públicas, Salas Privadas e aposta segura
                 </p>
               </div>
             </div>
@@ -921,7 +719,46 @@ export const PlayWithFriendsSection: React.FC = React.memo(() => {
             </span>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          {/* Modo da Sala: Pública vs Privada */}
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => setCreateVisibility('public')}
+              className={`rounded-2xl border p-3 text-left transition-all cursor-pointer ${
+                createVisibility === 'public'
+                  ? 'border-lime-400 bg-lime-400/15 text-white'
+                  : 'border-zinc-800 bg-[#070a0d] text-zinc-400 hover:border-zinc-700'
+              }`}
+            >
+              <div className="flex items-center gap-2 text-xs font-extrabold">
+                <Globe className={`w-4 h-4 ${createVisibility === 'public' ? 'text-lime-400' : 'text-zinc-500'}`} />
+                Sala Pública
+              </div>
+              <p className="text-[11px] text-zinc-400 mt-1">
+                Qualquer jogador pode entrar na lista pública sem código.
+              </p>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setCreateVisibility('private')}
+              className={`rounded-2xl border p-3 text-left transition-all cursor-pointer ${
+                createVisibility === 'private'
+                  ? 'border-lime-400 bg-lime-400/15 text-white'
+                  : 'border-zinc-800 bg-[#070a0d] text-zinc-400 hover:border-zinc-700'
+              }`}
+            >
+              <div className="flex items-center gap-2 text-xs font-extrabold">
+                <Lock className={`w-4 h-4 ${createVisibility === 'private' ? 'text-lime-400' : 'text-zinc-500'}`} />
+                Sala Privada
+              </div>
+              <p className="text-[11px] text-zinc-400 mt-1">
+                Apenas amigos com o código exclusivo EE-XXXXXX podem entrar.
+              </p>
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <label className="block space-y-1">
               <span className="text-[11px] font-bold uppercase tracking-wider text-zinc-400">Jogo</span>
               <select
@@ -965,39 +802,19 @@ export const PlayWithFriendsSection: React.FC = React.memo(() => {
                 className="w-full h-11 px-3 rounded-xl border border-zinc-700 bg-[#070a0d] text-xs font-mono font-bold text-lime-400 focus:outline-none focus:ring-2 focus:ring-lime-400"
               />
             </label>
-
-            <div className="space-y-1">
-              <span className="text-[11px] font-bold uppercase tracking-wider text-zinc-400">
-                Modo da Sala
-              </span>
-              <div className="grid grid-cols-2 gap-1.5 h-11 p-1 rounded-xl border border-zinc-700 bg-[#070a0d]">
-                <button
-                  type="button"
-                  onClick={() => setCreateVisibility('public')}
-                  className={`rounded-lg text-[11px] font-extrabold flex items-center justify-center gap-1 cursor-pointer transition-colors ${
-                    createVisibility === 'public'
-                      ? 'bg-lime-400 text-slate-950'
-                      : 'text-zinc-400 hover:text-white'
-                  }`}
-                >
-                  <Globe className="w-3.5 h-3.5" />
-                  Pública
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setCreateVisibility('private')}
-                  className={`rounded-lg text-[11px] font-extrabold flex items-center justify-center gap-1 cursor-pointer transition-colors ${
-                    createVisibility === 'private'
-                      ? 'bg-zinc-800 text-white'
-                      : 'text-zinc-400 hover:text-white'
-                  }`}
-                >
-                  <Lock className="w-3.5 h-3.5" />
-                  Privada
-                </button>
-              </div>
-            </div>
           </div>
+
+          {createVisibility === 'public' && (
+            <label className="flex items-center gap-2.5 text-xs text-zinc-200 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={alsoPostGlobal}
+                onChange={(e) => setAlsoPostGlobal(e.target.checked)}
+                className="w-4 h-4 accent-lime-400 rounded cursor-pointer"
+              />
+              <span>Enviar partida automaticamente no Chat Global (some ao ser aceita)</span>
+            </label>
+          )}
 
           <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
             <div className="flex items-center gap-1.5 text-xs text-zinc-300">
@@ -1010,9 +827,7 @@ export const PlayWithFriendsSection: React.FC = React.memo(() => {
               className="min-h-[44px] px-5 py-2.5 rounded-xl bg-lime-400 hover:bg-lime-300 text-slate-950 text-xs font-black flex items-center gap-2 cursor-pointer transition-colors shadow-lg shadow-lime-500/20"
             >
               <Plus className="w-4 h-4" />
-              {createVisibility === 'public'
-                ? 'Criar Sala Pública & Enviar no Global'
-                : 'Criar Sala Privada'}
+              {createVisibility === 'public' ? 'Criar Sala Pública' : 'Criar Sala Privada'}
             </button>
           </div>
         </div>
@@ -1022,10 +837,10 @@ export const PlayWithFriendsSection: React.FC = React.memo(() => {
           <div className="space-y-1.5">
             <h3 className="text-base font-extrabold text-slate-900 dark:text-white flex items-center gap-2">
               <KeyRound className="w-4 h-4 text-lime-500" />
-              Entrar em uma Sala
+              Entrar com Código
             </h3>
             <p className="text-xs text-slate-500 dark:text-zinc-400">
-              Cole o código exclusivo enviado pelo seu amigo ou aceite uma partida pública no Chat Global de Partidas abaixo.
+              Cole o código exclusivo enviado pelo seu amigo para entrar em uma Sala Privada ou Pública.
             </p>
           </div>
 
@@ -1054,107 +869,104 @@ export const PlayWithFriendsSection: React.FC = React.memo(() => {
         </div>
       </div>
 
-      {/* CHAT GLOBAL DE PARTIDAS (SOMENTE CONVITES — SEM TEXTO LIVRE + REGRAS DO GLOBAL) */}
-      <div className="rounded-3xl border border-slate-200 dark:border-zinc-800 bg-white/95 dark:bg-[#0e1319]/95 p-5 sm:p-6 space-y-4 shadow-lg">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 dark:border-zinc-800 pb-4">
-          <div className="flex items-center gap-2.5">
-            <div className="w-10 h-10 rounded-2xl bg-emerald-500/15 border border-emerald-500/35 text-emerald-600 dark:text-lime-400 flex items-center justify-center shrink-0">
-              <Megaphone className="w-5 h-5" />
-            </div>
-            <div>
-              <h3 className="text-base font-extrabold text-slate-900 dark:text-white">
-                Chat Global de Partidas
-              </h3>
-              <p className="text-xs text-slate-500 dark:text-zinc-400">
-                Envie desafios de sala pública ou aceite um adversário. Assim que alguém aceita, a partida some do global na hora!
-              </p>
-            </div>
-          </div>
-
-          <span className="text-xs font-mono font-bold text-emerald-700 dark:text-lime-400 shrink-0">
-            {globalMatches.length} {globalMatches.length === 1 ? 'partida aberta' : 'partidas abertas'}
-          </span>
-        </div>
-
-        {/* Regras do Global */}
-        <div className="rounded-2xl border border-amber-300/70 dark:border-amber-700/60 bg-amber-50/80 dark:bg-amber-950/20 p-3.5 flex items-start gap-3">
-          <ShieldAlert className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
-          <div className="text-xs text-slate-800 dark:text-zinc-200 space-y-1 leading-relaxed">
-            <div className="font-extrabold text-amber-800 dark:text-amber-300">
-              Regras do Global
-            </div>
-            <p>
-              Chat fechado para digitação livre: ninguém pode enviar texto livre, palavrões, ofensas, links ou spam — apenas convites oficiais de partida. Nomes impróprios são bloqueados e passíveis de banimento imediato.
+      {/* Salas Públicas Abertas */}
+      <div className="rounded-3xl border border-slate-200 dark:border-zinc-800 bg-white/95 dark:bg-[#0e1319]/95 p-5 sm:p-6 space-y-4 shadow-sm">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div>
+            <h3 className="text-base font-extrabold text-slate-900 dark:text-white flex items-center gap-2">
+              <Globe className="w-4 h-4 text-lime-500" />
+              Salas Públicas Abertas ({publicRooms.length})
+            </h3>
+            <p className="text-xs text-slate-500 dark:text-zinc-400 mt-0.5">
+              Entre em qualquer partida pública disponível agora mesmo com 1 clique.
             </p>
           </div>
+          <div className="flex items-center gap-2">
+            <select
+              value={publicFilterGame}
+              onChange={(e) => setPublicFilterGame(e.target.value)}
+              className="h-9 px-3 rounded-xl border border-slate-200 dark:border-zinc-700 bg-slate-50 dark:bg-[#090d12] text-xs font-bold text-slate-800 dark:text-zinc-100"
+            >
+              <option value="all">Todos os jogos</option>
+              {MULTIPLAYER_CATALOG.map((g) => (
+                <option key={g.id} value={g.id}>
+                  {g.name}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={() => sendWs('room:list_public')}
+              title="Atualizar lista de salas públicas"
+              className="h-9 px-3 rounded-xl border border-slate-200 dark:border-zinc-700 bg-slate-50 dark:bg-[#090d12] text-xs font-bold text-slate-700 dark:text-zinc-200 hover:border-lime-400 flex items-center gap-1.5 cursor-pointer"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              Atualizar
+            </button>
+          </div>
         </div>
 
-        {globalMatches.length === 0 ? (
-          <div className="rounded-2xl border border-dashed border-slate-300 dark:border-zinc-800 bg-slate-50/60 dark:bg-[#090d12] p-7 text-center space-y-2">
-            <Globe className="w-7 h-7 text-slate-400 dark:text-zinc-600 mx-auto" />
+        {filteredPublicRooms.length === 0 ? (
+          <div className="rounded-2xl border border-dashed border-slate-200 dark:border-zinc-800 bg-slate-50/70 dark:bg-[#090d12]/60 py-8 px-4 text-center space-y-1.5">
             <p className="text-xs font-bold text-slate-700 dark:text-zinc-300">
-              Nenhuma partida pública aguardando no Global agora.
+              Nenhuma sala pública aberta no momento.
             </p>
             <p className="text-[11px] text-slate-500 dark:text-zinc-400">
-              Crie uma sala no modo <strong>Pública</strong> acima ou clique em um jogo abaixo para lançar seu desafio aqui!
+              Crie uma Sala Pública acima ou escolha um jogo abaixo para desafiar outros jogadores!
             </p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {globalMatches.map((match) => {
-              const isMine = match.hostUid === userAccount.uid;
-              const notEnoughPoints = userAccount.pointsBalance < match.stakePoints;
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {filteredPublicRooms.map((pub) => {
+              const notEnoughBalance = userAccount.pointsBalance < pub.stakePoints;
+              const isMine = pub.hostUid === userAccount.uid;
               return (
                 <div
-                  key={match.roomCode}
-                  className="rounded-2xl border border-slate-200 dark:border-zinc-800 bg-slate-50/80 dark:bg-[#090d12] p-4 flex items-center justify-between gap-3"
+                  key={pub.roomCode}
+                  className="rounded-2xl border border-slate-200 dark:border-zinc-800 bg-slate-50/80 dark:bg-[#090d12] p-4 flex flex-col justify-between gap-3"
                 >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <ProfileAvatar
-                      name={match.hostName}
-                      photoURL={match.hostPhotoURL}
-                      sizeClass="w-11 h-11"
-                      textSizeClass="text-xs"
-                    />
-                    <div className="min-w-0 space-y-0.5">
-                      <div className="flex items-center gap-1.5 min-w-0">
-                        <span className="text-sm font-extrabold text-slate-900 dark:text-white truncate">
-                          {match.hostName}
-                        </span>
-                        <VerifiedBadge
-                          tier={match.hostVerifiedBadge}
-                          legacyVerified={match.hostVerified}
-                          size="xs"
-                        />
-                      </div>
-                      <div className="text-xs font-bold text-emerald-700 dark:text-lime-400 truncate">
-                        {MULTIPLAYER_GAME_LABELS[match.gameId] || match.gameId}
-                      </div>
-                      <div className="text-[11px] font-mono text-slate-500 dark:text-zinc-400">
-                        {match.totalRounds} rodada(s) ·{' '}
-                        {match.stakePoints === 0
-                          ? 'Amistoso (0 pts)'
-                          : `Valendo ${formatPoints(match.stakePoints)} pts`}{' '}
-                        · {match.roomCode}
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <ProfileAvatar
+                        name={pub.hostDisplayName}
+                        photoURL={pub.hostPhotoURL}
+                        sizeClass="w-9 h-9"
+                        textSizeClass="text-[11px]"
+                      />
+                      <div className="min-w-0">
+                        <p className="text-xs font-extrabold text-slate-900 dark:text-white truncate">
+                          {pub.hostDisplayName}
+                        </p>
+                        <p className="text-[11px] font-semibold text-emerald-600 dark:text-lime-400 truncate">
+                          {MULTIPLAYER_GAME_LABELS[pub.gameId] || pub.gameId}
+                        </p>
                       </div>
                     </div>
+                    <span className="px-2 py-0.5 rounded-lg bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold shrink-0">
+                      1/2
+                    </span>
                   </div>
 
-                  {isMine ? (
-                    <span className="px-3 py-2 rounded-xl bg-zinc-800 text-lime-400 text-[11px] font-extrabold shrink-0">
-                      Sua Sala
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-600 dark:text-zinc-300">
+                    <span>{pub.totalRounds} rodada(s)</span>
+                    <span className="font-mono font-extrabold text-slate-900 dark:text-lime-400">
+                      {pub.stakePoints === 0 ? 'Amistoso (0 pts)' : `${formatPoints(pub.stakePoints)} pts`}
                     </span>
-                  ) : (
-                    <button
-                      type="button"
-                      disabled={notEnoughPoints}
-                      onClick={() => handleAcceptGlobalMatch(match)}
-                      className="min-h-[42px] px-4 py-2 rounded-xl bg-lime-400 hover:bg-lime-300 disabled:opacity-45 text-slate-950 text-xs font-black flex items-center gap-1.5 shrink-0 cursor-pointer transition-colors"
-                    >
-                      <Swords className="w-3.5 h-3.5" />
-                      {notEnoughPoints ? 'Saldo Insuficiente' : 'Aceitar Partida'}
-                    </button>
-                  )}
+                  </div>
+
+                  <button
+                    type="button"
+                    disabled={isMine || notEnoughBalance}
+                    onClick={() => joinRoom(pub.roomCode)}
+                    className="w-full min-h-[38px] rounded-xl bg-lime-400 hover:bg-lime-300 disabled:opacity-45 text-slate-950 text-xs font-black flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
+                  >
+                    <DoorOpen className="w-3.5 h-3.5" />
+                    {isMine
+                      ? 'Sua Sala'
+                      : notEnoughBalance
+                        ? `Saldo insuficiente (${formatPoints(pub.stakePoints)} pts)`
+                        : 'Aceitar e Entrar'}
+                  </button>
                 </div>
               );
             })}
@@ -1213,7 +1025,7 @@ export const PlayWithFriendsSection: React.FC = React.memo(() => {
                   className="w-full min-h-[40px] px-3 py-2 rounded-xl bg-lime-400 hover:bg-lime-300 text-slate-950 text-xs font-black flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
                 >
                   <Play className="w-3.5 h-3.5 fill-current" />
-                  Criar Sala
+                  {createVisibility === 'public' ? 'Criar Sala Pública' : 'Criar Sala Privada'}
                 </button>
               </motion.div>
             );

@@ -30,8 +30,6 @@ import {
 } from '../firebase';
 import {
   ADMIN_BOOTSTRAP_EMAIL,
-  CasinoCurrency,
-  CasinoSession,
   CENTS_PER_BLOCK,
   DailyCheckin,
   DEFAULT_MAINTENANCE_SETTINGS,
@@ -40,7 +38,6 @@ import {
   FraudEvent,
   GameCategory,
   GameSession,
-  isOwnerIdentity,
   LevelReward,
   MailboxMessage,
   MaintenanceSettings,
@@ -61,9 +58,6 @@ import {
   STREAK_TARGET_DAYS,
   UserAccount,
   UserPrivateInfo,
-  VerificationDocumentType,
-  VerificationRequest,
-  VerifiedBadgeTier,
   WithdrawalAttemptStatus,
   WithdrawalSettings,
   WithdrawalStatus,
@@ -74,7 +68,6 @@ import {
   sha256Hex,
   verifyGameSessionWithServer,
 } from '../utils/antifraud';
-import { formatCpfMask, isValidBirthDateStr, isValidCPF, onlyDigits } from '../utils/cpf';
 import {
   BrowserNotificationPermissionState,
   getBrowserNotificationPermission,
@@ -82,7 +75,6 @@ import {
   sendBrowserNotification,
 } from '../utils/browserNotifications';
 import { PLAYER_LEVELS } from '../utils/levels';
-import { resolveVerifiedBadgeTier } from '../components/VerifiedBadge';
 
 function getSuspensionExpiryMs(account: UserAccount | null | undefined): number | null {
   if (!account || account.status !== 'suspended' || !account.suspensionUntil) return null;
@@ -97,16 +89,6 @@ function getSuspensionExpiryMs(account: UserAccount | null | undefined): number 
   return null;
 }
 
-function isAccountCurrentlyActive(account: Partial<UserAccount> | null | undefined): boolean {
-  if (!account) return false;
-  if (!account.status || account.status === 'active') return true;
-  if (account.status === 'suspended') {
-    const expiry = getSuspensionExpiryMs(account as UserAccount);
-    return expiry !== null && expiry <= Date.now();
-  }
-  return false;
-}
-
 import { checkUsernameProfanity, validateUsernameInput } from '../utils/moderation';
 import {
   formatBRL,
@@ -119,63 +101,6 @@ import {
   syncServerUtcClock,
   timestampToMillis,
 } from '../utils/pix';
-
-function buildLeaderboardPayload(
-  userData: Pick<
-    UserAccount,
-    | 'uid'
-    | 'displayName'
-    | 'photoURL'
-    | 'brlBalanceCents'
-    | 'pointsBalance'
-    | 'lifetimePoints'
-    | 'gamesPlayed'
-    | 'status'
-    | 'identityVerified'
-    | 'verifiedBadge'
-  >,
-  overrides: Partial<{
-    uid: string;
-    displayName: string;
-    photoURL: string;
-    brlBalanceCents: number;
-    pointsBalance: number;
-    lifetimePoints: number;
-    gamesPlayed: number;
-    status: UserAccount['status'];
-    identityVerified: boolean;
-    verifiedBadge: VerifiedBadgeTier;
-  }> = {}
-) {
-  const safeNum = (val: unknown): number =>
-    typeof val === 'number' && Number.isFinite(val) && val >= 0 ? val : 0;
-  const rawName = (
-    overrides.displayName !== undefined
-      ? overrides.displayName.trim()
-      : typeof userData.displayName === 'string' && userData.displayName.trim()
-        ? userData.displayName
-        : ''
-  ).slice(0, 80);
-  const rawPhoto = overrides.photoURL ?? userData.photoURL ?? '';
-  const identityVerified = overrides.identityVerified ?? Boolean(userData.identityVerified);
-  const verifiedBadge =
-    overrides.verifiedBadge !== undefined
-      ? overrides.verifiedBadge
-      : userData.verifiedBadge ?? resolveVerifiedBadgeTier(undefined, identityVerified);
-  return {
-    uid: (overrides.uid ?? userData.uid ?? '').trim(),
-    displayName: rawName || 'Jogador',
-    photoURL: typeof rawPhoto === 'string' ? rawPhoto : '',
-    brlBalanceCents: safeNum(overrides.brlBalanceCents ?? userData.brlBalanceCents),
-    pointsBalance: safeNum(overrides.pointsBalance ?? userData.pointsBalance),
-    lifetimePoints: safeNum(overrides.lifetimePoints ?? userData.lifetimePoints),
-    gamesPlayed: safeNum(overrides.gamesPlayed ?? userData.gamesPlayed),
-    status: overrides.status ?? userData.status ?? 'active',
-    identityVerified,
-    verifiedBadge,
-    updatedAt: serverTimestamp(),
-  };
-}
 
 function isFirestoreSdkError(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
@@ -209,7 +134,7 @@ function sanitizePhotoUrl(raw: string): string {
   if (trimmed.startsWith('data:')) {
     throw new Error('Formato de imagem inválido. Use JPEG, PNG ou WebP.');
   }
-  return trimmed.slice(0, 1000);
+  return trimmed.slice(0, 500);
 }
 
 interface AuthContextValue {
@@ -218,7 +143,6 @@ interface AuthContextValue {
   userAccount: UserAccount | null;
   privateInfo: UserPrivateInfo | null;
   isAdmin: boolean;
-  isOwner: boolean;
   mySessions: GameSession[];
   myConversions: PointConversion[];
   myWithdrawals: PixWithdrawal[];
@@ -262,51 +186,6 @@ interface AuthContextValue {
     photoURL: string;
     referralCode?: string;
   }) => Promise<{ status: 'active' | 'suspended'; message?: string; referralApplied?: boolean }>;
-  myVerificationRequest: VerificationRequest | null;
-  submitVerificationRequest: (params: {
-    fullName: string;
-    cpf: string;
-    birthDate: string;
-    documentType: VerificationDocumentType;
-    documentNumber: string;
-  }) => Promise<void>;
-  approveVerificationRequest: (targetUid: string) => Promise<void>;
-  rejectVerificationRequest: (targetUid: string, reason: string) => Promise<void>;
-  setUserBlueVerified: (targetUid: string, granted: boolean) => Promise<void>;
-  settleDoubleRound: (params: {
-    currency: CasinoCurrency;
-    stakeAmount: number;
-    choice: 'red' | 'black' | 'white';
-  }) => Promise<{
-    sessionId: string;
-    slot: number;
-    winningColor: 'red' | 'black' | 'white';
-    won: boolean;
-    payoutAmount: number;
-    stakeAmount: number;
-    currency: CasinoCurrency;
-    multiplier: number;
-    netDelta: number;
-  }>;
-  startMinesSession: (params: {
-    currency: CasinoCurrency;
-    stakeAmount: number;
-    minesCount: number;
-  }) => Promise<{
-    sessionId: string;
-    currency: CasinoCurrency;
-    stakeAmount: number;
-    minesCount: number;
-    nextMultiplier: number;
-  }>;
-  finishMinesSession: (params: {
-    sessionId: string;
-    won: boolean;
-    payoutAmount: number;
-    multiplier: number;
-    details: string;
-    integrityHash: string;
-  }) => Promise<void>;
   recordGameReward: (params: {
     gameCategory: GameCategory;
     scoreEarned: number;
@@ -451,7 +330,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [userAccount, setUserAccount] = useState<UserAccount | null>(null);
   const [privateInfo, setPrivateInfo] = useState<UserPrivateInfo | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
-  const [isOwner, setIsOwner] = useState(false);
   const [mySessions, setMySessions] = useState<GameSession[]>([]);
   const [myConversions, setMyConversions] = useState<PointConversion[]>([]);
   const [myWithdrawals, setMyWithdrawals] = useState<PixWithdrawal[]>([]);
@@ -464,7 +342,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [publicPromoEvents, setPublicPromoEvents] = useState<PromoCode[]>([]);
   const [myPromoRedemptions, setMyPromoRedemptions] = useState<PromoRedemption[]>([]);
   const [myMultiplayerMatches, setMyMultiplayerMatches] = useState<MultiplayerMatchRecord[]>([]);
-  const [myVerificationRequest, setMyVerificationRequest] = useState<VerificationRequest | null>(null);
   const [rawMailboxMessages, setRawMailboxMessages] = useState<MailboxMessage[]>([]);
   const [deletedMailboxIds, setDeletedMailboxIds] = useState<string[]>([]);
   const [readMailboxIds, setReadMailboxIds] = useState<string[]>([]);
@@ -526,7 +403,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setUserAccount(null);
         setPrivateInfo(null);
         setIsAdmin(false);
-        setIsOwner(false);
         setMySessions([]);
         setMyConversions([]);
         setMyWithdrawals([]);
@@ -539,7 +415,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setPublicPromoEvents([]);
         setMyPromoRedemptions([]);
         setMyMultiplayerMatches([]);
-        setMyVerificationRequest(null);
         setRawMailboxMessages([]);
         setDeletedMailboxIds([]);
         setReadMailboxIds([]);
@@ -572,7 +447,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           if (!privSnap.exists()) {
             await setDoc(privateRef, {
               uid: user.uid,
-              email: (user.email || user.providerData?.[0]?.email || 'sem-email@earneasy.app').slice(0, 160),
+              email: (user.email || 'sem-email@earneasy.app').slice(0, 160),
               defaultPixKeyType: 'none',
               defaultPixKey: '',
               deviceFingerprint: fingerprint,
@@ -582,57 +457,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             setPrivateInfo(privSnap.data() as UserPrivateInfo);
           }
 
-          let userData = userSnap.data() as UserAccount;
-          const ownerCheck = isOwnerIdentity(user.email, user.uid) && user.emailVerified;
-
-          // Auto-restore platform Owner if another admin previously altered Owner status/badge
-          if (
-            ownerCheck &&
-            (userData.verifiedBadge !== 'owner' ||
-              userData.status !== 'active' ||
-              !userData.identityVerified)
-          ) {
-            try {
-              const restoredFields = {
-                status: 'active' as const,
-                riskScore: 0,
-                banReason: '',
-                banExplanation: '',
-                bannedBy: '',
-                suspensionUntil: null,
-                identityVerified: true,
-                verifiedBadge: 'owner' as const,
-                verificationStatus: 'approved' as const,
-                verificationNote: '',
-                updatedAt: serverTimestamp(),
-              };
-              await updateDoc(userRef, restoredFields);
-              userData = {
-                ...userData,
-                status: 'active',
-                riskScore: 0,
-                banReason: '',
-                banExplanation: '',
-                bannedBy: '',
-                suspensionUntil: null,
-                identityVerified: true,
-                verifiedBadge: 'owner',
-                verificationStatus: 'approved',
-                verificationNote: '',
-              };
-            } catch {
-              // Ignore recovery write error if rules not yet deployed
-            }
-          }
-
+          const userData = userSnap.data() as UserAccount;
           setUserAccount(userData);
 
-          if (!userData.status || userData.status === 'active') {
+          if (userData.status === 'active') {
             const lbRef = doc(db, 'leaderboard', user.uid);
             const lbSnap = await getDoc(lbRef);
             const lbData = lbSnap.exists() ? lbSnap.data() : null;
-            const expectedBadge =
-              userData.verifiedBadge ?? resolveVerifiedBadgeTier(undefined, userData.identityVerified);
             if (
               !lbData ||
               lbData.brlBalanceCents !== userData.brlBalanceCents ||
@@ -641,18 +472,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               lbData.gamesPlayed !== userData.gamesPlayed ||
               lbData.displayName !== userData.displayName ||
               lbData.photoURL !== userData.photoURL ||
-              lbData.status !== (userData.status || 'active') ||
-              Boolean(lbData.identityVerified) !== Boolean(userData.identityVerified) ||
-              lbData.verifiedBadge !== expectedBadge
+              lbData.status !== userData.status
             ) {
-              await setDoc(lbRef, buildLeaderboardPayload(userData, { uid: userData.uid || user.uid })).catch(() => {});
+              await setDoc(lbRef, {
+                uid: userData.uid,
+                displayName: userData.displayName,
+                photoURL: userData.photoURL,
+                brlBalanceCents: userData.brlBalanceCents,
+                pointsBalance: userData.pointsBalance,
+                lifetimePoints: userData.lifetimePoints,
+                gamesPlayed: userData.gamesPlayed,
+                status: userData.status,
+                updatedAt: serverTimestamp(),
+              });
             }
           }
         }
 
-        // Check Owner & admin status (bootstrapped Owner or /admins/{uid})
-        const ownerCheck = isOwnerIdentity(user.email, user.uid) && user.emailVerified;
-        let adminCheck = ownerCheck;
+        // Check admin status (bootstrapped email or /admins/{uid})
+        let adminCheck = user.email === ADMIN_BOOTSTRAP_EMAIL && user.emailVerified;
         if (!adminCheck) {
           try {
             const adminSnap = await getDoc(doc(db, 'admins', user.uid));
@@ -661,7 +499,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             adminCheck = false;
           }
         }
-        setIsOwner(ownerCheck);
         setIsAdmin(adminCheck);
       } catch (err) {
         setAuthError(err instanceof Error ? err.message : 'Erro ao carregar perfil.');
@@ -729,10 +566,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           banExplanation: '',
           bannedBy: '',
           updatedAt: serverTimestamp(),
-        }).then(() => setDoc(
-          doc(db, 'leaderboard', firebaseUser.uid),
-          buildLeaderboardPayload(userAccount, { status: 'active' })
-        )).catch(() => {});
+        }).then(() => setDoc(doc(db, 'leaderboard', firebaseUser.uid), {
+          uid: userAccount.uid,
+          displayName: userAccount.displayName,
+          photoURL: userAccount.photoURL,
+          brlBalanceCents: userAccount.brlBalanceCents,
+          pointsBalance: userAccount.pointsBalance,
+          lifetimePoints: userAccount.lifetimePoints,
+          gamesPlayed: userAccount.gamesPlayed,
+          status: 'active',
+          updatedAt: serverTimestamp(),
+        })).catch(() => {});
         return;
       }
       // Browser timers have a ~24.8-day maximum; reschedule longer suspensions safely.
@@ -755,12 +599,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (snap.exists()) {
           const uData = snap.data() as UserAccount;
           setUserAccount(uData);
-          if (!uData.status || uData.status === 'active') {
-            const resolvedTier =
-              uData.verifiedBadge ?? resolveVerifiedBadgeTier(undefined, uData.identityVerified);
-            const sig = `${uData.pointsBalance}|${uData.lifetimePoints}|${uData.brlBalanceCents}|${uData.gamesPlayed}|${uData.displayName}|${uData.photoURL}|${uData.status || 'active'}|${Boolean(uData.identityVerified)}|${resolvedTier}`;
+          if (uData.status === 'active') {
+            const sig = `${uData.pointsBalance}|${uData.lifetimePoints}|${uData.brlBalanceCents}|${uData.gamesPlayed}|${uData.displayName}|${uData.photoURL}|${uData.status}`;
             if (lastSyncedLbSigRef.current && lastSyncedLbSigRef.current !== sig) {
-              setDoc(doc(db, 'leaderboard', uid), buildLeaderboardPayload(uData, { uid: uData.uid || uid })).catch(() => {});
+              setDoc(doc(db, 'leaderboard', uid), {
+                uid: uData.uid,
+                displayName: uData.displayName,
+                photoURL: uData.photoURL,
+                brlBalanceCents: uData.brlBalanceCents,
+                pointsBalance: uData.pointsBalance,
+                lifetimePoints: uData.lifetimePoints,
+                gamesPlayed: uData.gamesPlayed,
+                status: uData.status,
+                updatedAt: serverTimestamp(),
+              }).catch(() => {});
             }
             lastSyncedLbSigRef.current = sig;
           }
@@ -1067,16 +919,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     );
 
-    const unsubVerificationRequest = onSnapshot(
-      doc(db, 'verificationRequests', uid),
-      (snap) => {
-        setMyVerificationRequest(snap.exists() ? (snap.data() as VerificationRequest) : null);
-      },
-      () => {
-        setMyVerificationRequest(null);
-      }
-    );
-
     try {
       const saved = window.localStorage.getItem(`earneasy_read_mail_${uid}`);
       if (saved) {
@@ -1125,7 +967,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       unsubDeletedMailbox();
       unsubWithdrawalSettings();
       unsubMultiplayerMatches();
-      unsubVerificationRequest();
     };
   }, [authReady, firebaseUser]);
 
@@ -1220,7 +1061,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!firebaseUser || !userAccount) {
       throw new Error('Faça login para registrar sua pontuação.');
     }
-    if (!isAccountCurrentlyActive(userAccount)) {
+    if (userAccount.status !== 'active') {
       throw new Error('Sua conta está em revisão antifraude ou suspensa. Contate o administrador.');
     }
 
@@ -1238,36 +1079,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const sessionId = generateId('sess');
     const playedDate = getTodayUtcDate();
 
-    const runRewardTx = async (includeReferralCommission: boolean) => {
+    try {
       await runTransaction(db, async (tx) => {
         const userRef = doc(db, 'users', firebaseUser.uid);
         const referralRef = doc(db, 'referrals', firebaseUser.uid);
-        const [snap, refSnap] = await Promise.all([
-          tx.get(userRef),
-          includeReferralCommission ? tx.get(referralRef) : Promise.resolve(null),
-        ]);
+        const [snap, refSnap] = await Promise.all([tx.get(userRef), tx.get(referralRef)]);
         if (!snap.exists()) throw new Error('Conta de usuário não encontrada.');
         const current = snap.data() as UserAccount;
-        if (!isAccountCurrentlyActive(current)) {
+        if (current.status !== 'active') {
           throw new Error('Conta bloqueada para pontuação.');
         }
 
-        const prevPoints =
-          typeof current.pointsBalance === 'number' && Number.isFinite(current.pointsBalance)
-            ? current.pointsBalance
-            : 0;
-        const prevLifetime =
-          typeof current.lifetimePoints === 'number' && Number.isFinite(current.lifetimePoints)
-            ? current.lifetimePoints
-            : 0;
-        const prevGames =
-          typeof current.gamesPlayed === 'number' && Number.isFinite(current.gamesPlayed)
-            ? current.gamesPlayed
-            : 0;
-
         const commission = credited > 0 ? Math.floor((credited * 12) / 100) : 0;
         let activeReferrerData: Referral | null = null;
-        if (includeReferralCommission && refSnap && refSnap.exists() && commission >= 1) {
+        if (refSnap.exists() && commission >= 1) {
           const candidateRef = refSnap.data() as Referral;
           if (candidateRef.referrerUid && candidateRef.referrerUid !== firebaseUser.uid) {
             const refLbSnap = await tx.get(doc(db, 'leaderboard', candidateRef.referrerUid));
@@ -1292,9 +1117,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         });
 
         tx.update(userRef, {
-          pointsBalance: prevPoints + credited,
-          lifetimePoints: prevLifetime + credited,
-          gamesPlayed: prevGames + 1,
+          pointsBalance: current.pointsBalance + credited,
+          lifetimePoints: current.lifetimePoints + credited,
+          gamesPlayed: current.gamesPlayed + 1,
           updatedAt: serverTimestamp(),
         });
 
@@ -1309,28 +1134,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           });
         }
 
-        tx.set(
-          doc(db, 'leaderboard', firebaseUser.uid),
-          buildLeaderboardPayload(current, {
-            uid: current.uid || firebaseUser.uid,
-            pointsBalance: prevPoints + credited,
-            lifetimePoints: prevLifetime + credited,
-            gamesPlayed: prevGames + 1,
-          })
-        );
+        tx.set(doc(db, 'leaderboard', firebaseUser.uid), {
+          uid: firebaseUser.uid,
+          displayName: current.displayName,
+          photoURL: current.photoURL,
+          brlBalanceCents: current.brlBalanceCents,
+          pointsBalance: current.pointsBalance + credited,
+          lifetimePoints: current.lifetimePoints + credited,
+          gamesPlayed: current.gamesPlayed + 1,
+          status: current.status,
+          updatedAt: serverTimestamp(),
+        });
       });
-    };
-
-    try {
-      try {
-        await runRewardTx(true);
-      } catch (firstErr) {
-        if (isFirestoreSdkError(firstErr)) {
-          await runRewardTx(false);
-        } else {
-          throw firstErr;
-        }
-      }
     } catch (error) {
       handleTransactionError(error, OperationType.WRITE, `users/${firebaseUser.uid}`);
     }
@@ -1412,14 +1227,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           createdAt: serverTimestamp(),
         });
 
-        tx.set(
-          doc(db, 'leaderboard', firebaseUser.uid),
-          buildLeaderboardPayload(current, {
-            uid: current.uid || firebaseUser.uid,
-            brlBalanceCents: current.brlBalanceCents + brlCentsCredited,
-            pointsBalance: current.pointsBalance - validPoints,
-          })
-        );
+        tx.set(doc(db, 'leaderboard', firebaseUser.uid), {
+          uid: firebaseUser.uid,
+          displayName: current.displayName,
+          photoURL: current.photoURL,
+          brlBalanceCents: current.brlBalanceCents + brlCentsCredited,
+          pointsBalance: current.pointsBalance - validPoints,
+          lifetimePoints: current.lifetimePoints,
+          gamesPlayed: current.gamesPlayed,
+          status: current.status,
+          updatedAt: serverTimestamp(),
+        });
       });
     } catch (error) {
       handleTransactionError(error, OperationType.WRITE, `conversions/${conversionId}`);
@@ -1441,7 +1259,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const isFirstWithdrawalEligible = Boolean(
     userAccount &&
-      (userAccount.totalWithdrawnCents || 0) === 0 &&
+      userAccount.totalWithdrawnCents === 0 &&
       !userAccount.firstWithdrawalUsed &&
       !myWithdrawals.some((w) => w.status !== 'rejected')
   );
@@ -1541,7 +1359,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           throw new Error('Sua conta está bloqueada para saques no momento.');
         }
 
-        const firstEligibleNow = (current.totalWithdrawnCents || 0) === 0 && !current.firstWithdrawalUsed;
+        const firstEligibleNow = current.totalWithdrawnCents === 0 && !current.firstWithdrawalUsed;
         const requiredMinNow = firstEligibleNow
           ? withdrawalSettings.firstWithdrawalMinCents
           : withdrawalSettings.standardWithdrawalMinCents;
@@ -1601,13 +1419,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           });
         }
 
-        tx.set(
-          doc(db, 'leaderboard', firebaseUser.uid),
-          buildLeaderboardPayload(current, {
-            uid: current.uid || firebaseUser.uid,
-            brlBalanceCents: current.brlBalanceCents - params.amountCents,
-          })
-        );
+        tx.set(doc(db, 'leaderboard', firebaseUser.uid), {
+          uid: firebaseUser.uid,
+          displayName: current.displayName,
+          photoURL: current.photoURL,
+          brlBalanceCents: current.brlBalanceCents - params.amountCents,
+          pointsBalance: current.pointsBalance,
+          lifetimePoints: current.lifetimePoints,
+          gamesPlayed: current.gamesPlayed,
+          status: current.status,
+          updatedAt: serverTimestamp(),
+        });
       });
     } catch (error) {
       const msg = error instanceof Error ? error.message : 'Falha na transação de saque Pix.';
@@ -1692,16 +1514,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           status: 'suspended',
           riskScore: 100,
           gamesPlayed: 0,
-          identityVerified: false,
-          verifiedBadge: 'none',
-          verificationStatus: 'none',
-          verificationNote: '',
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         });
         batch.set(privateRef, {
           uid: firebaseUser.uid,
-          email: (firebaseUser.email || firebaseUser.providerData?.[0]?.email || 'sem-email@earneasy.app').slice(0, 160),
+          email: (firebaseUser.email || 'sem-email@earneasy.app').slice(0, 160),
           defaultPixKeyType: 'none',
           defaultPixKey: '',
           deviceFingerprint: fingerprint,
@@ -1724,89 +1542,67 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         };
       }
 
-      const commitActiveSignup = async (referrerUid: string | null) => {
-        const activeBatch = writeBatch(db);
-        activeBatch.set(userRef, {
-          uid: firebaseUser.uid,
-          displayName: cleanName,
-          photoURL: cleanPhoto,
-          pointsBalance: 0,
-          lifetimePoints: 0,
-          brlBalanceCents: 0,
-          totalWithdrawnCents: 0,
-          lastConversionDate: '',
-          status: 'active',
-          riskScore: 0,
-          gamesPlayed: 0,
-          identityVerified: false,
-          verifiedBadge: 'none',
-          verificationStatus: 'none',
-          verificationNote: '',
+      batch.set(userRef, {
+        uid: firebaseUser.uid,
+        displayName: cleanName,
+        photoURL: cleanPhoto,
+        pointsBalance: 0,
+        lifetimePoints: 0,
+        brlBalanceCents: 0,
+        totalWithdrawnCents: 0,
+        lastConversionDate: '',
+        status: 'active',
+        riskScore: 0,
+        gamesPlayed: 0,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      batch.set(privateRef, {
+        uid: firebaseUser.uid,
+        email: (firebaseUser.email || 'sem-email@earneasy.app').slice(0, 160),
+        defaultPixKeyType: 'none',
+        defaultPixKey: '',
+        deviceFingerprint: fingerprint,
+        updatedAt: serverTimestamp(),
+      });
+      batch.set(doc(db, 'leaderboard', firebaseUser.uid), {
+        uid: firebaseUser.uid,
+        displayName: cleanName,
+        photoURL: cleanPhoto,
+        brlBalanceCents: 0,
+        pointsBalance: 0,
+        lifetimePoints: 0,
+        gamesPlayed: 0,
+        status: 'active',
+        updatedAt: serverTimestamp(),
+      });
+
+      if (validReferrerUid) {
+        batch.set(doc(db, 'referrals', firebaseUser.uid), {
+          referralId: firebaseUser.uid,
+          referrerUid: validReferrerUid,
+          invitedUid: firebaseUser.uid,
+          invitedDisplayName: cleanName,
+          signupBonusPoints: REFERRAL_SIGNUP_BONUS_POINTS,
+          commissionRatePct: 12,
+          totalCommissionPointsEarned: 0,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         });
-        activeBatch.set(privateRef, {
-          uid: firebaseUser.uid,
-          email: (firebaseUser.email || firebaseUser.providerData?.[0]?.email || 'sem-email@earneasy.app').slice(0, 160),
-          defaultPixKeyType: 'none',
-          defaultPixKey: '',
-          deviceFingerprint: fingerprint,
+        batch.update(doc(db, 'users', validReferrerUid), {
+          pointsBalance: increment(REFERRAL_SIGNUP_BONUS_POINTS),
           updatedAt: serverTimestamp(),
         });
-        activeBatch.set(doc(db, 'leaderboard', firebaseUser.uid), {
-          uid: firebaseUser.uid,
-          displayName: cleanName,
-          photoURL: cleanPhoto,
-          brlBalanceCents: 0,
-          pointsBalance: 0,
-          lifetimePoints: 0,
-          gamesPlayed: 0,
-          status: 'active',
-          identityVerified: false,
-          verifiedBadge: 'none',
-          updatedAt: serverTimestamp(),
-        });
-
-        if (referrerUid) {
-          activeBatch.set(doc(db, 'referrals', firebaseUser.uid), {
-            referralId: firebaseUser.uid,
-            referrerUid,
-            invitedUid: firebaseUser.uid,
-            invitedDisplayName: cleanName,
-            signupBonusPoints: REFERRAL_SIGNUP_BONUS_POINTS,
-            commissionRatePct: 12,
-            totalCommissionPointsEarned: 0,
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-          });
-          activeBatch.update(doc(db, 'users', referrerUid), {
-            pointsBalance: increment(REFERRAL_SIGNUP_BONUS_POINTS),
-            updatedAt: serverTimestamp(),
-          });
-        }
-
-        await activeBatch.commit();
-      };
-
-      let appliedReferrerUid: string | null = validReferrerUid;
-      try {
-        await commitActiveSignup(appliedReferrerUid);
-      } catch (firstErr) {
-        if (appliedReferrerUid && isFirestoreSdkError(firstErr)) {
-          appliedReferrerUid = null;
-          await commitActiveSignup(null);
-        } else {
-          throw firstErr;
-        }
       }
 
+      await batch.commit();
       try {
         window.localStorage.removeItem('earneasy_ref_uid');
       } catch {
         // Ignore storage error
       }
 
-      if (appliedReferrerUid && firebaseUser.email) {
+      if (validReferrerUid && firebaseUser.email) {
         const origin =
           typeof window !== 'undefined' ? window.location.origin : 'https://earneasy.app';
         void dispatchEmailNotification({
@@ -1815,7 +1611,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           eventType: 'referral_welcome',
           subject: 'Convite vinculado com sucesso no Earn Easy!',
           summary: `Sua conta (${cleanName}) foi criada através de um link de convite oficial. Você já pode jogar, fazer check-ins e converter seus pontos em Pix — e quem te convidou acabou de receber +${REFERRAL_SIGNUP_BONUS_POINTS} pontos!`,
-          referenceId: appliedReferrerUid,
+          referenceId: validReferrerUid,
           inviteCode: firebaseUser.uid,
           inviteLink: `${origin}/?ref=${firebaseUser.uid}`,
           bonusPoints: REFERRAL_SIGNUP_BONUS_POINTS,
@@ -1823,7 +1619,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         });
       }
 
-      return { status: 'active', referralApplied: Boolean(appliedReferrerUid) };
+      return { status: 'active', referralApplied: Boolean(validReferrerUid) };
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, `users/${firebaseUser.uid}`);
       throw error;
@@ -1856,10 +1652,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           riskScore: 100,
           updatedAt: serverTimestamp(),
         });
-        batch.set(
-          doc(db, 'leaderboard', firebaseUser.uid),
-          buildLeaderboardPayload(userAccount, { status: 'suspended' })
-        );
+        batch.set(doc(db, 'leaderboard', firebaseUser.uid), {
+          uid: firebaseUser.uid,
+          displayName: userAccount.displayName,
+          photoURL: userAccount.photoURL,
+          brlBalanceCents: userAccount.brlBalanceCents,
+          pointsBalance: userAccount.pointsBalance,
+          lifetimePoints: userAccount.lifetimePoints,
+          gamesPlayed: userAccount.gamesPlayed,
+          status: 'suspended',
+          updatedAt: serverTimestamp(),
+        });
         batch.set(doc(db, 'fraudLogs', logId), {
           logId,
           userId: firebaseUser.uid,
@@ -1883,16 +1686,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         photoURL: cleanPhoto,
         updatedAt: serverTimestamp(),
       });
-      if (!userAccount.status || userAccount.status === 'active') {
-        batch.set(
-          doc(db, 'leaderboard', firebaseUser.uid),
-          buildLeaderboardPayload(userAccount, {
-            uid: userAccount.uid || firebaseUser.uid,
-            displayName: cleanName,
-            photoURL: cleanPhoto,
-            status: 'active',
-          })
-        );
+      if (userAccount.status === 'active') {
+        batch.set(doc(db, 'leaderboard', firebaseUser.uid), {
+          uid: firebaseUser.uid,
+          displayName: cleanName,
+          photoURL: cleanPhoto,
+          brlBalanceCents: userAccount.brlBalanceCents,
+          pointsBalance: userAccount.pointsBalance,
+          lifetimePoints: userAccount.lifetimePoints,
+          gamesPlayed: userAccount.gamesPlayed,
+          status: userAccount.status,
+          updatedAt: serverTimestamp(),
+        });
       }
       await batch.commit();
     } catch (error) {
@@ -1904,7 +1709,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!firebaseUser || !userAccount) {
       throw new Error('Faça login para coletar seu check-in diário.');
     }
-    if (!isAccountCurrentlyActive(userAccount)) {
+    if (userAccount.status !== 'active') {
       throw new Error('Sua conta está em revisão antifraude.');
     }
 
@@ -1938,7 +1743,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     let brlBonusCents = 0;
     let streakBroken = false;
 
-    const runCheckinTx = async (includeReferralCommission: boolean) => {
+    try {
       await runTransaction(db, async (tx) => {
         const userRef = doc(db, 'users', firebaseUser.uid);
         const checkinRef = doc(db, 'dailyCheckins', checkinId);
@@ -1948,7 +1753,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           tx.get(userRef),
           tx.get(checkinRef),
           tx.get(yesterdayRef),
-          includeReferralCommission ? tx.get(referralRef) : Promise.resolve(null),
+          tx.get(referralRef),
         ]);
 
         if (!userSnap.exists()) throw new Error('Conta de usuário não encontrada.');
@@ -1957,26 +1762,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
 
         const current = userSnap.data() as UserAccount;
-        if (!isAccountCurrentlyActive(current)) {
+        if (current.status !== 'active') {
           throw new Error('Sua conta está em revisão antifraude.');
         }
 
-        const prevPoints =
-          typeof current.pointsBalance === 'number' && Number.isFinite(current.pointsBalance)
-            ? current.pointsBalance
-            : 0;
-        const prevLifetime =
-          typeof current.lifetimePoints === 'number' && Number.isFinite(current.lifetimePoints)
-            ? current.lifetimePoints
-            : 0;
-        const prevBrl =
-          typeof current.brlBalanceCents === 'number' && Number.isFinite(current.brlBalanceCents)
-            ? current.brlBalanceCents
-            : 0;
-
         const commission = Math.floor((pointsAwarded * 12) / 100);
         let activeReferrerData: Referral | null = null;
-        if (includeReferralCommission && refSnap && refSnap.exists() && commission >= 1) {
+        if (refSnap.exists() && commission >= 1) {
           const candidateRef = refSnap.data() as Referral;
           if (candidateRef.referrerUid && candidateRef.referrerUid !== firebaseUser.uid) {
             const refLbSnap = await tx.get(doc(db, 'leaderboard', candidateRef.referrerUid));
@@ -2013,9 +1805,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         });
 
         tx.update(userRef, {
-          pointsBalance: prevPoints + pointsAwarded,
-          lifetimePoints: prevLifetime + pointsAwarded,
-          brlBalanceCents: prevBrl + brlBonusCents,
+          pointsBalance: current.pointsBalance + pointsAwarded,
+          lifetimePoints: current.lifetimePoints + pointsAwarded,
+          brlBalanceCents: current.brlBalanceCents + brlBonusCents,
           updatedAt: serverTimestamp(),
         });
 
@@ -2030,28 +1822,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           });
         }
 
-        tx.set(
-          doc(db, 'leaderboard', firebaseUser.uid),
-          buildLeaderboardPayload(current, {
-            uid: current.uid || firebaseUser.uid,
-            brlBalanceCents: prevBrl + brlBonusCents,
-            pointsBalance: prevPoints + pointsAwarded,
-            lifetimePoints: prevLifetime + pointsAwarded,
-          })
-        );
+        tx.set(doc(db, 'leaderboard', firebaseUser.uid), {
+          uid: firebaseUser.uid,
+          displayName: current.displayName,
+          photoURL: current.photoURL,
+          brlBalanceCents: current.brlBalanceCents + brlBonusCents,
+          pointsBalance: current.pointsBalance + pointsAwarded,
+          lifetimePoints: current.lifetimePoints + pointsAwarded,
+          gamesPlayed: current.gamesPlayed,
+          status: current.status,
+          updatedAt: serverTimestamp(),
+        });
       });
-    };
-
-    try {
-      try {
-        await runCheckinTx(true);
-      } catch (firstErr) {
-        if (isFirestoreSdkError(firstErr)) {
-          await runCheckinTx(false);
-        } else {
-          throw firstErr;
-        }
-      }
     } catch (error) {
       handleTransactionError(error, OperationType.WRITE, `dailyCheckins/${checkinId}`);
     }
@@ -2115,15 +1897,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           throw new Error('Sua conta está suspensa.');
         }
 
-        const rawLifetime =
-          typeof current.lifetimePoints === 'number' && Number.isFinite(current.lifetimePoints)
-            ? current.lifetimePoints
-            : 0;
-        const rawGames =
-          typeof current.gamesPlayed === 'number' && Number.isFinite(current.gamesPlayed)
-            ? current.gamesPlayed
-            : 0;
-        const currentXp = Math.max(0, Math.floor(rawLifetime)) + Math.max(0, Math.floor(rawGames)) * 25;
+        const currentXp = Math.max(0, Math.round(current.lifetimePoints)) + Math.max(0, Math.round(current.gamesPlayed)) * 25;
         if (currentXp < tier.minXp) {
           throw new Error(`Você precisa de ${tier.minXp.toLocaleString('pt-BR')} XP para desbloquear o Nível ${level}.`);
         }
@@ -2142,13 +1916,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           updatedAt: serverTimestamp(),
         });
 
-        tx.set(
-          doc(db, 'leaderboard', firebaseUser.uid),
-          buildLeaderboardPayload(current, {
-            uid: current.uid || firebaseUser.uid,
-            pointsBalance: current.pointsBalance + tier.rewardPoints,
-          })
-        );
+        tx.set(doc(db, 'leaderboard', firebaseUser.uid), {
+          uid: firebaseUser.uid,
+          displayName: current.displayName,
+          photoURL: current.photoURL,
+          brlBalanceCents: current.brlBalanceCents,
+          pointsBalance: current.pointsBalance + tier.rewardPoints,
+          lifetimePoints: current.lifetimePoints,
+          gamesPlayed: current.gamesPlayed,
+          status: current.status,
+          updatedAt: serverTimestamp(),
+        });
       });
     } catch (error) {
       handleTransactionError(error, OperationType.WRITE, `levelRewards/${rewardId}`);
@@ -2242,13 +2020,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           updatedAt: serverTimestamp(),
         });
 
-        tx.set(
-          doc(db, 'leaderboard', firebaseUser.uid),
-          buildLeaderboardPayload(current, {
-            uid: current.uid || firebaseUser.uid,
-            pointsBalance: current.pointsBalance + promo.pointsValue,
-          })
-        );
+        tx.set(doc(db, 'leaderboard', firebaseUser.uid), {
+          uid: firebaseUser.uid,
+          displayName: current.displayName,
+          photoURL: current.photoURL,
+          brlBalanceCents: current.brlBalanceCents,
+          pointsBalance: current.pointsBalance + promo.pointsValue,
+          lifetimePoints: current.lifetimePoints,
+          gamesPlayed: current.gamesPlayed,
+          status: current.status,
+          updatedAt: serverTimestamp(),
+        });
       });
     } catch (error) {
       handleTransactionError(error, OperationType.WRITE, `promoRedemptions/${redemptionId}`);
@@ -2611,22 +2393,29 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             updatedAt: serverTimestamp(),
           });
 
-          tx.set(
-            doc(db, 'leaderboard', winnerData.uid),
-            buildLeaderboardPayload(winnerData, {
-              pointsBalance: nextWinnerPoints,
-              lifetimePoints: nextWinnerLifetime,
-              gamesPlayed: nextWinnerGames,
-            })
-          );
+          tx.set(doc(db, 'leaderboard', winnerData.uid), {
+            uid: winnerData.uid,
+            displayName: winnerData.displayName,
+            photoURL: winnerData.photoURL,
+            brlBalanceCents: winnerData.brlBalanceCents,
+            pointsBalance: nextWinnerPoints,
+            lifetimePoints: nextWinnerLifetime,
+            gamesPlayed: nextWinnerGames,
+            status: winnerData.status,
+            updatedAt: serverTimestamp(),
+          });
 
-          tx.set(
-            doc(db, 'leaderboard', loserData.uid),
-            buildLeaderboardPayload(loserData, {
-              pointsBalance: nextLoserPoints,
-              gamesPlayed: nextLoserGames,
-            })
-          );
+          tx.set(doc(db, 'leaderboard', loserData.uid), {
+            uid: loserData.uid,
+            displayName: loserData.displayName,
+            photoURL: loserData.photoURL,
+            brlBalanceCents: loserData.brlBalanceCents,
+            pointsBalance: nextLoserPoints,
+            lifetimePoints: loserData.lifetimePoints,
+            gamesPlayed: nextLoserGames,
+            status: loserData.status,
+            updatedAt: serverTimestamp(),
+          });
         }
 
         return {
@@ -2636,510 +2425,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       });
     } catch (error) {
       handleTransactionError(error, OperationType.WRITE, `multiplayerMatches/${settlement.matchId}`);
-    }
-  };
-
-  const submitVerificationRequest = async (params: {
-    fullName: string;
-    cpf: string;
-    birthDate: string;
-    documentType: VerificationDocumentType;
-    documentNumber: string;
-  }) => {
-    if (!firebaseUser || !userAccount) {
-      throw new Error('Faça login para solicitar o Verificado Azul.');
-    }
-    if (userAccount.status && userAccount.status !== 'active') {
-      throw new Error('Sua conta precisa estar ativa para solicitar verificação.');
-    }
-    if (resolveVerifiedBadgeTier(userAccount.verifiedBadge, userAccount.identityVerified) !== 'none') {
-      throw new Error('Seu perfil já possui o selo Verificado ativo!');
-    }
-
-    const cleanFullName = params.fullName.trim().slice(0, 120);
-    if (cleanFullName.length < 5) {
-      throw new Error('Informe seu nome completo (mínimo 5 caracteres).');
-    }
-    if (!isValidCPF(params.cpf)) {
-      throw new Error('O CPF informado é inválido. Confira os dígitos e tente novamente.');
-    }
-    const formattedCpf = formatCpfMask(onlyDigits(params.cpf));
-    if (!isValidBirthDateStr(params.birthDate)) {
-      throw new Error('Informe uma data de nascimento válida.');
-    }
-    const cleanDocNumber = params.documentNumber.trim().slice(0, 32);
-    if (cleanDocNumber.length < 4) {
-      throw new Error('Informe o número do documento com pelo menos 4 caracteres.');
-    }
-
-    try {
-      const batch = writeBatch(db);
-      batch.set(doc(db, 'verificationRequests', firebaseUser.uid), {
-        uid: firebaseUser.uid,
-        displayName: (userAccount.displayName || 'Jogador').trim().slice(0, 80) || 'Jogador',
-        fullName: cleanFullName,
-        cpf: formattedCpf,
-        birthDate: params.birthDate,
-        documentType: params.documentType,
-        documentNumber: cleanDocNumber,
-        status: 'pending',
-        rejectionReason: '',
-        reviewedBy: '',
-        submittedAt: serverTimestamp(),
-        reviewedAt: null,
-      });
-      batch.update(doc(db, 'users', firebaseUser.uid), {
-        verificationStatus: 'pending',
-        verificationNote: '',
-        updatedAt: serverTimestamp(),
-      });
-      await batch.commit();
-    } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, `verificationRequests/${firebaseUser.uid}`);
-      throw error;
-    }
-  };
-
-  const approveVerificationRequest = async (targetUid: string) => {
-    if (!firebaseUser || !isAdmin) {
-      throw new Error('Somente administradores podem aprovar o Verificado Azul.');
-    }
-
-    const reviewerLabel = (firebaseUser.email || firebaseUser.uid).slice(0, 160);
-    const vrRef = doc(db, 'verificationRequests', targetUid);
-    const userRef = doc(db, 'users', targetUid);
-    const lbRef = doc(db, 'leaderboard', targetUid);
-
-    try {
-      await runTransaction(db, async (tx) => {
-        const [vrSnap, userSnap] = await Promise.all([tx.get(vrRef), tx.get(userRef)]);
-        if (!vrSnap.exists()) {
-          throw new Error('Solicitação de Verificado Azul não encontrada.');
-        }
-        if (!userSnap.exists()) {
-          throw new Error('Usuário alvo não encontrado.');
-        }
-
-        const current = userSnap.data() as UserAccount;
-        const nextBadge: VerifiedBadgeTier = current.verifiedBadge === 'owner' ? 'owner' : 'blue';
-
-        tx.update(vrRef, {
-          status: 'approved',
-          rejectionReason: '',
-          reviewedBy: reviewerLabel,
-          reviewedAt: serverTimestamp(),
-        });
-
-        tx.update(userRef, {
-          identityVerified: true,
-          verifiedBadge: nextBadge,
-          verificationStatus: 'approved',
-          verificationNote: '',
-          verifiedAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        });
-
-        if (!current.status || current.status === 'active') {
-          tx.set(
-            lbRef,
-            buildLeaderboardPayload(current, {
-              uid: current.uid || targetUid,
-              identityVerified: true,
-              verifiedBadge: nextBadge,
-            })
-          );
-        }
-      });
-    } catch (error) {
-      handleTransactionError(error, OperationType.WRITE, `verificationRequests/${targetUid}`);
-    }
-  };
-
-  const rejectVerificationRequest = async (targetUid: string, reason: string) => {
-    if (!firebaseUser || !isAdmin) {
-      throw new Error('Somente administradores podem recusar solicitações.');
-    }
-    const cleanReason = reason.trim().slice(0, 240);
-    if (cleanReason.length < 3) {
-      throw new Error('Informe o motivo da recusa com pelo menos 3 caracteres.');
-    }
-
-    const reviewerLabel = (firebaseUser.email || firebaseUser.uid).slice(0, 160);
-    try {
-      const batch = writeBatch(db);
-      batch.update(doc(db, 'verificationRequests', targetUid), {
-        status: 'rejected',
-        rejectionReason: cleanReason,
-        reviewedBy: reviewerLabel,
-        reviewedAt: serverTimestamp(),
-      });
-      batch.update(doc(db, 'users', targetUid), {
-        verificationStatus: 'rejected',
-        verificationNote: cleanReason,
-        updatedAt: serverTimestamp(),
-      });
-      await batch.commit();
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `verificationRequests/${targetUid}`);
-      throw error;
-    }
-  };
-
-  const setUserBlueVerified = async (targetUid: string, granted: boolean) => {
-    if (!firebaseUser || !isAdmin) {
-      throw new Error('Somente administradores podem gerenciar selos de verificação.');
-    }
-
-    const reviewerLabel = (firebaseUser.email || firebaseUser.uid).slice(0, 160);
-    const userRef = doc(db, 'users', targetUid);
-    const lbRef = doc(db, 'leaderboard', targetUid);
-    const vrRef = doc(db, 'verificationRequests', targetUid);
-
-    try {
-      await runTransaction(db, async (tx) => {
-        const [userSnap, vrSnap] = await Promise.all([tx.get(userRef), tx.get(vrRef)]);
-        if (!userSnap.exists()) {
-          throw new Error('Usuário alvo não encontrado.');
-        }
-
-        const current = userSnap.data() as UserAccount;
-        if (current.verifiedBadge === 'owner' || isOwnerIdentity(null, targetUid)) {
-          throw new Error('O selo oficial do Dono é exclusivo e protegido.');
-        }
-
-        const nextBadge: VerifiedBadgeTier = granted ? 'blue' : 'none';
-        tx.update(userRef, {
-          identityVerified: granted,
-          verifiedBadge: nextBadge,
-          verificationStatus: granted ? 'approved' : 'none',
-          verificationNote: '',
-          verifiedAt: granted ? serverTimestamp() : null,
-          updatedAt: serverTimestamp(),
-        });
-
-        if (!current.status || current.status === 'active') {
-          tx.set(
-            lbRef,
-            buildLeaderboardPayload(current, {
-              uid: current.uid || targetUid,
-              identityVerified: granted,
-              verifiedBadge: nextBadge,
-            })
-          );
-        }
-
-        if (vrSnap.exists() && granted) {
-          tx.update(vrRef, {
-            status: 'approved',
-            rejectionReason: '',
-            reviewedBy: reviewerLabel,
-            reviewedAt: serverTimestamp(),
-          });
-        }
-      });
-    } catch (error) {
-      handleTransactionError(error, OperationType.UPDATE, `users/${targetUid}`);
-    }
-  };
-
-  const settleDoubleRound = async (params: {
-    currency: CasinoCurrency;
-    stakeAmount: number;
-    choice: 'red' | 'black' | 'white';
-  }) => {
-    if (!firebaseUser || !userAccount) {
-      throw new Error('Faça login para jogar Double.');
-    }
-    if (!isAccountCurrentlyActive(userAccount)) {
-      throw new Error('Sua conta precisa estar ativa para apostar no cassino.');
-    }
-
-    const res = await fetch('/api/casino/double/roll', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        userId: firebaseUser.uid,
-        currency: params.currency,
-        stakeAmount: params.stakeAmount,
-        choice: params.choice,
-      }),
-    });
-    const rollData = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      throw new Error(rollData?.error || 'Não foi possível sortear a rodada do Double.');
-    }
-
-    const sessionId = String(rollData.sessionId || generateId('dbl'));
-    const stake = Number(rollData.stakeAmount) || params.stakeAmount;
-    const payout = Number(rollData.payoutAmount) || 0;
-    const multiplier = Number(rollData.multiplier) || 0;
-    const won = Boolean(rollData.won);
-    const winningColor = (rollData.winningColor || 'red') as 'red' | 'black' | 'white';
-    const slot = Number(rollData.slot) || 0;
-    const currency: CasinoCurrency = rollData.currency === 'brl' ? 'brl' : 'points';
-    const integrityHash = String(rollData.integrityHash || 'double_server_hash');
-
-    try {
-      await runTransaction(db, async (tx) => {
-        const userRef = doc(db, 'users', firebaseUser.uid);
-        const sessionRef = doc(db, 'casinoSessions', sessionId);
-        const lbRef = doc(db, 'leaderboard', firebaseUser.uid);
-        const userSnap = await tx.get(userRef);
-        if (!userSnap.exists()) throw new Error('Conta de usuário não encontrada.');
-        const current = userSnap.data() as UserAccount;
-        if (!isAccountCurrentlyActive(current)) {
-          throw new Error('Sua conta precisa estar ativa para continuar.');
-        }
-
-        const prevPoints =
-          typeof current.pointsBalance === 'number' && Number.isFinite(current.pointsBalance)
-            ? current.pointsBalance
-            : 0;
-        const prevBrl =
-          typeof current.brlBalanceCents === 'number' && Number.isFinite(current.brlBalanceCents)
-            ? current.brlBalanceCents
-            : 0;
-
-        const available = currency === 'points' ? prevPoints : prevBrl;
-        if (available < stake) {
-          throw new Error('Saldo insuficiente para concluir esta aposta no Double.');
-        }
-
-        const nextPoints = currency === 'points' ? prevPoints - stake + payout : prevPoints;
-        const nextBrl = currency === 'brl' ? prevBrl - stake + payout : prevBrl;
-
-        tx.set(sessionRef, {
-          sessionId,
-          userId: firebaseUser.uid,
-          gameType: 'double',
-          currency,
-          stakeAmount: stake,
-          payoutAmount: payout,
-          multiplier,
-          status: won ? 'won' : 'lost',
-          details: `Double · Escolha ${params.choice} · Casa ${slot} (${winningColor})`.slice(0, 200),
-          integrityHash: integrityHash.slice(0, 128),
-          createdAt: serverTimestamp(),
-          settledAt: serverTimestamp(),
-        });
-
-        tx.update(userRef, {
-          ...(currency === 'points' ? { pointsBalance: nextPoints } : { brlBalanceCents: nextBrl }),
-          lastCasinoSessionId: sessionId,
-          updatedAt: serverTimestamp(),
-        });
-
-        tx.set(
-          lbRef,
-          buildLeaderboardPayload(current, {
-            uid: current.uid || firebaseUser.uid,
-            pointsBalance: nextPoints,
-            brlBalanceCents: nextBrl,
-          })
-        );
-      });
-    } catch (error) {
-      handleTransactionError(error, OperationType.WRITE, `casinoSessions/${sessionId}`);
-    }
-
-    return {
-      sessionId,
-      slot,
-      winningColor,
-      won,
-      payoutAmount: payout,
-      stakeAmount: stake,
-      currency,
-      multiplier,
-      netDelta: payout - stake,
-    };
-  };
-
-  const startMinesSession = async (params: {
-    currency: CasinoCurrency;
-    stakeAmount: number;
-    minesCount: number;
-  }) => {
-    if (!firebaseUser || !userAccount) {
-      throw new Error('Faça login para jogar Mines.');
-    }
-    if (!isAccountCurrentlyActive(userAccount)) {
-      throw new Error('Sua conta precisa estar ativa para apostar no cassino.');
-    }
-
-    const sessionId = generateId('mns');
-    const res = await fetch('/api/casino/mines/deal', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        userId: firebaseUser.uid,
-        currency: params.currency,
-        stakeAmount: params.stakeAmount,
-        minesCount: params.minesCount,
-        sessionId,
-      }),
-    });
-    const dealData = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      throw new Error(dealData?.error || 'Não foi possível iniciar a partida de Mines.');
-    }
-
-    const confirmedSessionId = String(dealData.sessionId || sessionId);
-    const currency: CasinoCurrency = dealData.currency === 'brl' ? 'brl' : 'points';
-    const stake = Number(dealData.stakeAmount) || params.stakeAmount;
-    const minesCount = Number(dealData.minesCount) || params.minesCount;
-    const nextMultiplier = Number(dealData.nextMultiplier) || 1;
-    const integrityHash = String(dealData.integrityHash || 'mines_deal_hash');
-
-    try {
-      await runTransaction(db, async (tx) => {
-        const userRef = doc(db, 'users', firebaseUser.uid);
-        const sessionRef = doc(db, 'casinoSessions', confirmedSessionId);
-        const lbRef = doc(db, 'leaderboard', firebaseUser.uid);
-        const userSnap = await tx.get(userRef);
-        if (!userSnap.exists()) throw new Error('Conta de usuário não encontrada.');
-        const current = userSnap.data() as UserAccount;
-        if (!isAccountCurrentlyActive(current)) {
-          throw new Error('Sua conta precisa estar ativa para iniciar a rodada.');
-        }
-
-        const prevPoints =
-          typeof current.pointsBalance === 'number' && Number.isFinite(current.pointsBalance)
-            ? current.pointsBalance
-            : 0;
-        const prevBrl =
-          typeof current.brlBalanceCents === 'number' && Number.isFinite(current.brlBalanceCents)
-            ? current.brlBalanceCents
-            : 0;
-
-        const available = currency === 'points' ? prevPoints : prevBrl;
-        if (available < stake) {
-          throw new Error('Saldo insuficiente para iniciar esta partida de Mines.');
-        }
-
-        const nextPoints = currency === 'points' ? prevPoints - stake : prevPoints;
-        const nextBrl = currency === 'brl' ? prevBrl - stake : prevBrl;
-
-        tx.set(sessionRef, {
-          sessionId: confirmedSessionId,
-          userId: firebaseUser.uid,
-          gameType: 'mines',
-          currency,
-          stakeAmount: stake,
-          payoutAmount: 0,
-          multiplier: 1,
-          status: 'active',
-          details: `Mines · ${minesCount} bombas em andamento`.slice(0, 200),
-          integrityHash: integrityHash.slice(0, 128),
-          createdAt: serverTimestamp(),
-          settledAt: null,
-        });
-
-        tx.update(userRef, {
-          ...(currency === 'points' ? { pointsBalance: nextPoints } : { brlBalanceCents: nextBrl }),
-          lastCasinoSessionId: confirmedSessionId,
-          updatedAt: serverTimestamp(),
-        });
-
-        tx.set(
-          lbRef,
-          buildLeaderboardPayload(current, {
-            uid: current.uid || firebaseUser.uid,
-            pointsBalance: nextPoints,
-            brlBalanceCents: nextBrl,
-          })
-        );
-      });
-    } catch (error) {
-      handleTransactionError(error, OperationType.WRITE, `casinoSessions/${confirmedSessionId}`);
-    }
-
-    return {
-      sessionId: confirmedSessionId,
-      currency,
-      stakeAmount: stake,
-      minesCount,
-      nextMultiplier,
-    };
-  };
-
-  const finishMinesSession = async (params: {
-    sessionId: string;
-    won: boolean;
-    payoutAmount: number;
-    multiplier: number;
-    details: string;
-    integrityHash: string;
-  }) => {
-    if (!firebaseUser || !userAccount) {
-      throw new Error('Faça login para encerrar a partida de Mines.');
-    }
-
-    try {
-      await runTransaction(db, async (tx) => {
-        const sessionRef = doc(db, 'casinoSessions', params.sessionId);
-        const userRef = doc(db, 'users', firebaseUser.uid);
-        const lbRef = doc(db, 'leaderboard', firebaseUser.uid);
-
-        const [sessionSnap, userSnap] = await Promise.all([tx.get(sessionRef), tx.get(userRef)]);
-        if (!sessionSnap.exists()) throw new Error('Sessão de Mines não encontrada.');
-        if (!userSnap.exists()) throw new Error('Conta de usuário não encontrada.');
-
-        const sessionData = sessionSnap.data() as CasinoSession;
-        if (sessionData.userId !== firebaseUser.uid) {
-          throw new Error('Sessão pertence a outro jogador.');
-        }
-        if (sessionData.status !== 'active') {
-          return;
-        }
-
-        const current = userSnap.data() as UserAccount;
-        const maxPossiblePayout = sessionData.stakeAmount * 50;
-        const creditAmount = params.won
-          ? Math.min(maxPossiblePayout, Math.max(0, Math.floor(params.payoutAmount)))
-          : 0;
-
-        tx.update(sessionRef, {
-          status: params.won ? 'won' : 'lost',
-          payoutAmount: creditAmount,
-          multiplier: params.won ? Math.min(50, Math.max(0, Number(params.multiplier) || 1)) : 0,
-          details: params.details.slice(0, 200),
-          integrityHash: params.integrityHash.slice(0, 128),
-          settledAt: serverTimestamp(),
-        });
-
-        if (creditAmount > 0) {
-          const prevPoints =
-            typeof current.pointsBalance === 'number' && Number.isFinite(current.pointsBalance)
-              ? current.pointsBalance
-              : 0;
-          const prevBrl =
-            typeof current.brlBalanceCents === 'number' && Number.isFinite(current.brlBalanceCents)
-              ? current.brlBalanceCents
-              : 0;
-          const nextPoints =
-            sessionData.currency === 'points' ? prevPoints + creditAmount : prevPoints;
-          const nextBrl = sessionData.currency === 'brl' ? prevBrl + creditAmount : prevBrl;
-
-          tx.update(userRef, {
-            ...(sessionData.currency === 'points'
-              ? { pointsBalance: nextPoints }
-              : { brlBalanceCents: nextBrl }),
-            updatedAt: serverTimestamp(),
-          });
-
-          tx.set(
-            lbRef,
-            buildLeaderboardPayload(current, {
-              uid: current.uid || firebaseUser.uid,
-              pointsBalance: nextPoints,
-              brlBalanceCents: nextBrl,
-            })
-          );
-        }
-      });
-    } catch (error) {
-      handleTransactionError(error, OperationType.WRITE, `casinoSessions/${params.sessionId}`);
     }
   };
 
@@ -3157,7 +2442,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         userAccount,
         privateInfo,
         isAdmin,
-        isOwner,
         mySessions,
         myConversions,
         myWithdrawals,
@@ -3170,7 +2454,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         publicPromoEvents,
         myPromoRedemptions,
         myMultiplayerMatches,
-        myVerificationRequest,
         mailboxMessages,
         readMailboxIds,
         unreadMailboxCount,
@@ -3205,13 +2488,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         deleteEmailNotification,
         updateMaintenanceSettings,
         settleMultiplayerMatch,
-        submitVerificationRequest,
-        approveVerificationRequest,
-        rejectVerificationRequest,
-        setUserBlueVerified,
-        settleDoubleRound,
-        startMinesSession,
-        finishMinesSession,
       }}
     >
       {children}

@@ -142,20 +142,3 @@ export function validateUsernameInput(raw: string): {
   }
   return { valid: true, clean };
 }
-
-export function checkTextProfanity(message: string): {
-  blocked: boolean;
-  matchedTerm?: string;
-} {
-  if (!message || !message.trim()) return { blocked: false };
-  const direct = checkUsernameProfanity(message);
-  if (direct.blocked) return direct;
-
-  const words = message.trim().split(/\s+/);
-  for (const w of words) {
-    const res = checkUsernameProfanity(w);
-    if (res.blocked) return res;
-  }
-  return { blocked: false };
-}
-

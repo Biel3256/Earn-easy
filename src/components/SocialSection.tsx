@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   addDoc,
   collection,
-  deleteDoc,
   doc,
   getDoc,
   getDocs,
@@ -21,33 +20,33 @@ import {
   CheckCheck,
   Clock,
   Copy,
+  DoorOpen,
   Eye,
-  ImagePlus,
-  Maximize2,
-  MessageCircle,
-  Mic,
+  Gamepad2,
+  Globe,
+  Lock,
+  Megaphone,
   Search,
   Send,
-  Trash2,
+  ShieldAlert,
+  Swords,
   UserCheck,
   UserPlus,
   Users,
-  Volume2,
   X,
 } from 'lucide-react';
 import { db } from '../firebase';
 import { useAuth } from '../context/AuthContext';
+import { useMultiplayer } from '../context/MultiplayerContext';
 import { useToast } from '../context/ToastContext';
-import { LeaderboardEntry, SocialMessageType } from '../types/earneasy';
-import { checkTextProfanity } from '../utils/moderation';
 import {
-  extractReadableError,
-  getServerNowMs,
-  syncServerUtcClock,
-  timestampToMillis,
-} from '../utils/pix';
+  LeaderboardEntry,
+  MULTIPLAYER_GAME_LABELS,
+  MultiplayerGameId,
+} from '../types/earneasy';
+import { extractReadableError, formatPoints } from '../utils/pix';
 import { ProfileAvatar } from './PlayerProfile';
-import { VerifiedBadge } from './VerifiedBadge';
+import { MULTIPLAYER_CATALOG } from './multiplayer/multiplayerCatalog';
 
 type PublicProfile = LeaderboardEntry;
 
@@ -56,9 +55,6 @@ type SocialMessage = {
   senderUid: string;
   senderName: string;
   text: string;
-  messageType?: SocialMessageType;
-  mediaDataUrl?: string;
-  audioDurationSec?: number;
   createdAt?: { toDate?: () => Date };
   readAt?: { toDate?: () => Date; toMillis?: () => number } | null;
   readBy?: string;
@@ -76,9 +72,6 @@ type FriendRequest = {
 const safeText = (value: string) => value.trim().slice(0, 500);
 const friendshipId = (a: string, b: string) => [a, b].sort().join('__');
 
-const GLOBAL_CHAT_TTL_MS = 5 * 60 * 1000;
-const GLOBAL_CHAT_DELETE_BUFFER_MS = 5_000;
-
 function formatChatTime(ts?: { toDate?: () => Date } | null): string {
   if (!ts || typeof ts.toDate !== 'function') return '';
   try {
@@ -86,15 +79,6 @@ function formatChatTime(ts?: { toDate?: () => Date } | null): string {
   } catch {
     return '';
   }
-}
-
-function formatRemainingGlobalTtl(createdAt: unknown, nowMs: number): string {
-  const createdMs = timestampToMillis(createdAt);
-  if (!createdMs) return '5m 00s';
-  const remainingSec = Math.max(0, Math.ceil((createdMs + GLOBAL_CHAT_TTL_MS - nowMs) / 1000));
-  const mins = Math.floor(remainingSec / 60);
-  const secs = remainingSec % 60;
-  return `${mins}m ${String(secs).padStart(2, '0')}s`;
 }
 
 function formatLastSeenStatus(lastSeenMs?: number): { label: string; isOnlineNow: boolean } {
@@ -115,99 +99,6 @@ function formatLastSeenStatus(lastSeenMs?: number): { label: string; isOnlineNow
   }
   const days = Math.floor(diffSec / 86400);
   return { label: `Offline · Visto por último há ${days} d`, isOnlineNow: false };
-}
-
-const MAX_PRIVATE_MEDIA_DATA_URL_CHARS = 340_000;
-const MAX_CHAT_IMAGE_TARGET_CHARS = 240_000;
-const MAX_VOICE_DURATION_SEC = 45;
-
-function formatAudioSeconds(sec?: number): string {
-  const safe = Math.max(0, Math.round(Number(sec) || 0));
-  const mins = Math.floor(safe / 60);
-  const rem = safe % 60;
-  return `${mins}:${String(rem).padStart(2, '0')}`;
-}
-
-async function compressChatImage(file: File): Promise<string> {
-  if (!file.type.startsWith('image/')) {
-    throw new Error('Selecione um arquivo de imagem válido (JPG, PNG ou WebP).');
-  }
-
-  const rawDataUrl = await new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ''));
-    reader.onerror = () => reject(new Error('Não foi possível ler a imagem selecionada.'));
-    reader.readAsDataURL(file);
-  });
-
-  const img = await new Promise<HTMLImageElement>((resolve, reject) => {
-    const el = new Image();
-    el.onload = () => resolve(el);
-    el.onerror = () => reject(new Error('Formato de imagem não suportado pelo navegador.'));
-    el.src = rawDataUrl;
-  });
-
-  const maxDim = 900;
-  let width = img.naturalWidth || img.width || 640;
-  let height = img.naturalHeight || img.height || 640;
-  if (width > maxDim || height > maxDim) {
-    const ratio = Math.min(maxDim / width, maxDim / height);
-    width = Math.max(1, Math.round(width * ratio));
-    height = Math.max(1, Math.round(height * ratio));
-  }
-
-  const canvas = document.createElement('canvas');
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext('2d');
-  if (!ctx) {
-    throw new Error('Seu navegador não suportou o processamento desta imagem.');
-  }
-  ctx.drawImage(img, 0, 0, width, height);
-
-  const qualities = [0.82, 0.72, 0.62, 0.5];
-  for (const q of qualities) {
-    const out = canvas.toDataURL('image/jpeg', q);
-    if (out.length <= MAX_CHAT_IMAGE_TARGET_CHARS) {
-      return out;
-    }
-  }
-
-  // Fallback tighter downscale if image has very high entropy
-  const smallerCanvas = document.createElement('canvas');
-  smallerCanvas.width = Math.max(1, Math.round(width * 0.65));
-  smallerCanvas.height = Math.max(1, Math.round(height * 0.65));
-  const sCtx = smallerCanvas.getContext('2d');
-  if (sCtx) {
-    sCtx.drawImage(canvas, 0, 0, smallerCanvas.width, smallerCanvas.height);
-    const out = smallerCanvas.toDataURL('image/jpeg', 0.62);
-    if (out.length <= MAX_PRIVATE_MEDIA_DATA_URL_CHARS) {
-      return out;
-    }
-  }
-
-  throw new Error('A foto ficou grande demais. Tente outra imagem mais leve.');
-}
-
-function normalizeAudioMimeType(rawMime: string): string {
-  const lower = (rawMime || '').toLowerCase().replace(/\s+/g, '');
-  if (lower.startsWith('audio/webm')) return lower.includes('codecs=opus') ? 'audio/webm;codecs=opus' : 'audio/webm';
-  if (lower.startsWith('audio/ogg')) return lower.includes('codecs=opus') ? 'audio/ogg;codecs=opus' : 'audio/ogg';
-  if (lower.startsWith('audio/mp4')) return 'audio/mp4';
-  if (lower.startsWith('audio/mpeg')) return 'audio/mpeg';
-  if (lower.startsWith('audio/wav')) return 'audio/wav';
-  if (lower.startsWith('audio/aac')) return 'audio/aac';
-  if (lower.startsWith('audio/x-m4a')) return 'audio/x-m4a';
-  return 'audio/webm';
-}
-
-function blobToDataUrl(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ''));
-    reader.onerror = () => reject(new Error('Falha ao processar o áudio gravado.'));
-    reader.readAsDataURL(blob);
-  });
 }
 
 export function SocialPresence() {
@@ -240,10 +131,24 @@ export function SocialPresence() {
 interface SocialSectionProps {
   initialSelectedUid?: string | null;
   onInspectPlayer?: (player: LeaderboardEntry, rank: number | null) => void;
+  onNavigatePlayFriends?: () => void;
 }
 
-export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSectionProps = {}) {
+export function SocialSection({
+  initialSelectedUid,
+  onInspectPlayer,
+  onNavigatePlayFriends,
+}: SocialSectionProps = {}) {
   const { firebaseUser, userAccount } = useAuth();
+  const {
+    wsConnected,
+    room,
+    globalInvites,
+    createRoom,
+    joinRoom,
+    leaveRoom,
+    publishToGlobal,
+  } = useMultiplayer();
   const { showToast } = useToast();
   const uid = firebaseUser?.uid || '';
   const myName = (userAccount?.displayName || firebaseUser?.displayName || 'Jogador').slice(0, 80);
@@ -257,31 +162,18 @@ export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSec
   const [presence, setPresence] = useState<Record<string, number>>({});
   const [selectedFriend, setSelectedFriend] = useState<PublicProfile | null>(null);
   const [privateMessages, setPrivateMessages] = useState<SocialMessage[]>([]);
-  const [rawGlobalMessages, setRawGlobalMessages] = useState<SocialMessage[]>([]);
   const [privateDraft, setPrivateDraft] = useState('');
-  const [globalDraft, setGlobalDraft] = useState('');
+  const [globalGameId, setGlobalGameId] = useState<MultiplayerGameId>('domino');
+  const [globalRounds, setGlobalRounds] = useState<number>(3);
+  const [globalStake, setGlobalStake] = useState<string>('100');
   const [copiedId, setCopiedId] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
-  const [chatClockMs, setChatClockMs] = useState<number>(() => getServerNowMs());
   const [, refreshPresenceClock] = useState(0);
   const [tab, setTab] = useState<'friends' | 'global'>('friends');
-  const [pendingImageDataUrl, setPendingImageDataUrl] = useState<string | null>(null);
-  const [lightboxImageUrl, setLightboxImageUrl] = useState<string | null>(null);
-  const [recordingAudio, setRecordingAudio] = useState(false);
-  const [recordingSec, setRecordingSec] = useState(0);
 
   const privateEndRef = useRef<HTMLDivElement | null>(null);
-  const globalEndRef = useRef<HTMLDivElement | null>(null);
-  const imageInputRef = useRef<HTMLInputElement | null>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const mediaStreamRef = useRef<MediaStream | null>(null);
-  const audioChunksRef = useRef<Blob[]>([]);
-  const recordTimerRef = useRef<number | null>(null);
-  const recordStartedAtRef = useRef<number>(0);
-  const recordActionModeRef = useRef<'send' | 'cancel'>('cancel');
-  const deletingGlobalAttemptRef = useRef<Map<string, number>>(new Map());
 
   useEffect(() => {
     if (!uid) return;
@@ -368,54 +260,6 @@ export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSec
   }, [uid]);
 
   useEffect(() => {
-    void syncServerUtcClock().then(() => {
-      setChatClockMs(getServerNowMs());
-    });
-  }, []);
-
-  useEffect(() => {
-    const globalQuery = query(collection(db, 'globalMessages'), orderBy('createdAt', 'desc'), limit(60));
-    return onSnapshot(
-      globalQuery,
-      (snap) => {
-        setRawGlobalMessages(
-          snap.docs.map((item) => ({ id: item.id, ...item.data() } as SocialMessage)).reverse()
-        );
-      },
-      () => setError('Não foi possível carregar o chat global.')
-    );
-  }, []);
-
-  const globalMessages = useMemo(() => {
-    return rawGlobalMessages.filter((message) => {
-      const createdMs = timestampToMillis(message.createdAt);
-      if (!createdMs) return true;
-      return chatClockMs - createdMs < GLOBAL_CHAT_TTL_MS;
-    });
-  }, [rawGlobalMessages, chatClockMs]);
-
-  // Automatically remove expired (>5 min) global chat messages from Firestore
-  useEffect(() => {
-    if (!uid || rawGlobalMessages.length === 0) return;
-    const nowLocal = Date.now();
-    const expiredMessages = rawGlobalMessages.filter((message) => {
-      const createdMs = timestampToMillis(message.createdAt);
-      if (!createdMs) return false;
-      if (chatClockMs - createdMs < GLOBAL_CHAT_TTL_MS + GLOBAL_CHAT_DELETE_BUFFER_MS) return false;
-      const lastAttempt = deletingGlobalAttemptRef.current.get(message.id) ?? 0;
-      return nowLocal - lastAttempt > 30_000;
-    });
-
-    if (expiredMessages.length === 0) return;
-    const batchSlice = expiredMessages.slice(0, 15);
-    batchSlice.forEach((msg) => deletingGlobalAttemptRef.current.set(msg.id, nowLocal));
-
-    void Promise.allSettled(
-      batchSlice.map((msg) => deleteDoc(doc(db, 'globalMessages', msg.id)))
-    );
-  }, [uid, rawGlobalMessages, chatClockMs]);
-
-  useEffect(() => {
     if (!uid || !selectedFriend) {
       setPrivateMessages([]);
       return;
@@ -459,19 +303,9 @@ export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSec
   }, [uid, selectedFriend?.uid, tab, privateMessages]);
 
   useEffect(() => {
-    if (tab === 'global') {
-      globalEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, [globalMessages.length, tab]);
-
-  useEffect(() => {
-    const intervalMs = tab === 'global' ? 3_000 : 15_000;
-    const timer = window.setInterval(() => {
-      setChatClockMs(getServerNowMs());
-      refreshPresenceClock((value) => value + 1);
-    }, intervalMs);
+    const timer = window.setInterval(() => refreshPresenceClock((value) => value + 1), 15_000);
     return () => window.clearInterval(timer);
-  }, [tab]);
+  }, []);
 
   useEffect(() => {
     if (!initialSelectedUid) return;
@@ -481,49 +315,6 @@ export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSec
       setSelectedFriend(matched);
     }
   }, [initialSelectedUid, friends]);
-
-  const stopRecordingResources = (mode: 'send' | 'cancel' = 'cancel') => {
-    recordActionModeRef.current = mode;
-    if (recordTimerRef.current) {
-      window.clearInterval(recordTimerRef.current);
-      recordTimerRef.current = null;
-    }
-    const recorder = mediaRecorderRef.current;
-    if (recorder && recorder.state !== 'inactive') {
-      try {
-        recorder.stop();
-      } catch {
-        // Ignore stop errors on already-ended streams
-      }
-    } else if (mediaStreamRef.current) {
-      mediaStreamRef.current.getTracks().forEach((track) => track.stop());
-      mediaStreamRef.current = null;
-    }
-    setRecordingAudio(false);
-    setRecordingSec(0);
-  };
-
-  useEffect(() => {
-    setPendingImageDataUrl(null);
-    stopRecordingResources('cancel');
-  }, [selectedFriend?.uid, tab]);
-
-  useEffect(() => {
-    return () => {
-      stopRecordingResources('cancel');
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!lightboxImageUrl) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setLightboxImageUrl(null);
-      }
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [lightboxImageUrl]);
 
   const handleCopyMyId = async () => {
     if (!uid) return;
@@ -686,43 +477,46 @@ export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSec
     }
   };
 
-  const sendGlobal = async () => {
-    const text = safeText(globalDraft);
-    if (!uid || !text || busy) return;
-    if (userAccount?.status !== 'active') {
-      setError('Sua conta precisa estar ativa para enviar mensagens no chat global.');
+  const handlePublishGlobalMatch = () => {
+    if (!uid || !userAccount) return;
+    if (userAccount.status !== 'active') {
+      setError('Sua conta precisa estar ativa para enviar partidas no Chat Global.');
       return;
     }
-    const profanity = checkTextProfanity(text);
-    if (profanity.blocked) {
-      const msg =
-        'Mensagem bloqueada pelas Regras do Global: não é permitido enviar palavrões ou termos ofensivos.';
-      setError(msg);
-      showToast({ type: 'error', title: 'Regras do Global', message: msg });
+    const stake = Math.max(0, Math.floor(Number(globalStake || 0)));
+    if (stake > userAccount.pointsBalance) {
+      setError('Seu saldo de pontos é menor que a aposta escolhida para esta partida.');
       return;
     }
-    setBusy(true);
     setError('');
-    try {
-      await addDoc(collection(db, 'globalMessages'), {
-        senderUid: uid,
-        senderName: myName,
-        text,
-        createdAt: serverTimestamp(),
-      });
-      setGlobalDraft('');
-    } catch (err) {
-      setError(extractReadableError(err, 'Não foi possível enviar a mensagem no chat global.'));
-    } finally {
-      setBusy(false);
+    createRoom({
+      gameId: globalGameId,
+      totalRounds: globalRounds,
+      stakePoints: stake,
+      visibility: 'public',
+      postToGlobal: true,
+    });
+    showToast({
+      type: 'success',
+      title: 'Partida enviada no Global!',
+      message: 'Quando um adversário aceitar, o convite sumirá do chat e a sala abrirá.',
+    });
+  };
+
+  const handleAcceptGlobalMatch = (roomCode: string) => {
+    if (!uid || !userAccount) return;
+    if (userAccount.status !== 'active') {
+      setError('Sua conta precisa estar ativa para aceitar partidas.');
+      return;
     }
+    joinRoom(roomCode);
+    onNavigatePlayFriends?.();
   };
 
   const sendPrivate = async () => {
-    const caption = safeText(privateDraft);
-    const hasImage = Boolean(pendingImageDataUrl);
-    if (!uid || !selectedFriend || (!caption && !hasImage) || busy) return;
-    if (userAccount?.status && userAccount.status !== 'active') {
+    const text = safeText(privateDraft);
+    if (!uid || !selectedFriend || !text || busy) return;
+    if (userAccount?.status !== 'active') {
       setError('Sua conta precisa estar ativa para enviar mensagens.');
       return;
     }
@@ -730,158 +524,17 @@ export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSec
     setError('');
     try {
       const chatId = friendshipId(uid, selectedFriend.uid);
-      if (pendingImageDataUrl) {
-        await addDoc(collection(db, 'friendships', chatId, 'messages'), {
-          senderUid: uid,
-          senderName: myName,
-          messageType: 'image',
-          mediaDataUrl: pendingImageDataUrl,
-          text: caption || '📷 Foto enviada',
-          createdAt: serverTimestamp(),
-        });
-        setPendingImageDataUrl(null);
-        setPrivateDraft('');
-      } else {
-        await addDoc(collection(db, 'friendships', chatId, 'messages'), {
-          senderUid: uid,
-          senderName: myName,
-          messageType: 'text',
-          text: caption,
-          createdAt: serverTimestamp(),
-        });
-        setPrivateDraft('');
-      }
+      await addDoc(collection(db, 'friendships', chatId, 'messages'), {
+        senderUid: uid,
+        senderName: myName,
+        text,
+        createdAt: serverTimestamp(),
+      });
+      setPrivateDraft('');
     } catch (err) {
       setError(extractReadableError(err, 'Não foi possível enviar a mensagem privada.'));
     } finally {
       setBusy(false);
-    }
-  };
-
-  const handleSelectPrivateImage = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    event.target.value = '';
-    if (!file) return;
-    setError('');
-    try {
-      const dataUrl = await compressChatImage(file);
-      setPendingImageDataUrl(dataUrl);
-    } catch (err) {
-      setError(extractReadableError(err, 'Não foi possível preparar a foto para envio.'));
-    }
-  };
-
-  const handleStartAudioRecording = async () => {
-    if (!uid || !selectedFriend || busy || recordingAudio) return;
-    if (userAccount?.status && userAccount.status !== 'active') {
-      setError('Sua conta precisa estar ativa para enviar áudios.');
-      return;
-    }
-    if (typeof MediaRecorder === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
-      setError('Seu navegador não suporta gravação de áudio neste ambiente.');
-      return;
-    }
-
-    setError('');
-    setPendingImageDataUrl(null);
-
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const candidates = [
-        'audio/webm;codecs=opus',
-        'audio/webm',
-        'audio/ogg;codecs=opus',
-        'audio/mp4',
-      ];
-      const preferredMime = candidates.find((mime) => {
-        try {
-          return typeof MediaRecorder.isTypeSupported === 'function' && MediaRecorder.isTypeSupported(mime);
-        } catch {
-          return false;
-        }
-      });
-
-      const recorder = preferredMime
-        ? new MediaRecorder(stream, { mimeType: preferredMime, audioBitsPerSecond: 32000 })
-        : new MediaRecorder(stream);
-
-      mediaStreamRef.current = stream;
-      mediaRecorderRef.current = recorder;
-      audioChunksRef.current = [];
-      recordStartedAtRef.current = Date.now();
-      recordActionModeRef.current = 'cancel';
-
-      recorder.ondataavailable = (ev) => {
-        if (ev.data && ev.data.size > 0) {
-          audioChunksRef.current.push(ev.data);
-        }
-      };
-
-      recorder.onstop = async () => {
-        const mode = recordActionModeRef.current;
-        const durationSec = Math.max(
-          1,
-          Math.min(MAX_VOICE_DURATION_SEC, Math.round((Date.now() - recordStartedAtRef.current) / 1000))
-        );
-        const chunks = audioChunksRef.current;
-        const rawMime = recorder.mimeType || preferredMime || 'audio/webm';
-        audioChunksRef.current = [];
-        if (mediaStreamRef.current) {
-          mediaStreamRef.current.getTracks().forEach((track) => track.stop());
-          mediaStreamRef.current = null;
-        }
-        mediaRecorderRef.current = null;
-
-        if (mode !== 'send' || chunks.length === 0 || !selectedFriend) {
-          return;
-        }
-
-        setBusy(true);
-        try {
-          const cleanMime = normalizeAudioMimeType(rawMime);
-          const blob = new Blob(chunks, { type: cleanMime });
-          const dataUrl = await blobToDataUrl(blob);
-          if (dataUrl.length > MAX_PRIVATE_MEDIA_DATA_URL_CHARS) {
-            setError('Áudio muito longo. Grave mensagens de até 35-45 segundos.');
-            return;
-          }
-          const chatId = friendshipId(uid, selectedFriend.uid);
-          await addDoc(collection(db, 'friendships', chatId, 'messages'), {
-            senderUid: uid,
-            senderName: myName,
-            messageType: 'audio',
-            mediaDataUrl: dataUrl,
-            audioDurationSec: durationSec,
-            text: `🎤 Mensagem de voz (${formatAudioSeconds(durationSec)})`,
-            createdAt: serverTimestamp(),
-          });
-        } catch (err) {
-          setError(extractReadableError(err, 'Não foi possível enviar o áudio agora.'));
-        } finally {
-          setBusy(false);
-        }
-      };
-
-      recorder.start(250);
-      setRecordingAudio(true);
-      setRecordingSec(0);
-
-      recordTimerRef.current = window.setInterval(() => {
-        const elapsed = Math.floor((Date.now() - recordStartedAtRef.current) / 1000);
-        setRecordingSec(elapsed);
-        if (elapsed >= MAX_VOICE_DURATION_SEC) {
-          stopRecordingResources('send');
-        }
-      }, 250);
-    } catch (err) {
-      setRecordingAudio(false);
-      setRecordingSec(0);
-      setError(
-        extractReadableError(
-          err,
-          'Não foi possível acessar seu microfone. Verifique a permissão de áudio no navegador.'
-        )
-      );
     }
   };
 
@@ -936,8 +589,8 @@ export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSec
                 : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-zinc-100'
             }`}
           >
-            <MessageCircle className="w-3.5 h-3.5" />
-            Chat Global
+            <Swords className="w-3.5 h-3.5" />
+            Chat Global ({globalInvites.length})
           </button>
         </div>
       </div>
@@ -1049,13 +702,8 @@ export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSec
                       />
                     </div>
                     <div className="min-w-0">
-                      <p className="truncate text-sm font-semibold text-slate-900 dark:text-zinc-100 flex items-center gap-1.5">
-                        <span className="truncate">{profile.displayName}</span>
-                        <VerifiedBadge
-                          tier={profile.verifiedBadge}
-                          legacyVerified={profile.identityVerified}
-                          size="xs"
-                        />
+                      <p className="truncate text-sm font-semibold text-slate-900 dark:text-zinc-100">
+                        {profile.displayName}
                       </p>
                       <p className="truncate text-[11px] font-mono text-slate-500 dark:text-zinc-400">
                         {profile.uid} ·{' '}
@@ -1231,14 +879,7 @@ export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSec
                             />
                           </div>
                           <div className="min-w-0">
-                            <div className="truncate text-xs font-semibold flex items-center gap-1">
-                              <span className="truncate">{friend.displayName}</span>
-                              <VerifiedBadge
-                                tier={friend.verifiedBadge}
-                                legacyVerified={friend.identityVerified}
-                                size="xs"
-                              />
-                            </div>
+                            <div className="truncate text-xs font-semibold">{friend.displayName}</div>
                             <div
                               className={`text-[11px] truncate ${
                                 friendStatus.isOnlineNow
@@ -1262,15 +903,8 @@ export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSec
           <div className="bg-white/90 dark:bg-zinc-900/90 backdrop-blur-md border border-slate-200/90 dark:border-zinc-800 rounded-3xl p-5 flex min-h-[420px] max-h-[560px] flex-col shadow-sm">
             <div className="pb-3 border-b border-slate-100 dark:border-zinc-800 flex items-center justify-between gap-3">
               <div className="min-w-0">
-                <h2 className="text-sm font-bold text-slate-900 dark:text-zinc-50 flex items-center gap-1.5 min-w-0">
-                  <span className="truncate">
-                    {selectedFriend ? `Conversa com ${selectedFriend.displayName}` : 'Chat Privado'}
-                  </span>
-                  <VerifiedBadge
-                    tier={selectedFriend?.verifiedBadge}
-                    legacyVerified={selectedFriend?.identityVerified}
-                    size="xs"
-                  />
+                <h2 className="text-sm font-bold text-slate-900 dark:text-zinc-50 truncate">
+                  {selectedFriend ? `Conversa com ${selectedFriend.displayName}` : 'Chat Privado'}
                 </h2>
                 <p
                   className={`text-[11px] flex items-center gap-1.5 ${
@@ -1319,10 +953,6 @@ export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSec
                       const mine = message.senderUid === uid;
                       const timeLabel = formatChatTime(message.createdAt);
                       const readLabel = formatChatTime(message.readAt);
-                      const isImage = message.messageType === 'image' && Boolean(message.mediaDataUrl);
-                      const isAudio = message.messageType === 'audio' && Boolean(message.mediaDataUrl);
-                      const showImageCaption = isImage && message.text && message.text !== '📷 Foto enviada';
-
                       return (
                         <div
                           key={message.id}
@@ -1335,50 +965,7 @@ export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSec
                                 : 'bg-slate-100 dark:bg-zinc-800 text-slate-900 dark:text-zinc-100'
                             }`}
                           >
-                            {isImage && message.mediaDataUrl ? (
-                              <div className="space-y-1.5">
-                                <button
-                                  type="button"
-                                  onClick={() => setLightboxImageUrl(message.mediaDataUrl || null)}
-                                  className="group relative block overflow-hidden rounded-xl border border-black/10 dark:border-white/10 cursor-pointer"
-                                >
-                                  <img
-                                    src={message.mediaDataUrl}
-                                    alt="Foto enviada no chat privado"
-                                    referrerPolicy="no-referrer"
-                                    className="max-h-60 max-w-[260px] w-auto object-cover rounded-xl"
-                                  />
-                                  <span className="absolute bottom-1.5 right-1.5 w-7 h-7 rounded-lg bg-black/60 text-white flex items-center justify-center opacity-80 group-hover:opacity-100">
-                                    <Maximize2 className="w-3.5 h-3.5" />
-                                  </span>
-                                </button>
-                                {showImageCaption && (
-                                  <p className="leading-relaxed break-words">{message.text}</p>
-                                )}
-                              </div>
-                            ) : isAudio && message.mediaDataUrl ? (
-                              <div className="space-y-1.5 min-w-[220px]">
-                                <div className="flex items-center justify-between gap-2 text-[11px] font-semibold opacity-90">
-                                  <span className="inline-flex items-center gap-1">
-                                    <Volume2 className="w-3.5 h-3.5" />
-                                    Mensagem de voz
-                                  </span>
-                                  {typeof message.audioDurationSec === 'number' && (
-                                    <span className="font-mono tabular-nums">
-                                      {formatAudioSeconds(message.audioDurationSec)}
-                                    </span>
-                                  )}
-                                </div>
-                                <audio
-                                  controls
-                                  preload="metadata"
-                                  src={message.mediaDataUrl}
-                                  className="w-full max-w-[250px] h-9"
-                                />
-                              </div>
-                            ) : (
-                              <p className="leading-relaxed break-words">{message.text}</p>
-                            )}
+                            <p className="leading-relaxed break-words">{message.text}</p>
                           </div>
                           <span className="mt-1 text-[10px] text-slate-400 dark:text-zinc-500 font-mono inline-flex items-center gap-1">
                             <span>
@@ -1414,122 +1001,27 @@ export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSec
                   <div ref={privateEndRef} />
                 </div>
 
-                {/* Pending Image Preview */}
-                {pendingImageDataUrl && (
-                  <div className="mb-2.5 p-2.5 rounded-2xl bg-slate-100 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 flex items-center justify-between gap-3">
-                    <div className="flex items-center gap-2.5 min-w-0">
-                      <img
-                        src={pendingImageDataUrl}
-                        alt="Prévia da foto"
-                        referrerPolicy="no-referrer"
-                        className="w-14 h-14 rounded-xl object-cover border border-slate-200 dark:border-zinc-700 shrink-0"
-                      />
-                      <div className="min-w-0">
-                        <div className="text-xs font-bold text-slate-800 dark:text-zinc-100">
-                          Foto pronta para enviar
-                        </div>
-                        <div className="text-[11px] text-slate-500 dark:text-zinc-400 truncate">
-                          Adicione uma legenda opcional abaixo ou clique em Enviar.
-                        </div>
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setPendingImageDataUrl(null)}
-                      aria-label="Remover foto selecionada"
-                      className="p-2 rounded-xl border border-slate-200 dark:border-zinc-800 text-slate-500 hover:text-rose-500 cursor-pointer shrink-0"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
-                  </div>
-                )}
-
-                <input
-                  ref={imageInputRef}
-                  type="file"
-                  accept="image/jpeg,image/png,image/webp,image/*"
-                  onChange={handleSelectPrivateImage}
-                  className="hidden"
-                />
-
-                {recordingAudio ? (
-                  <div className="pt-3 border-t border-slate-100 dark:border-zinc-800 flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/35 border border-rose-200 dark:border-rose-800/70 flex-1 min-w-0">
-                      <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-pulse shrink-0" />
-                      <span className="text-xs font-bold text-rose-700 dark:text-rose-300 truncate">
-                        Gravando áudio ·{' '}
-                        <span className="font-mono tabular-nums">
-                          {formatAudioSeconds(recordingSec)} / {formatAudioSeconds(MAX_VOICE_DURATION_SEC)}
-                        </span>
-                      </span>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => stopRecordingResources('cancel')}
-                      title="Cancelar gravação"
-                      aria-label="Cancelar gravação"
-                      className="min-h-[42px] px-3 py-2 rounded-xl border border-slate-200 dark:border-zinc-700 text-slate-600 dark:text-zinc-300 hover:text-rose-600 hover:border-rose-400 cursor-pointer inline-flex items-center gap-1.5 text-xs font-semibold shrink-0"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                      Cancelar
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => stopRecordingResources('send')}
-                      disabled={busy}
-                      className="min-h-[42px] inline-flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-semibold rounded-xl transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-                    >
-                      <Send className="w-4 h-4" />
-                      Enviar áudio
-                    </button>
-                  </div>
-                ) : (
-                  <div className="pt-3 border-t border-slate-100 dark:border-zinc-800 flex items-center gap-2">
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() => imageInputRef.current?.click()}
-                      title="Enviar foto"
-                      aria-label="Enviar foto no chat privado"
-                      className="min-h-[42px] min-w-[42px] p-2.5 rounded-xl border border-slate-200 dark:border-zinc-700 text-slate-600 dark:text-zinc-300 hover:border-emerald-500 hover:text-emerald-600 dark:hover:text-emerald-400 disabled:opacity-50 flex items-center justify-center shrink-0 cursor-pointer"
-                    >
-                      <ImagePlus className="w-4 h-4" />
-                    </button>
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={handleStartAudioRecording}
-                      title="Gravar mensagem de voz"
-                      aria-label="Gravar áudio no chat privado"
-                      className="min-h-[42px] min-w-[42px] p-2.5 rounded-xl border border-slate-200 dark:border-zinc-700 text-slate-600 dark:text-zinc-300 hover:border-emerald-500 hover:text-emerald-600 dark:hover:text-emerald-400 disabled:opacity-50 flex items-center justify-center shrink-0 cursor-pointer"
-                    >
-                      <Mic className="w-4 h-4" />
-                    </button>
-                    <input
-                      type="text"
-                      value={privateDraft}
-                      maxLength={500}
-                      onChange={(event) => setPrivateDraft(event.target.value)}
-                      onKeyDown={(event) => event.key === 'Enter' && sendPrivate()}
-                      placeholder={
-                        pendingImageDataUrl
-                          ? `Legenda opcional para ${selectedFriend.displayName}...`
-                          : `Mensagem para ${selectedFriend.displayName}...`
-                      }
-                      className="flex-1 min-w-0 rounded-xl border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-950 px-3.5 py-2.5 text-sm text-slate-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                    />
-                    <button
-                      type="button"
-                      onClick={sendPrivate}
-                      disabled={busy || (!privateDraft.trim() && !pendingImageDataUrl)}
-                      aria-label="Enviar mensagem privada"
-                      className="min-h-[42px] inline-flex items-center gap-1.5 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-semibold rounded-xl transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-                    >
-                      <Send className="w-4 h-4" />
-                      <span className="hidden sm:inline">Enviar</span>
-                    </button>
-                  </div>
-                )}
+                <div className="pt-3 border-t border-slate-100 dark:border-zinc-800 flex gap-2">
+                  <input
+                    type="text"
+                    value={privateDraft}
+                    maxLength={500}
+                    onChange={(event) => setPrivateDraft(event.target.value)}
+                    onKeyDown={(event) => event.key === 'Enter' && sendPrivate()}
+                    placeholder={`Mensagem para ${selectedFriend.displayName}...`}
+                    className="flex-1 rounded-xl border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-950 px-3.5 py-2.5 text-sm text-slate-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={sendPrivate}
+                    disabled={busy || !privateDraft.trim()}
+                    aria-label="Enviar mensagem privada"
+                    className="inline-flex items-center gap-1.5 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-semibold rounded-xl transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                  >
+                    <Send className="w-4 h-4" />
+                    Enviar
+                  </button>
+                </div>
               </>
             ) : (
               <div className="flex-1 flex flex-col items-center justify-center text-center gap-2 text-slate-500 dark:text-zinc-400 px-4">
@@ -1545,128 +1037,266 @@ export function SocialSection({ initialSelectedUid, onInspectPlayer }: SocialSec
           </div>
         </div>
       ) : (
-        <div className="bg-white/90 dark:bg-zinc-900/90 backdrop-blur-md border border-slate-200/90 dark:border-zinc-800 rounded-3xl p-5 flex min-h-[440px] max-h-[580px] flex-col shadow-sm">
-          <div className="pb-3 border-b border-slate-100 dark:border-zinc-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+        <div className="bg-white/90 dark:bg-zinc-900/90 backdrop-blur-md border border-slate-200/90 dark:border-zinc-800 rounded-3xl p-5 flex min-h-[500px] flex-col shadow-sm space-y-4">
+          <div className="pb-3 border-b border-slate-100 dark:border-zinc-800 flex flex-wrap items-center justify-between gap-2">
             <div>
-              <h2 className="text-sm font-bold text-slate-900 dark:text-zinc-50">
-                Chat Global da Comunidade
+              <h2 className="text-sm font-bold text-slate-900 dark:text-zinc-50 flex items-center gap-2">
+                <Swords className="w-4 h-4 text-emerald-600 dark:text-lime-400" />
+                Chat Global — Partidas Públicas
               </h2>
               <p className="text-xs text-slate-500 dark:text-zinc-400">
-                Converse com outros jogadores ativos do Earn Easy em tempo real.
+                Digitação livre bloqueada. Envie partidas públicas para desafiar outros jogadores ou aceite um desafio aberto.
               </p>
             </div>
-            <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/35 border border-emerald-200 dark:border-emerald-900/60 px-2.5 py-1 rounded-xl self-start sm:self-auto shrink-0">
-              <Clock className="w-3.5 h-3.5" />
-              Mensagens apagam em 5 min
-            </span>
+            <div className="flex items-center gap-2">
+              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-slate-100 dark:bg-zinc-800 text-[11px] font-bold text-slate-700 dark:text-zinc-200">
+                <Lock className="w-3 h-3 text-amber-500" />
+                Sem chat de texto
+              </span>
+              <span
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-[11px] font-bold border ${
+                  wsConnected
+                    ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-600 dark:text-emerald-400'
+                    : 'bg-amber-500/10 border-amber-500/30 text-amber-600 dark:text-amber-400'
+                }`}
+              >
+                {wsConnected ? 'Ao vivo' : 'Conectando...'}
+              </span>
+            </div>
           </div>
 
-          <div className="flex-1 space-y-2.5 overflow-y-auto py-4 pr-1">
-          <div className="mb-3 rounded-2xl border border-amber-300/80 dark:border-amber-700/70 bg-amber-50 dark:bg-amber-950/25 p-3.5 shadow-sm">
+          {/* Aviso fixado com regras rígidas contra falar o que quiser */}
+          <div className="rounded-2xl border border-amber-300/80 dark:border-amber-700/70 bg-amber-50 dark:bg-amber-950/25 p-4 shadow-sm">
             <div className="flex items-center gap-2 text-amber-800 dark:text-amber-300 text-xs font-extrabold mb-2">
-              <span aria-hidden="true">📌</span>
-              AVISO FIXADO — REGRAS DO CHAT GLOBAL
+              <ShieldAlert className="w-4 h-4 shrink-0" />
+              AVISO FIXADO — REGRAS DO CHAT GLOBAL (SOMENTE PARTIDAS)
             </div>
             <p className="text-xs text-slate-800 dark:text-zinc-200 leading-relaxed mb-2">
-              Salve, salve, galera! Aqui é o Biel, dono e administrador do site Earn Easy. Para manter o chat organizado e agradável para todos, sigam as regras abaixo:
+              Aqui é o Biel, dono e administrador do Earn Easy. Para impedir que qualquer pessoa fale o que quiser, ofenda jogadores ou faça spam, o Chat Global funciona exclusivamente por convites de partida:
             </p>
             <ol className="list-decimal pl-4 space-y-1 text-xs text-slate-700 dark:text-zinc-300 leading-relaxed">
-              <li>Respeite todos os membros. Não são permitidos insultos, ameaças ou perseguição.</li>
-              <li>Não faça spam, flood ou envie mensagens repetidas.</li>
-              <li>Não publique conteúdo ofensivo, impróprio ou ilegal.</li>
-              <li>Não divulgue links, grupos ou serviços sem autorização da administração.</li>
-              <li>Não compartilhe golpes, links suspeitos ou tente enganar outros jogadores.</li>
-              <li>Respeite as orientações dos administradores e moderadores.</li>
-              <li>Use o chat para conversar sobre o Earn Easy, trocar dicas e ajudar a comunidade.</li>
-              <li>Avise a administração se encontrar algo suspeito ou uma mensagem que viole as regras.</li>
+              <li><strong>Digitação bloqueada:</strong> Não é permitido digitar mensagens de texto neste chat. Apenas partidas públicas podem ser enviadas.</li>
+              <li><strong>Proibido falar o que quiser ou burlar regras:</strong> É proibido usar nomes de usuário ofensivos, divulgar links no perfil ou criar salas repetidas para flood/spam.</li>
+              <li><strong>Remoção automática:</strong> Assim que um adversário clicar em <strong>Aceitar Partida</strong>, o convite desaparece automaticamente do Chat Global para todo mundo.</li>
+              <li><strong>Jogo limpo e respeito:</strong> Respeite o valor de pontos combinado e jogue honestamente (sistema antifraude ativo).</li>
+              <li><strong>Punições severas:</strong> Quem tentar burlar as regras ou abusar do sistema receberá advertência, suspensão ou banimento definitivo.</li>
             </ol>
             <p className="text-[11px] font-bold text-amber-800 dark:text-amber-300 mt-2">
-              Quem descumprir as regras poderá receber aviso, mute ou banimento. Todas as mensagens são apagadas automaticamente após 5 minutos.
+              Use apenas os botões abaixo para enviar ou aceitar partidas em tempo real.
             </p>
-            <p className="text-[11px] text-slate-500 dark:text-zinc-400 mt-1">Biel — Dono e administrador do Earn Easy</p>
+            <p className="text-[11px] text-slate-500 dark:text-zinc-400 mt-0.5">
+              Biel — Dono e administrador do Earn Easy
+            </p>
           </div>
-            {globalMessages.length === 0 ? (
-              <div className="h-full flex items-center justify-center text-xs text-slate-500 dark:text-zinc-400">
-                Nenhuma mensagem ativa nos últimos 5 minutos. Seja o primeiro a dar um oi!
+
+          {/* Feed ao vivo de partidas publicadas no Global */}
+          <div className="flex-1 space-y-2.5 max-h-[360px] overflow-y-auto pr-1">
+            {globalInvites.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-slate-200 dark:border-zinc-800 py-10 px-4 text-center space-y-1.5 text-slate-500 dark:text-zinc-400">
+                <Gamepad2 className="w-7 h-7 mx-auto opacity-45" />
+                <p className="text-xs font-bold text-slate-700 dark:text-zinc-300">
+                  Nenhuma partida aguardando adversário no Chat Global agora.
+                </p>
+                <p className="text-[11px]">
+                  Envie uma partida logo abaixo! Ela aparecerá aqui e sumirá assim que alguém aceitar.
+                </p>
               </div>
             ) : (
-              globalMessages.map((message) => {
-                const mine = message.senderUid === uid;
-                const timeLabel = formatChatTime(message.createdAt);
-                const ttlLabel = formatRemainingGlobalTtl(message.createdAt, chatClockMs);
+              globalInvites.map((invite) => {
+                const isMine = invite.hostUid === uid;
+                const notEnoughBalance = (userAccount?.pointsBalance || 0) < invite.stakePoints;
                 return (
                   <div
-                    key={message.id}
-                    className={`rounded-xl px-3.5 py-2.5 text-sm border ${
-                      mine
-                        ? 'bg-emerald-50/70 dark:bg-emerald-950/25 border-emerald-200 dark:border-emerald-900/60'
-                        : 'bg-slate-50 dark:bg-zinc-950 border-slate-200/80 dark:border-zinc-800'
+                    key={invite.roomCode}
+                    className={`rounded-2xl border p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+                      isMine
+                        ? 'bg-emerald-50/70 dark:bg-emerald-950/25 border-emerald-300 dark:border-emerald-800'
+                        : 'bg-slate-50 dark:bg-zinc-950 border-slate-200 dark:border-zinc-800'
                     }`}
                   >
-                    <div className="flex items-center justify-between gap-2 mb-1">
-                      <span className="text-[11px] font-bold text-emerald-700 dark:text-emerald-400">
-                        {message.senderName}
-                      </span>
-                      <span className="inline-flex items-center gap-1.5 text-[10px] font-mono text-slate-400 dark:text-zinc-500">
-                        {timeLabel && <span>{timeLabel}</span>}
-                        <span aria-hidden="true">·</span>
-                        <span>apaga em {ttlLabel}</span>
-                      </span>
+                    <div className="flex items-center gap-3 min-w-0">
+                      <ProfileAvatar
+                        name={invite.hostDisplayName}
+                        photoURL={invite.hostPhotoURL}
+                        sizeClass="w-10 h-10"
+                        textSizeClass="text-xs"
+                      />
+                      <div className="min-w-0 space-y-0.5">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className="text-xs font-extrabold text-slate-900 dark:text-zinc-100 truncate">
+                            {invite.hostDisplayName} {isMine ? '(Você)' : ''}
+                          </span>
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-emerald-500/15 text-emerald-700 dark:text-lime-400 text-[10px] font-bold">
+                            <Globe className="w-3 h-3" />
+                            Sala Pública
+                          </span>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600 dark:text-zinc-300">
+                          <span className="font-bold text-slate-900 dark:text-white">
+                            {MULTIPLAYER_GAME_LABELS[invite.gameId] || invite.gameId}
+                          </span>
+                          <span>·</span>
+                          <span>{invite.totalRounds} rodada(s)</span>
+                          <span>·</span>
+                          <span className="font-mono font-extrabold text-emerald-700 dark:text-lime-400">
+                            {invite.stakePoints === 0
+                              ? 'Amistoso (0 pts)'
+                              : `Valendo ${formatPoints(invite.stakePoints)} pts`}
+                          </span>
+                        </div>
+                      </div>
                     </div>
-                    <p className="text-slate-800 dark:text-zinc-200 break-words">{message.text}</p>
+
+                    <div className="flex items-center gap-2 shrink-0">
+                      {isMine ? (
+                        <>
+                          {onNavigatePlayFriends && (
+                            <button
+                              type="button"
+                              onClick={onNavigatePlayFriends}
+                              className="min-h-[38px] px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold flex items-center gap-1.5 cursor-pointer"
+                            >
+                              <DoorOpen className="w-3.5 h-3.5" />
+                              Ir para Sala
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (room && room.roomCode === invite.roomCode) {
+                                leaveRoom();
+                              } else {
+                                publishToGlobal(false);
+                              }
+                            }}
+                            className="min-h-[38px] px-3 py-2 rounded-xl border border-red-300 dark:border-red-900/60 text-red-600 dark:text-red-400 text-xs font-bold hover:bg-red-50 dark:hover:bg-red-950/30 cursor-pointer"
+                          >
+                            Cancelar
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          type="button"
+                          disabled={notEnoughBalance}
+                          onClick={() => handleAcceptGlobalMatch(invite.roomCode)}
+                          className="min-h-[40px] px-4 py-2 rounded-xl bg-lime-400 hover:bg-lime-300 disabled:opacity-45 text-slate-950 text-xs font-black flex items-center gap-1.5 cursor-pointer transition-colors"
+                        >
+                          <Swords className="w-4 h-4" />
+                          {notEnoughBalance
+                            ? `Precisa de ${formatPoints(invite.stakePoints)} pts`
+                            : 'Aceitar Partida'}
+                        </button>
+                      )}
+                    </div>
                   </div>
                 );
               })
             )}
-            <div ref={globalEndRef} />
           </div>
 
-          <div className="pt-3 border-t border-slate-100 dark:border-zinc-800 flex gap-2">
-            <input
-              type="text"
-              value={globalDraft}
-              maxLength={500}
-              onChange={(event) => setGlobalDraft(event.target.value)}
-              onKeyDown={(event) => event.key === 'Enter' && sendGlobal()}
-              placeholder="Escreva uma mensagem para a comunidade..."
-              className="flex-1 rounded-xl border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-950 px-3.5 py-2.5 text-sm text-slate-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-            />
-            <button
-              type="button"
-              onClick={sendGlobal}
-              disabled={busy || !globalDraft.trim()}
-              className="inline-flex items-center gap-1.5 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-semibold rounded-xl transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-            >
-              <Send className="w-4 h-4" />
-              Enviar
-            </button>
-          </div>
-        </div>
-      )}
+          {/* Área inferior bloqueada para texto — apenas envio estruturado de partidas */}
+          <div className="pt-3 border-t border-slate-100 dark:border-zinc-800 space-y-3">
+            <div className="rounded-xl bg-slate-100 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 px-3.5 py-2.5 flex items-center gap-2 text-xs font-semibold text-slate-600 dark:text-zinc-300">
+              <Lock className="w-4 h-4 text-amber-500 shrink-0" />
+              <span>
+                Campo de texto desativado no Chat Global. Use o painel abaixo apenas para enviar uma partida:
+              </span>
+            </div>
 
-      {lightboxImageUrl && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-label="Visualizar imagem enviada no chat"
-          onClick={() => setLightboxImageUrl(null)}
-          className="fixed inset-0 z-50 bg-black/85 backdrop-blur-xs flex items-center justify-center p-4"
-        >
-          <button
-            type="button"
-            onClick={() => setLightboxImageUrl(null)}
-            aria-label="Fechar visualização da imagem"
-            className="absolute top-4 right-4 w-10 h-10 rounded-full bg-zinc-900/90 border border-zinc-700 text-white flex items-center justify-center hover:bg-zinc-800 cursor-pointer"
-          >
-            <X className="w-5 h-5" />
-          </button>
-          <img
-            src={lightboxImageUrl}
-            alt="Foto ampliada do chat privado"
-            referrerPolicy="no-referrer"
-            onClick={(event) => event.stopPropagation()}
-            className="max-h-[88vh] max-w-[92vw] rounded-2xl object-contain shadow-2xl border border-zinc-800"
-          />
+            {room && room.status === 'lobby' && room.hostUid === uid && room.players.length < 2 ? (
+              <div className="rounded-2xl border border-emerald-300 dark:border-emerald-800 bg-emerald-50/70 dark:bg-emerald-950/25 p-3.5 flex flex-wrap items-center justify-between gap-3">
+                <div className="text-xs">
+                  <p className="font-extrabold text-slate-900 dark:text-white">
+                    Você já tem uma sala aberta ({room.roomCode} · {MULTIPLAYER_GAME_LABELS[room.gameId]})
+                  </p>
+                  <p className="text-slate-600 dark:text-zinc-300">
+                    {room.postedToGlobal
+                      ? 'Sua partida já está no Chat Global aguardando um adversário aceitar.'
+                      : 'Publique sua sala atual no Chat Global com 1 clique.'}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  {onNavigatePlayFriends && (
+                    <button
+                      type="button"
+                      onClick={onNavigatePlayFriends}
+                      className="min-h-[38px] px-3.5 py-2 rounded-xl border border-slate-300 dark:border-zinc-700 text-xs font-bold text-slate-800 dark:text-zinc-200 cursor-pointer"
+                    >
+                      Abrir Sala
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => publishToGlobal(!room.postedToGlobal)}
+                    className={`min-h-[38px] px-4 py-2 rounded-xl text-xs font-black flex items-center gap-1.5 cursor-pointer ${
+                      room.postedToGlobal
+                        ? 'bg-amber-500/20 border border-amber-400/50 text-amber-500'
+                        : 'bg-lime-400 hover:bg-lime-300 text-slate-950'
+                    }`}
+                  >
+                    <Megaphone className="w-3.5 h-3.5" />
+                    {room.postedToGlobal ? 'Remover do Global' : 'Enviar Minha Sala ao Global'}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-4 gap-2.5 items-end">
+                <label className="block space-y-1">
+                  <span className="text-[11px] font-bold text-slate-500 dark:text-zinc-400">Jogo</span>
+                  <select
+                    value={globalGameId}
+                    onChange={(e) => setGlobalGameId(e.target.value as MultiplayerGameId)}
+                    className="w-full h-10 px-3 rounded-xl border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-950 text-xs font-bold text-slate-900 dark:text-zinc-100"
+                  >
+                    {MULTIPLAYER_CATALOG.map((g) => (
+                      <option key={g.id} value={g.id}>
+                        {g.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="block space-y-1">
+                  <span className="text-[11px] font-bold text-slate-500 dark:text-zinc-400">Rodadas</span>
+                  <select
+                    value={globalRounds}
+                    onChange={(e) => setGlobalRounds(Number(e.target.value))}
+                    className="w-full h-10 px-3 rounded-xl border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-950 text-xs font-bold text-slate-900 dark:text-zinc-100"
+                  >
+                    {[1, 3, 5, 7].map((r) => (
+                      <option key={r} value={r}>
+                        {r} {r === 1 ? 'rodada' : 'rodadas'}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="block space-y-1">
+                  <span className="text-[11px] font-bold text-slate-500 dark:text-zinc-400">
+                    Valendo (pts)
+                  </span>
+                  <input
+                    type="number"
+                    min={0}
+                    max={userAccount?.pointsBalance || 0}
+                    value={globalStake}
+                    onChange={(e) => setGlobalStake(e.target.value)}
+                    className="w-full h-10 px-3 rounded-xl border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-950 text-xs font-mono font-bold text-emerald-700 dark:text-lime-400"
+                  />
+                </label>
+
+                <button
+                  type="button"
+                  disabled={!wsConnected || (room !== null && room.status === 'playing')}
+                  onClick={handlePublishGlobalMatch}
+                  className="h-10 px-4 rounded-xl bg-lime-400 hover:bg-lime-300 disabled:opacity-45 text-slate-950 text-xs font-black flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer transition-colors"
+                >
+                  <Megaphone className="w-4 h-4" />
+                  Enviar Partida Global
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       )}
     </section>

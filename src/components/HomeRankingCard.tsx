@@ -13,7 +13,6 @@ import { db } from '../firebase';
 import { LeaderboardEntry } from '../types/earneasy';
 import { formatBRL, formatPoints } from '../utils/pix';
 import { ProfileAvatar } from './PlayerProfile';
-import { VerifiedBadge } from './VerifiedBadge';
 
 interface HomeRankingCardProps {
   onViewFullRanking: () => void;
@@ -162,15 +161,10 @@ export const HomeRankingCard: React.FC<HomeRankingCardProps> = ({
                     />
 
                     <div className="min-w-0">
-                      <div className="text-xs font-semibold text-slate-900 dark:text-zinc-100 flex items-center gap-1 min-w-0">
-                        <span className="truncate">{player.displayName}</span>
-                        <VerifiedBadge
-                          tier={player.verifiedBadge}
-                          legacyVerified={player.identityVerified}
-                          size="xs"
-                        />
+                      <div className="text-xs font-semibold text-slate-900 dark:text-zinc-100 truncate">
+                        {player.displayName}
                         {isMe && (
-                          <span className="text-[11px] font-medium text-emerald-700 dark:text-emerald-400 shrink-0">
+                          <span className="ml-1.5 text-[11px] font-medium text-emerald-700 dark:text-emerald-400">
                             · Você
                           </span>
                         )}
