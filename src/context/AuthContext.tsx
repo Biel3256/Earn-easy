@@ -2598,8 +2598,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       data.color === 'white' ? 'Branco (14x)' : data.color === 'red' ? 'Vermelho (2x)' : 'Preto (2x)';
     const outcomeSummary = `Double 3.0 #${data.number} ${colorLabel}`.slice(0, 160);
 
+    let leaderboardSyncPayload: Record<string, unknown> | null = null;
     try {
-      await runTransaction(db, async (tx) => {
+      leaderboardSyncPayload = await runTransaction(db, async (tx) => {
         const userRef = doc(db, 'users', firebaseUser.uid);
         const snap = await tx.get(userRef);
         if (!snap.exists()) throw new Error('Conta de usuário não encontrada.');
@@ -2664,20 +2665,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           tx.update(userRef, userPatch);
         }
 
-        tx.set(
-          doc(db, 'leaderboard', firebaseUser.uid),
-          buildCleanLeaderboardPayload(rawCurrent, firebaseUser.uid, firebaseUser.displayName, {
-            brlBalanceCents: nextBrl,
-            pointsBalance: nextPoints,
-            lifetimePoints: nextLifetime,
-            gamesPlayed: nextGames,
-            status: current.status,
-            verified: Boolean(current.verified),
-          })
-        );
+        return buildCleanLeaderboardPayload(rawCurrent, firebaseUser.uid, firebaseUser.displayName, {
+          brlBalanceCents: nextBrl,
+          pointsBalance: nextPoints,
+          lifetimePoints: nextLifetime,
+          gamesPlayed: nextGames,
+          status: current.status,
+          verified: Boolean(current.verified),
+        });
       });
     } catch (error) {
       handleTransactionError(error, OperationType.WRITE, `casinoSessions/${sessionId}`);
+    }
+
+    if (leaderboardSyncPayload) {
+      void setDoc(doc(db, 'leaderboard', firebaseUser.uid), leaderboardSyncPayload).catch(() => {});
     }
 
     return {
@@ -2741,8 +2743,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const sessionId = String(data.sessionId);
 
+    let leaderboardSyncPayload: Record<string, unknown> | null = null;
     try {
-      await runTransaction(db, async (tx) => {
+      leaderboardSyncPayload = await runTransaction(db, async (tx) => {
         const userRef = doc(db, 'users', firebaseUser.uid);
         const snap = await tx.get(userRef);
         if (!snap.exists()) throw new Error('Conta não encontrada.');
@@ -2798,20 +2801,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           tx.update(userRef, userPatch);
         }
 
-        tx.set(
-          doc(db, 'leaderboard', firebaseUser.uid),
-          buildCleanLeaderboardPayload(rawCurrent, firebaseUser.uid, firebaseUser.displayName, {
-            brlBalanceCents: nextBrl,
-            pointsBalance: nextPoints,
-            lifetimePoints: curLifetime,
-            gamesPlayed: nextGames,
-            status: current.status,
-            verified: Boolean(current.verified),
-          })
-        );
+        return buildCleanLeaderboardPayload(rawCurrent, firebaseUser.uid, firebaseUser.displayName, {
+          brlBalanceCents: nextBrl,
+          pointsBalance: nextPoints,
+          lifetimePoints: curLifetime,
+          gamesPlayed: nextGames,
+          status: current.status,
+          verified: Boolean(current.verified),
+        });
       });
     } catch (error) {
       handleTransactionError(error, OperationType.WRITE, `casinoSessions/${sessionId}`);
+    }
+
+    if (leaderboardSyncPayload) {
+      void setDoc(doc(db, 'leaderboard', firebaseUser.uid), leaderboardSyncPayload).catch(() => {});
     }
 
     return {
@@ -2833,8 +2837,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   ) => {
     if (!firebaseUser) throw new Error('Usuário não autenticado.');
+    let leaderboardSyncPayload: Record<string, unknown> | null = null;
     try {
-      await runTransaction(db, async (tx) => {
+      leaderboardSyncPayload = await runTransaction(db, async (tx) => {
         const userRef = doc(db, 'users', firebaseUser.uid);
         const sessionRef = doc(db, 'casinoSessions', sessionId);
         const [userSnap, sessionSnap] = await Promise.all([tx.get(userRef), tx.get(sessionRef)]);
@@ -2843,7 +2848,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const rawCurrent = userSnap.data() as Record<string, unknown>;
         const current = rawCurrent as unknown as UserAccount;
         const session = sessionSnap.data() as CasinoSession;
-        if (session.status !== 'active') return;
+        if (session.status !== 'active') return null;
 
         const curPoints = Math.max(0, Math.floor(Number(current.pointsBalance ?? 0) || 0));
         const curLifetime = Math.max(0, Math.floor(Number(current.lifetimePoints ?? 0) || 0));
@@ -2888,20 +2893,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           tx.update(userRef, userPatch);
         }
 
-        tx.set(
-          doc(db, 'leaderboard', firebaseUser.uid),
-          buildCleanLeaderboardPayload(rawCurrent, firebaseUser.uid, firebaseUser.displayName, {
-            brlBalanceCents: nextBrl,
-            pointsBalance: nextPoints,
-            lifetimePoints: nextLifetime,
-            gamesPlayed: curGames,
-            status: current.status,
-            verified: Boolean(current.verified),
-          })
-        );
+        return buildCleanLeaderboardPayload(rawCurrent, firebaseUser.uid, firebaseUser.displayName, {
+          brlBalanceCents: nextBrl,
+          pointsBalance: nextPoints,
+          lifetimePoints: nextLifetime,
+          gamesPlayed: curGames,
+          status: current.status,
+          verified: Boolean(current.verified),
+        });
       });
     } catch (error) {
       handleTransactionError(error, OperationType.WRITE, `casinoSessions/${sessionId}`);
+    }
+
+    if (leaderboardSyncPayload) {
+      void setDoc(doc(db, 'leaderboard', firebaseUser.uid), leaderboardSyncPayload).catch(() => {});
     }
   };
 

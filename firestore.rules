@@ -948,8 +948,14 @@ service cloud.firestore {
             incoming().uid == existing().uid &&
             incoming().createdAt == existing().createdAt && (
               (
-                isOwner(userId) &&
-                isActiveUser(userId) &&
+                isOwner(userId) && (
+                  existing().status == 'active' || (
+                    existing().status == 'suspended' &&
+                    'suspensionUntil' in existing() &&
+                    existing().suspensionUntil is timestamp &&
+                    existing().suspensionUntil <= request.time
+                  )
+                ) &&
                 incoming().totalWithdrawnCents == existing().totalWithdrawnCents && (
               // Action A: Profile Update (active status preserved)
               (
