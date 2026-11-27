@@ -37,7 +37,11 @@ service cloud.firestore {
     }
 
     function isSignedIn() {
-      return request.auth != null && request.auth.token.email_verified == true;
+      return request.auth != null && (
+        !('firebase' in request.auth.token) ||
+        !('sign_in_provider' in request.auth.token.firebase) ||
+        request.auth.token.firebase.sign_in_provider != 'anonymous'
+      );
     }
 
     function isOwner(userId) {
@@ -46,6 +50,8 @@ service cloud.firestore {
 
     function isBootstrappedAdmin() {
       return isSignedIn() &&
+        'email_verified' in request.auth.token &&
+        request.auth.token.email_verified == true &&
         'email' in request.auth.token &&
         request.auth.token.email is string && (
           request.auth.token.email.lower() == 'anthonysamuel61500@gmail.com' ||
