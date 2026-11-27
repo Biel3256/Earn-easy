@@ -159,6 +159,8 @@ export const DashboardSection: React.FC = () => {
       quiz_solo: { points: 0, matches: 0 },
       rps_solo: { points: 0, matches: 0 },
       guess_number_solo: { points: 0, matches: 0 },
+      double_casino: { points: 0, matches: 0 },
+      mines_casino: { points: 0, matches: 0 },
     };
     filteredSessions.forEach((s) => {
       if (counts[s.gameCategory]) {

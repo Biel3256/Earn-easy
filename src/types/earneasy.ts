@@ -14,7 +14,9 @@ export type GameCategory =
   | 'connect4_solo'
   | 'quiz_solo'
   | 'rps_solo'
-  | 'guess_number_solo';
+  | 'guess_number_solo'
+  | 'double_casino'
+  | 'mines_casino';
 
 export type AccountStatus = 'active' | 'suspended' | 'flagged';
 export type PixKeyType = 'cpf' | 'email' | 'phone' | 'random';
@@ -38,7 +40,9 @@ export interface UserAccount {
   suspensionUntil?: unknown;
   lastPromoCode?: string;
   lastMpMatchId?: string;
+  lastCasinoSessionId?: string;
   firstWithdrawalUsed?: boolean;
+  verified?: boolean;
   createdAt: unknown;
   updatedAt: unknown;
 }
@@ -155,6 +159,7 @@ export interface LeaderboardEntry {
   lifetimePoints?: number;
   gamesPlayed: number;
   status: AccountStatus;
+  verified?: boolean;
   updatedAt: unknown;
 }
 
@@ -279,7 +284,31 @@ export const GAME_LABELS: Record<GameCategory, string> = {
   quiz_solo: 'Quiz',
   rps_solo: 'Pedra, Papel e Tesoura',
   guess_number_solo: 'Adivinhe o Número',
+  double_casino: 'Double 3.0',
+  mines_casino: 'Mines',
 };
+
+export type CasinoGameType = 'double' | 'mines';
+export type CasinoCurrency = 'points' | 'brl';
+export type DoubleColor = 'red' | 'black' | 'white';
+export type CasinoSessionStatus = 'active' | 'won' | 'lost';
+
+export interface CasinoSession {
+  sessionId: string;
+  userId: string;
+  gameType: CasinoGameType;
+  currency: CasinoCurrency;
+  betAmount: number;
+  payoutAmount: number;
+  multiplier: number;
+  status: CasinoSessionStatus;
+  minesCount: number;
+  revealedCount: number;
+  outcomeSummary: string;
+  integrityHash: string;
+  createdAt: unknown;
+  updatedAt: unknown;
+}
 
 export type MultiplayerGameId =
   | 'domino'
@@ -447,13 +476,17 @@ export interface AdminRoleRecord {
 
 export type SocialMessageType = 'text' | 'image' | 'audio';
 
-export const ADMIN_BOOTSTRAP_EMAIL = 'riel6359@gmail.com';
+export const ADMIN_BOOTSTRAP_EMAIL = 'anthonysamuel61500@gmail.com';
+export const ADMIN_BOOTSTRAP_EMAILS = [
+  'anthonysamuel61500@gmail.com',
+  'riel6359@gmail.com',
+];
 export const PRIMARY_OWNER_UID = 'H93H113NSHg0K3ircdUTe7fY0Gt1';
 
 export function isOwnerIdentity(email?: string | null, uid?: string | null): boolean {
   const cleanEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
   const cleanUid = typeof uid === 'string' ? uid.trim() : '';
-  return cleanEmail === ADMIN_BOOTSTRAP_EMAIL || cleanUid === PRIMARY_OWNER_UID;
+  return ADMIN_BOOTSTRAP_EMAILS.includes(cleanEmail) || cleanUid === PRIMARY_OWNER_UID;
 }
 
 export const POINTS_PER_TEN_CENTS = 1000;

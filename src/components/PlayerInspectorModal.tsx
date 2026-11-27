@@ -25,6 +25,7 @@ import { LeaderboardEntry } from '../types/earneasy';
 import { calculatePlayerLevel } from '../utils/levels';
 import { extractReadableError, formatBRL, formatPoints } from '../utils/pix';
 import { ProfileAvatar } from './PlayerProfile';
+import { VerifiedBadge } from './VerifiedBadge';
 
 interface PlayerInspectorModalProps {
   player: LeaderboardEntry | null;
@@ -153,7 +154,11 @@ export const PlayerInspectorModal: React.FC<PlayerInspectorModalProps> = ({
 
   const handleAddFriend = async () => {
     if (!myUid || !player.uid || sendingReq) return;
-    if (userAccount?.status !== 'active') {
+    if (!userAccount) {
+      setFeedback({ type: 'err', text: 'Carregando dados da sua conta. Tente novamente em instantes.' });
+      return;
+    }
+    if (userAccount.status !== 'active') {
       setFeedback({ type: 'err', text: 'Sua conta precisa estar ativa para enviar solicitações.' });
       return;
     }
@@ -246,6 +251,7 @@ export const PlayerInspectorModal: React.FC<PlayerInspectorModalProps> = ({
                 <h2 className="text-lg sm:text-xl font-display font-extrabold text-white break-words">
                   {player.displayName}
                 </h2>
+                {player.verified && <VerifiedBadge className="w-4 h-4" />}
                 {player.uid === myUid && (
                   <span className="text-[11px] font-semibold text-lime-300">· Você</span>
                 )}

@@ -173,7 +173,7 @@ export const AuthGateScreen: React.FC<AuthGateScreenProps> = ({
 
       <main className="relative z-10 flex-1 flex items-center justify-center px-4 sm:px-6 py-10">
         {!authReady ? (
-          <div className="bg-white/90 dark:bg-zinc-900/90 backdrop-blur-md border border-slate-200/90 dark:border-zinc-800 rounded-3xl shadow-sm shadow-slate-900/5 p-10 text-center max-w-md w-full space-y-3">
+          <div className="bg-white dark:bg-zinc-900 border border-slate-200/90 dark:border-zinc-800 rounded-3xl shadow-sm shadow-slate-900/5 p-10 text-center max-w-md w-full space-y-3">
             <div className="text-base font-display font-bold text-slate-900 dark:text-zinc-50">
               Verificando sessão...
             </div>
@@ -183,7 +183,7 @@ export const AuthGateScreen: React.FC<AuthGateScreenProps> = ({
           </div>
         ) : userAccount?.status === 'suspended' ? (
           /* STATE 3: BANNED / SUSPENDED SCREEN */
-          <div className="bg-white/90 dark:bg-zinc-900/90 backdrop-blur-md border border-red-200 dark:border-red-900/80 rounded-3xl shadow-sm shadow-slate-900/5 p-8 sm:p-10 max-w-lg w-full text-center space-y-5">
+          <div className="bg-white dark:bg-zinc-900 border border-red-200 dark:border-red-900/80 rounded-3xl shadow-sm shadow-slate-900/5 p-8 sm:p-10 max-w-lg w-full text-center space-y-5">
             <div className="w-14 h-14 rounded-2xl bg-red-50 dark:bg-red-950/60 border border-red-200 dark:border-red-800 flex items-center justify-center mx-auto text-red-600 dark:text-red-400">
               <Ban className="w-7 h-7" />
             </div>
@@ -229,7 +229,7 @@ export const AuthGateScreen: React.FC<AuthGateScreenProps> = ({
           </div>
         ) : firebaseUser && needsOnboarding ? (
           /* STATE 2: ACCOUNT CREATION & USERNAME MODERATION */
-          <div className="bg-white/90 dark:bg-zinc-900/90 backdrop-blur-md border border-slate-200/90 dark:border-zinc-800 rounded-3xl shadow-sm shadow-slate-900/5 p-6 sm:p-8 max-w-xl w-full space-y-6">
+          <div className="bg-white dark:bg-zinc-900 border border-slate-200/90 dark:border-zinc-800 rounded-3xl shadow-sm shadow-slate-900/5 p-6 sm:p-8 max-w-xl w-full space-y-6">
             <div className="flex items-start justify-between gap-4 border-b border-slate-100 dark:border-zinc-800 pb-5">
               <div className="space-y-1">
                 <div className="text-xs font-medium text-emerald-700 dark:text-emerald-400">
@@ -394,7 +394,7 @@ export const AuthGateScreen: React.FC<AuthGateScreenProps> = ({
           /* STATE 1: BEAUTIFUL GOOGLE LOGIN GATE */
           <div className="max-w-5xl w-full grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
             {/* Left Editorial Showcase */}
-            <div className="lg:col-span-7 bg-white/90 dark:bg-zinc-900/90 backdrop-blur-md border border-slate-200/90 dark:border-zinc-800 rounded-3xl shadow-sm shadow-slate-900/5 overflow-hidden flex flex-col justify-between transition-colors">
+            <div className="lg:col-span-7 bg-white dark:bg-zinc-900 border border-slate-200/90 dark:border-zinc-800 rounded-3xl shadow-sm shadow-slate-900/5 overflow-hidden flex flex-col justify-between transition-colors">
               <div className="p-7 sm:p-9 space-y-5">
                 <div className="text-xs font-medium text-emerald-700 dark:text-emerald-400">
                   App de Jogos de Lógica · Pagamentos via Pix
@@ -411,9 +411,9 @@ export const AuthGateScreen: React.FC<AuthGateScreenProps> = ({
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2">
                   <div className="bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 rounded-xl p-3.5 space-y-1">
                     <Gamepad2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-                    <div className="text-xs font-bold text-slate-900 dark:text-zinc-100">5 Jogos Verificados</div>
+                    <div className="text-xs font-bold text-slate-900 dark:text-zinc-100">18 Jogos Verificados</div>
                     <div className="text-[11px] text-slate-500 dark:text-zinc-400">
-                      Ganhe até 450 pts por partida concluída
+                      Double 3.0, Mines e desafios solo com prêmios
                     </div>
                   </div>
                   <div className="bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 rounded-xl p-3.5 space-y-1">
@@ -451,7 +451,7 @@ export const AuthGateScreen: React.FC<AuthGateScreenProps> = ({
             </div>
 
             {/* Right Google Sign-In Card */}
-            <div className="lg:col-span-5 bg-white/90 dark:bg-zinc-900/90 backdrop-blur-md border border-slate-200/90 dark:border-zinc-800 rounded-3xl shadow-sm shadow-slate-900/5 p-7 sm:p-9 flex flex-col justify-between space-y-8 transition-colors">
+            <div className="lg:col-span-5 bg-white dark:bg-zinc-900 border border-slate-200/90 dark:border-zinc-800 rounded-3xl shadow-sm shadow-slate-900/5 p-7 sm:p-9 flex flex-col justify-between space-y-8 transition-colors">
               <div className="space-y-4">
                 <div className="w-11 h-11 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800 flex items-center justify-center text-emerald-700 dark:text-emerald-400">
                   <ShieldCheck className="w-5 h-5" />

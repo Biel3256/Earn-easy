@@ -393,7 +393,11 @@ export function SocialSection({
 
   const sendRequest = async (profile: PublicProfile) => {
     if (!uid || !profile.uid || busy) return;
-    if (userAccount?.status !== 'active') {
+    if (!userAccount) {
+      setError('Carregando seu perfil. Tente novamente em instantes.');
+      return;
+    }
+    if (userAccount.status !== 'active') {
       setError('Sua conta precisa estar ativa para enviar solicitações de amizade.');
       return;
     }
@@ -516,7 +520,11 @@ export function SocialSection({
   const sendPrivate = async () => {
     const text = safeText(privateDraft);
     if (!uid || !selectedFriend || !text || busy) return;
-    if (userAccount?.status !== 'active') {
+    if (!userAccount) {
+      setError('Carregando seu perfil. Tente novamente em instantes.');
+      return;
+    }
+    if (userAccount.status !== 'active') {
       setError('Sua conta precisa estar ativa para enviar mensagens.');
       return;
     }

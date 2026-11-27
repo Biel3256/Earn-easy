@@ -4,10 +4,12 @@ import gameCardsImg from '../assets/images/game_cards_icon_1795186544220.jpg';
 import gameConnect4SoloImg from '../assets/images/game_connect4_solo_1795250045692.jpg';
 import gameDominoSoloImg from '../assets/images/game_domino_solo_1795250041011.jpg';
 import gameDotLinkImg from '../assets/images/game_dotlink_icon_1795186545139.jpg';
+import gameDoubleCasinoImg from '../assets/images/double_casino_thumb_1795595224629.jpg';
 import gameDrawGuessSoloImg from '../assets/images/game_draw_guess_solo_1795250046182.jpg';
 import gameGuessNumberSoloImg from '../assets/images/game_guess_number_solo_1795250045923.jpg';
 import gameMathImg from '../assets/images/game_math_icon_1795186543447.jpg';
 import gameMemoryImg from '../assets/images/game_memory_icon_1795186544976.jpg';
+import gameMinesCasinoImg from '../assets/images/mines_casino_thumb_1795595223953.jpg';
 import gameQuizSoloImg from '../assets/images/game_quiz_solo_1795250045668.jpg';
 import gameReflexImg from '../assets/images/game_reflex_icon_1795186544995.jpg';
 import gameRpsSoloImg from '../assets/images/game_rps_solo_1795250046341.jpg';
@@ -36,4 +38,6 @@ export const GAME_THUMBNAILS: Record<GameCategory, string> = {
   quiz_solo: gameQuizSoloImg,
   rps_solo: gameRpsSoloImg,
   guess_number_solo: gameGuessNumberSoloImg,
+  double_casino: gameDoubleCasinoImg,
+  mines_casino: gameMinesCasinoImg,
 };

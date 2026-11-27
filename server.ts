@@ -502,6 +502,324 @@ async function startServer() {
     res.json({ valid: true, settlement: result.settlement });
   });
 
+  // 7. Casino RNG Endpoints (Double 2.0 & Mines — Server-Authoritative & Signed)
+  const DOUBLE_WHEEL_TILES: Array<{ number: number; color: 'red' | 'black' | 'white' }> = [
+    { number: 0, color: 'white' },
+    { number: 11, color: 'black' },
+    { number: 5, color: 'red' },
+    { number: 10, color: 'black' },
+    { number: 6, color: 'red' },
+    { number: 9, color: 'black' },
+    { number: 7, color: 'red' },
+    { number: 8, color: 'black' },
+    { number: 1, color: 'red' },
+    { number: 14, color: 'black' },
+    { number: 2, color: 'red' },
+    { number: 13, color: 'black' },
+    { number: 3, color: 'red' },
+    { number: 12, color: 'black' },
+    { number: 4, color: 'red' },
+  ];
+
+  interface DoubleRollHistoryItem {
+    id: string;
+    number: number;
+    color: 'red' | 'black' | 'white';
+    rolledAt: string;
+  }
+
+  const doubleRollHistory: DoubleRollHistoryItem[] = Array.from({ length: 24 }, (_, idx) => {
+    const tile = DOUBLE_WHEEL_TILES[crypto.randomInt(0, DOUBLE_WHEEL_TILES.length)];
+    return {
+      id: `seed_${Date.now()}_${idx}`,
+      number: tile.number,
+      color: tile.color,
+      rolledAt: new Date(Date.now() - (24 - idx) * 15_000).toISOString(),
+    };
+  });
+
+  interface ServerMinesRound {
+    sessionId: string;
+    userId: string;
+    currency: 'points' | 'brl';
+    betAmount: number;
+    minesCount: number;
+    mineIndices: number[];
+    revealedIndices: number[];
+    status: 'active' | 'won' | 'lost';
+    createdAt: number;
+  }
+
+  const minesRounds = new Map<string, ServerMinesRound>();
+
+  function computeMinesMultiplier(minesCount: number, revealedCount: number): number {
+    if (revealedCount <= 0) return 1;
+    let prob = 1;
+    for (let i = 0; i < revealedCount; i += 1) {
+      prob *= (25 - minesCount - i) / (25 - i);
+    }
+    if (prob <= 0) return 1000;
+    const raw = 0.97 / prob;
+    return Math.min(1000, Math.max(1.01, Math.round(raw * 100) / 100));
+  }
+
+  function signCasinoPayload(payload: string): string {
+    return crypto.createHmac('sha256', SIGNING_SECRET).update(payload).digest('hex');
+  }
+
+  app.get('/api/casino/double/history', (_req, res) => {
+    res.json({ history: doubleRollHistory });
+  });
+
+  app.post('/api/casino/double/spin', (req, res) => {
+    const { userId, currency, bets } = req.body ?? {};
+    if (typeof userId !== 'string' || !userId.trim()) {
+      res.status(400).json({ error: 'Usuário inválido para aposta no Double 2.0.' });
+      return;
+    }
+    if (currency !== 'points' && currency !== 'brl') {
+      res.status(400).json({ error: 'Moeda inválida. Use points ou brl.' });
+      return;
+    }
+
+    const redBet = Math.max(0, Math.floor(Number(bets?.red || 0)));
+    const blackBet = Math.max(0, Math.floor(Number(bets?.black || 0)));
+    const whiteBet = Math.max(0, Math.floor(Number(bets?.white || 0)));
+    const totalBet = redBet + blackBet + whiteBet;
+
+    if (!Number.isFinite(totalBet) || totalBet < 1 || totalBet > 50000) {
+      res.status(400).json({ error: 'Aposta total deve ficar entre 1 e 50.000 unidades.' });
+      return;
+    }
+
+    const tileIndex = crypto.randomInt(0, DOUBLE_WHEEL_TILES.length);
+    const tile = DOUBLE_WHEEL_TILES[tileIndex];
+
+    let payoutAmount = 0;
+    if (tile.color === 'white') {
+      payoutAmount = whiteBet * 14;
+    } else if (tile.color === 'red') {
+      payoutAmount = redBet * 2;
+    } else {
+      payoutAmount = blackBet * 2;
+    }
+    payoutAmount = Math.min(2500000, totalBet * 14, Math.round(payoutAmount));
+
+    const multiplier = payoutAmount > 0 ? Math.round((payoutAmount / totalBet) * 100) / 100 : 0;
+    const sessionId = `dbl_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
+    const status: 'won' | 'lost' = payoutAmount > 0 ? 'won' : 'lost';
+    const integrityHash = signCasinoPayload(
+      `${sessionId}|${userId}|${currency}|${totalBet}|${tile.number}|${tile.color}|${payoutAmount}`
+    );
+
+    doubleRollHistory.push({
+      id: sessionId,
+      number: tile.number,
+      color: tile.color,
+      rolledAt: new Date().toISOString(),
+    });
+    if (doubleRollHistory.length > 36) {
+      doubleRollHistory.splice(0, doubleRollHistory.length - 36);
+    }
+
+    res.json({
+      sessionId,
+      tileIndex,
+      number: tile.number,
+      color: tile.color,
+      bets: { red: redBet, black: blackBet, white: whiteBet },
+      totalBet,
+      payoutAmount,
+      multiplier,
+      status,
+      integrityHash,
+      history: doubleRollHistory,
+    });
+  });
+
+  app.post('/api/casino/mines/start', (req, res) => {
+    const { userId, currency, betAmount, minesCount } = req.body ?? {};
+    if (typeof userId !== 'string' || !userId.trim()) {
+      res.status(400).json({ error: 'Usuário inválido para iniciar partida no Mines.' });
+      return;
+    }
+    if (currency !== 'points' && currency !== 'brl') {
+      res.status(400).json({ error: 'Moeda inválida. Use points ou brl.' });
+      return;
+    }
+    const cleanBet = Math.floor(Number(betAmount));
+    const cleanMines = Math.floor(Number(minesCount));
+    if (!Number.isFinite(cleanBet) || cleanBet < 1 || cleanBet > 50000) {
+      res.status(400).json({ error: 'Valor da aposta deve ser entre 1 e 50.000.' });
+      return;
+    }
+    if (!Number.isFinite(cleanMines) || cleanMines < 1 || cleanMines > 24) {
+      res.status(400).json({ error: 'Quantidade de minas deve ser entre 1 e 24.' });
+      return;
+    }
+
+    const now = Date.now();
+    for (const [id, round] of minesRounds.entries()) {
+      if (now - round.createdAt > 2 * 60 * 60 * 1000) {
+        minesRounds.delete(id);
+      }
+    }
+
+    const deck = Array.from({ length: 25 }, (_, i) => i);
+    for (let i = deck.length - 1; i > 0; i -= 1) {
+      const j = crypto.randomInt(0, i + 1);
+      [deck[i], deck[j]] = [deck[j], deck[i]];
+    }
+    const mineIndices = deck.slice(0, cleanMines).sort((a, b) => a - b);
+
+    const sessionId = `mns_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
+    minesRounds.set(sessionId, {
+      sessionId,
+      userId,
+      currency,
+      betAmount: cleanBet,
+      minesCount: cleanMines,
+      mineIndices,
+      revealedIndices: [],
+      status: 'active',
+      createdAt: now,
+    });
+
+    const firstMultiplier = computeMinesMultiplier(cleanMines, 1);
+    const integrityHash = signCasinoPayload(
+      `${sessionId}|${userId}|${currency}|${cleanBet}|${cleanMines}|start`
+    );
+
+    res.json({
+      sessionId,
+      minesCount: cleanMines,
+      totalTiles: 25,
+      betAmount: cleanBet,
+      firstMultiplier,
+      integrityHash,
+    });
+  });
+
+  app.post('/api/casino/mines/reveal', (req, res) => {
+    const { sessionId, userId, tileIndex } = req.body ?? {};
+    const round = typeof sessionId === 'string' ? minesRounds.get(sessionId) : undefined;
+    if (!round || round.userId !== userId) {
+      res.status(404).json({ error: 'Partida de Mines não encontrada ou expirada.' });
+      return;
+    }
+    if (round.status !== 'active') {
+      res.status(409).json({ error: 'Esta partida de Mines já foi finalizada.' });
+      return;
+    }
+    const idx = Math.floor(Number(tileIndex));
+    if (!Number.isFinite(idx) || idx < 0 || idx >= 25) {
+      res.status(400).json({ error: 'Posição do tabuleiro inválida.' });
+      return;
+    }
+    if (round.revealedIndices.includes(idx)) {
+      res.status(400).json({ error: 'Esta casa já foi aberta.' });
+      return;
+    }
+
+    if (round.mineIndices.includes(idx)) {
+      round.status = 'lost';
+      const integrityHash = signCasinoPayload(
+        `${round.sessionId}|${round.userId}|lost|${round.revealedIndices.length}|${idx}`
+      );
+      res.json({
+        outcome: 'bomb',
+        hitBomb: true,
+        tileIndex: idx,
+        revealedIndices: round.revealedIndices,
+        revealedCount: round.revealedIndices.length,
+        mineIndices: round.mineIndices,
+        multiplier: 0,
+        payoutAmount: 0,
+        nextMultiplier: null,
+        integrityHash,
+      });
+      return;
+    }
+
+    round.revealedIndices.push(idx);
+    const revealedCount = round.revealedIndices.length;
+    const multiplier = computeMinesMultiplier(round.minesCount, revealedCount);
+    const payoutAmount = Math.min(2500000, round.betAmount * 1000, Math.round(round.betAmount * multiplier));
+    const safeTotal = 25 - round.minesCount;
+
+    if (revealedCount >= safeTotal) {
+      round.status = 'won';
+      const integrityHash = signCasinoPayload(
+        `${round.sessionId}|${round.userId}|cleared|${revealedCount}|${payoutAmount}`
+      );
+      res.json({
+        outcome: 'cleared',
+        hitBomb: false,
+        tileIndex: idx,
+        revealedIndices: round.revealedIndices,
+        revealedCount,
+        mineIndices: round.mineIndices,
+        multiplier,
+        payoutAmount,
+        nextMultiplier: null,
+        integrityHash,
+      });
+      return;
+    }
+
+    const nextMultiplier = computeMinesMultiplier(round.minesCount, revealedCount + 1);
+    const integrityHash = signCasinoPayload(
+      `${round.sessionId}|${round.userId}|gem|${revealedCount}|${payoutAmount}`
+    );
+
+    res.json({
+      outcome: 'gem',
+      hitBomb: false,
+      tileIndex: idx,
+      revealedIndices: round.revealedIndices,
+      revealedCount,
+      multiplier,
+      payoutAmount,
+      nextMultiplier,
+      integrityHash,
+    });
+  });
+
+  app.post('/api/casino/mines/cashout', (req, res) => {
+    const { sessionId, userId } = req.body ?? {};
+    const round = typeof sessionId === 'string' ? minesRounds.get(sessionId) : undefined;
+    if (!round || round.userId !== userId) {
+      res.status(404).json({ error: 'Partida de Mines não encontrada ou expirada.' });
+      return;
+    }
+    if (round.status !== 'active') {
+      res.status(409).json({ error: 'Esta partida de Mines já foi finalizada.' });
+      return;
+    }
+    if (round.revealedIndices.length < 1) {
+      res.status(400).json({ error: 'Abra pelo menos 1 diamante antes de fazer cashout.' });
+      return;
+    }
+
+    round.status = 'won';
+    const revealedCount = round.revealedIndices.length;
+    const multiplier = computeMinesMultiplier(round.minesCount, revealedCount);
+    const payoutAmount = Math.min(2500000, round.betAmount * 1000, Math.round(round.betAmount * multiplier));
+    const integrityHash = signCasinoPayload(
+      `${round.sessionId}|${round.userId}|cashout|${revealedCount}|${payoutAmount}`
+    );
+
+    res.json({
+      outcome: 'cashed_out',
+      revealedIndices: round.revealedIndices,
+      revealedCount,
+      mineIndices: round.mineIndices,
+      multiplier,
+      payoutAmount,
+      integrityHash,
+    });
+  });
+
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
       server: { middlewareMode: true },

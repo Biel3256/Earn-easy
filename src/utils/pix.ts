@@ -69,6 +69,23 @@ export function getUtcDateDaysAgo(daysAgo: number): string {
   return d.toISOString().slice(0, 10);
 }
 
+function mapFriendlyFirebaseMessage(rawMsg: string): string {
+  const lower = rawMsg.toLowerCase();
+  if (lower.includes('failed-precondition') || lower.includes('requires an index')) {
+    return 'Sincronizando índice de consulta no servidor. Recarregue a página em alguns segundos.';
+  }
+  if (lower.includes('unauthenticated') || lower.includes('auth/')) {
+    return 'Sua sessão expirou. Faça login novamente com o Google para continuar.';
+  }
+  if (lower.includes('missing or insufficient permissions') || lower.includes('permission-denied')) {
+    return 'Operação recusada pela validação de segurança. Recarregue a página ou tente novamente.';
+  }
+  if (lower.includes('network') || lower.includes('unavailable') || lower.includes('offline')) {
+    return 'Conexão instável com o servidor. Verifique sua internet e tente novamente.';
+  }
+  return rawMsg;
+}
+
 export function extractReadableError(err: unknown, fallback: string): string {
   if (!err) return fallback;
   const raw = err instanceof Error ? err.message : String(err);
@@ -78,21 +95,14 @@ export function extractReadableError(err: unknown, fallback: string): string {
     try {
       const parsed = JSON.parse(raw) as { error?: string };
       if (parsed.error) {
-        const inner = parsed.error;
-        if (inner.includes('Missing or insufficient permissions') || inner.includes('permission-denied')) {
-          return 'Permissão recusada na validação do pedido. Confira se sua conta está ativa, recarregue a página ou tente novamente.';
-        }
-        return inner;
+        return mapFriendlyFirebaseMessage(parsed.error);
       }
     } catch {
       // Ignore JSON parse errors
     }
   }
 
-  if (raw.includes('Missing or insufficient permissions') || raw.includes('permission-denied')) {
-    return 'Permissão recusada na validação do pedido. Confira se sua conta está ativa, recarregue a página ou tente novamente.';
-  }
-  return raw;
+  return mapFriendlyFirebaseMessage(raw);
 }
 
 export function isValidCPF(raw: string): boolean {

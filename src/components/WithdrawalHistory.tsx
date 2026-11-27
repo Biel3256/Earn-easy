@@ -1,9 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   collection,
-  limit,
   onSnapshot,
-  orderBy,
   query,
   where,
 } from 'firebase/firestore';
@@ -11,7 +9,7 @@ import { AlertCircle, CheckCircle2, Clock, RefreshCw, XCircle } from 'lucide-rea
 import { useAuth } from '../context/AuthContext';
 import { auth, db } from '../firebase';
 import { PixWithdrawal, WithdrawalStatus } from '../types/earneasy';
-import { formatBRL } from '../utils/pix';
+import { formatBRL, timestampToMillis } from '../utils/pix';
 
 type StatusFilter = 'all' | 'pending' | 'paid' | 'rejected';
 
@@ -47,15 +45,17 @@ export const WithdrawalHistory: React.FC = () => {
 
     const withdrawalsQuery = query(
       collection(db, 'withdrawals'),
-      where('userId', '==', firebaseUser.uid),
-      orderBy('createdAt', 'desc'),
-      limit(15)
+      where('userId', '==', firebaseUser.uid)
     );
 
     const unsubscribe = onSnapshot(
       withdrawalsQuery,
       (snapshot) => {
-        setWithdrawals(snapshot.docs.map((docSnap) => docSnap.data() as PixWithdrawal));
+        const sorted = snapshot.docs
+          .map((docSnap) => docSnap.data() as PixWithdrawal)
+          .sort((a, b) => timestampToMillis(b.createdAt) - timestampToMillis(a.createdAt))
+          .slice(0, 15);
+        setWithdrawals(sorted);
         setLoading(false);
         setErrorMsg(null);
       },

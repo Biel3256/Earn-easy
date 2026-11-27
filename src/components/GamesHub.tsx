@@ -1,6 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useMemo, useState } from 'react';
 import {
-  ArrowRight,
   Brain,
   Check,
   CheckCircle2,
@@ -8,6 +7,7 @@ import {
   Coins,
   Copy,
   Dices,
+  Flame,
   Gamepad2,
   Inbox,
   Layers,
@@ -38,25 +38,65 @@ import {
 } from '../utils/pix';
 import { DailyCheckinCard } from './DailyCheckinCard';
 import { HomeRankingCard } from './HomeRankingCard';
-import { BattleshipSoloGame } from './games/BattleshipSoloGame';
-import { BlockBritzGame } from './games/BlockBritzGame';
-import { Connect4SoloGame } from './games/Connect4SoloGame';
-import { DominoSoloGame } from './games/DominoSoloGame';
-import { DotLinkGame } from './games/DotLinkGame';
-import { DrawGuessSoloGame } from './games/DrawGuessSoloGame';
-import { GuessNumberSoloGame } from './games/GuessNumberSoloGame';
-import { HighLowCardsGame } from './games/HighLowCardsGame';
-import { MathSprintGame } from './games/MathSprintGame';
-import { MemoryMatchGame } from './games/MemoryMatchGame';
-import { QuickReflexGame } from './games/QuickReflexGame';
-import { QuizSoloGame } from './games/QuizSoloGame';
-import { RpsSoloGame } from './games/RpsSoloGame';
-import { StopSoloGame } from './games/StopSoloGame';
-import { TicTacToeGame } from './games/TicTacToeGame';
-import { WordSearchGame } from './games/WordSearchGame';
+
+const BattleshipSoloGame = lazy(() =>
+  import('./games/BattleshipSoloGame').then((m) => ({ default: m.BattleshipSoloGame }))
+);
+const BlockBritzGame = lazy(() =>
+  import('./games/BlockBritzGame').then((m) => ({ default: m.BlockBritzGame }))
+);
+const Connect4SoloGame = lazy(() =>
+  import('./games/Connect4SoloGame').then((m) => ({ default: m.Connect4SoloGame }))
+);
+const DoubleGame = lazy(() =>
+  import('./games/DoubleGame').then((m) => ({ default: m.DoubleGame }))
+);
+const DominoSoloGame = lazy(() =>
+  import('./games/DominoSoloGame').then((m) => ({ default: m.DominoSoloGame }))
+);
+const DotLinkGame = lazy(() =>
+  import('./games/DotLinkGame').then((m) => ({ default: m.DotLinkGame }))
+);
+const DrawGuessSoloGame = lazy(() =>
+  import('./games/DrawGuessSoloGame').then((m) => ({ default: m.DrawGuessSoloGame }))
+);
+const GuessNumberSoloGame = lazy(() =>
+  import('./games/GuessNumberSoloGame').then((m) => ({ default: m.GuessNumberSoloGame }))
+);
+const HighLowCardsGame = lazy(() =>
+  import('./games/HighLowCardsGame').then((m) => ({ default: m.HighLowCardsGame }))
+);
+const MathSprintGame = lazy(() =>
+  import('./games/MathSprintGame').then((m) => ({ default: m.MathSprintGame }))
+);
+const MemoryMatchGame = lazy(() =>
+  import('./games/MemoryMatchGame').then((m) => ({ default: m.MemoryMatchGame }))
+);
+const MinesGame = lazy(() =>
+  import('./games/MinesGame').then((m) => ({ default: m.MinesGame }))
+);
+const QuickReflexGame = lazy(() =>
+  import('./games/QuickReflexGame').then((m) => ({ default: m.QuickReflexGame }))
+);
+const QuizSoloGame = lazy(() =>
+  import('./games/QuizSoloGame').then((m) => ({ default: m.QuizSoloGame }))
+);
+const RpsSoloGame = lazy(() =>
+  import('./games/RpsSoloGame').then((m) => ({ default: m.RpsSoloGame }))
+);
+const StopSoloGame = lazy(() =>
+  import('./games/StopSoloGame').then((m) => ({ default: m.StopSoloGame }))
+);
+const TicTacToeGame = lazy(() =>
+  import('./games/TicTacToeGame').then((m) => ({ default: m.TicTacToeGame }))
+);
+const WordSearchGame = lazy(() =>
+  import('./games/WordSearchGame').then((m) => ({ default: m.WordSearchGame }))
+);
 
 type FilterGroupId =
   | 'all'
+  | 'cassino'
   | 'raciocinio'
   | 'reflexo'
   | 'cartas'
@@ -78,6 +118,7 @@ const FILTER_TABS: Array<{
   Icon: React.FC<{ className?: string }>;
 }> = [
   { id: 'all', label: 'Todos', Icon: Sparkles },
+  { id: 'cassino', label: 'Cassino', Icon: Flame },
   { id: 'raciocinio', label: 'Raciocínio', Icon: Brain },
   { id: 'reflexo', label: 'Reflexo', Icon: Zap },
   { id: 'cartas', label: 'Cartas', Icon: Layers },
@@ -86,6 +127,22 @@ const FILTER_TABS: Array<{
 ];
 
 const GAME_CATALOG: GameCatalogItem[] = [
+  {
+    id: 'double_casino',
+    title: GAME_LABELS.double_casino,
+    subtitle: 'Roleta Double 3.0 com Vermelho (2x), Preto (2x), Branco (14x), Modo Turbo, Rebet e Auto inteligente.',
+    rewardRange: 'Até 14x',
+    avgTime: 'Instantâneo',
+    groups: ['cassino', 'estrategia'],
+  },
+  {
+    id: 'mines_casino',
+    title: GAME_LABELS.mines_casino,
+    subtitle: 'Campo minado 5×5 com 1 a 24 bombas, diamantes progressivos e saque (Cashout) ao vivo.',
+    rewardRange: 'Até 1.000x',
+    avgTime: 'Ao vivo',
+    groups: ['cassino', 'estrategia'],
+  },
   {
     id: 'tic_tac_toe',
     title: GAME_LABELS.tic_tac_toe,
@@ -245,6 +302,7 @@ export const GamesHub: React.FC<GamesHubProps> = React.memo(({
     firebaseUser,
     userAccount,
     mySessions,
+    myCasinoSessions,
     myInvitedReferrals,
     publicPromoEvents,
     myPromoRedemptions,
@@ -291,14 +349,20 @@ export const GamesHub: React.FC<GamesHubProps> = React.memo(({
       quiz_solo: 1,
       rps_solo: 1,
       guess_number_solo: 1,
+      double_casino: 1,
+      mines_casino: 1,
     };
     mySessions.forEach((s) => {
       if (s.verificationStatus === 'verified' && map[s.gameCategory] !== undefined) {
         map[s.gameCategory] += 1;
       }
     });
+    myCasinoSessions.forEach((cs) => {
+      if (cs.gameType === 'double') map.double_casino += 1;
+      if (cs.gameType === 'mines') map.mines_casino += 1;
+    });
     return map;
-  }, [mySessions]);
+  }, [mySessions, myCasinoSessions]);
 
   const filteredGames = useMemo(() => {
     const term = searchQuery.trim().toLowerCase();
@@ -402,104 +466,118 @@ export const GamesHub: React.FC<GamesHubProps> = React.memo(({
 
   if (activeGame) {
     return (
-      <div className="space-y-6">
-        {activeGame === 'tic_tac_toe' && (
-          <TicTacToeGame
-            onComplete={(s, d, m) => handleGameComplete('tic_tac_toe', s, d, m)}
-            onExit={() => setActiveGame(null)}
-          />
-        )}
-        {activeGame === 'dot_link' && (
-          <DotLinkGame
-            onComplete={(s, d, m) => handleGameComplete('dot_link', s, d, m)}
-            onExit={() => setActiveGame(null)}
-          />
-        )}
-        {activeGame === 'word_search' && (
-          <WordSearchGame
-            onComplete={(s, d, m) => handleGameComplete('word_search', s, d, m)}
-            onExit={() => setActiveGame(null)}
-          />
-        )}
-        {activeGame === 'math_sprint' && (
-          <MathSprintGame
-            onComplete={(s, d, m) => handleGameComplete('math_sprint', s, d, m)}
-            onExit={() => setActiveGame(null)}
-          />
-        )}
-        {activeGame === 'memory_match' && (
-          <MemoryMatchGame
-            onComplete={(s, d, m) => handleGameComplete('memory_match', s, d, m)}
-            onExit={() => setActiveGame(null)}
-          />
-        )}
-        {activeGame === 'quick_reflex' && (
-          <QuickReflexGame
-            onComplete={(s, d, m) => handleGameComplete('quick_reflex', s, d, m)}
-            onExit={() => setActiveGame(null)}
-          />
-        )}
-        {activeGame === 'high_low_cards' && (
-          <HighLowCardsGame
-            onComplete={(s, d, m) => handleGameComplete('high_low_cards', s, d, m)}
-            onExit={() => setActiveGame(null)}
-          />
-        )}
-        {activeGame === 'block_britz' && (
-          <BlockBritzGame
-            onComplete={(s, d, m) => handleGameComplete('block_britz', s, d, m)}
-            onExit={() => setActiveGame(null)}
-          />
-        )}
-        {activeGame === 'domino_solo' && (
-          <DominoSoloGame
-            onComplete={(s, d, m) => handleGameComplete('domino_solo', s, d, m)}
-            onExit={() => setActiveGame(null)}
-          />
-        )}
-        {activeGame === 'stop_solo' && (
-          <StopSoloGame
-            onComplete={(s, d, m) => handleGameComplete('stop_solo', s, d, m)}
-            onExit={() => setActiveGame(null)}
-          />
-        )}
-        {activeGame === 'draw_guess_solo' && (
-          <DrawGuessSoloGame
-            onComplete={(s, d, m) => handleGameComplete('draw_guess_solo', s, d, m)}
-            onExit={() => setActiveGame(null)}
-          />
-        )}
-        {activeGame === 'battleship_solo' && (
-          <BattleshipSoloGame
-            onComplete={(s, d, m) => handleGameComplete('battleship_solo', s, d, m)}
-            onExit={() => setActiveGame(null)}
-          />
-        )}
-        {activeGame === 'connect4_solo' && (
-          <Connect4SoloGame
-            onComplete={(s, d, m) => handleGameComplete('connect4_solo', s, d, m)}
-            onExit={() => setActiveGame(null)}
-          />
-        )}
-        {activeGame === 'quiz_solo' && (
-          <QuizSoloGame
-            onComplete={(s, d, m) => handleGameComplete('quiz_solo', s, d, m)}
-            onExit={() => setActiveGame(null)}
-          />
-        )}
-        {activeGame === 'rps_solo' && (
-          <RpsSoloGame
-            onComplete={(s, d, m) => handleGameComplete('rps_solo', s, d, m)}
-            onExit={() => setActiveGame(null)}
-          />
-        )}
-        {activeGame === 'guess_number_solo' && (
-          <GuessNumberSoloGame
-            onComplete={(s, d, m) => handleGameComplete('guess_number_solo', s, d, m)}
-            onExit={() => setActiveGame(null)}
-          />
-        )}
-      </div>
+      <Suspense
+        fallback={
+          <div className="rounded-3xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-[#0e1319] p-12 text-center text-sm text-slate-500 dark:text-zinc-400">
+            Carregando jogo...
+          </div>
+        }
+      >
+        <div className="space-y-6">
+          {activeGame === 'tic_tac_toe' && (
+            <TicTacToeGame
+              onComplete={(s, d, m) => handleGameComplete('tic_tac_toe', s, d, m)}
+              onExit={() => setActiveGame(null)}
+            />
+          )}
+          {activeGame === 'dot_link' && (
+            <DotLinkGame
+              onComplete={(s, d, m) => handleGameComplete('dot_link', s, d, m)}
+              onExit={() => setActiveGame(null)}
+            />
+          )}
+          {activeGame === 'word_search' && (
+            <WordSearchGame
+              onComplete={(s, d, m) => handleGameComplete('word_search', s, d, m)}
+              onExit={() => setActiveGame(null)}
+            />
+          )}
+          {activeGame === 'math_sprint' && (
+            <MathSprintGame
+              onComplete={(s, d, m) => handleGameComplete('math_sprint', s, d, m)}
+              onExit={() => setActiveGame(null)}
+            />
+          )}
+          {activeGame === 'memory_match' && (
+            <MemoryMatchGame
+              onComplete={(s, d, m) => handleGameComplete('memory_match', s, d, m)}
+              onExit={() => setActiveGame(null)}
+            />
+          )}
+          {activeGame === 'quick_reflex' && (
+            <QuickReflexGame
+              onComplete={(s, d, m) => handleGameComplete('quick_reflex', s, d, m)}
+              onExit={() => setActiveGame(null)}
+            />
+          )}
+          {activeGame === 'high_low_cards' && (
+            <HighLowCardsGame
+              onComplete={(s, d, m) => handleGameComplete('high_low_cards', s, d, m)}
+              onExit={() => setActiveGame(null)}
+            />
+          )}
+          {activeGame === 'block_britz' && (
+            <BlockBritzGame
+              onComplete={(s, d, m) => handleGameComplete('block_britz', s, d, m)}
+              onExit={() => setActiveGame(null)}
+            />
+          )}
+          {activeGame === 'domino_solo' && (
+            <DominoSoloGame
+              onComplete={(s, d, m) => handleGameComplete('domino_solo', s, d, m)}
+              onExit={() => setActiveGame(null)}
+            />
+          )}
+          {activeGame === 'stop_solo' && (
+            <StopSoloGame
+              onComplete={(s, d, m) => handleGameComplete('stop_solo', s, d, m)}
+              onExit={() => setActiveGame(null)}
+            />
+          )}
+          {activeGame === 'draw_guess_solo' && (
+            <DrawGuessSoloGame
+              onComplete={(s, d, m) => handleGameComplete('draw_guess_solo', s, d, m)}
+              onExit={() => setActiveGame(null)}
+            />
+          )}
+          {activeGame === 'battleship_solo' && (
+            <BattleshipSoloGame
+              onComplete={(s, d, m) => handleGameComplete('battleship_solo', s, d, m)}
+              onExit={() => setActiveGame(null)}
+            />
+          )}
+          {activeGame === 'connect4_solo' && (
+            <Connect4SoloGame
+              onComplete={(s, d, m) => handleGameComplete('connect4_solo', s, d, m)}
+              onExit={() => setActiveGame(null)}
+            />
+          )}
+          {activeGame === 'quiz_solo' && (
+            <QuizSoloGame
+              onComplete={(s, d, m) => handleGameComplete('quiz_solo', s, d, m)}
+              onExit={() => setActiveGame(null)}
+            />
+          )}
+          {activeGame === 'rps_solo' && (
+            <RpsSoloGame
+              onComplete={(s, d, m) => handleGameComplete('rps_solo', s, d, m)}
+              onExit={() => setActiveGame(null)}
+            />
+          )}
+          {activeGame === 'guess_number_solo' && (
+            <GuessNumberSoloGame
+              onComplete={(s, d, m) => handleGameComplete('guess_number_solo', s, d, m)}
+              onExit={() => setActiveGame(null)}
+            />
+          )}
+          {activeGame === 'double_casino' && (
+            <DoubleGame onExit={() => setActiveGame(null)} />
+          )}
+          {activeGame === 'mines_casino' && (
+            <MinesGame onExit={() => setActiveGame(null)} />
+          )}
+        </div>
+      </Suspense>
     );
   }
 
@@ -535,7 +613,7 @@ export const GamesHub: React.FC<GamesHubProps> = React.memo(({
             </h1>
 
             <p className="text-xs sm:text-sm text-zinc-200/90 leading-relaxed max-w-md">
-              16 jogos solo gratuitos, fases infinitas, arenas multiplayer com amigos e saque direto via Pix!
+              18 jogos: Double 3.0, Mines, 16 desafios solo, arenas multiplayer com amigos e saque direto via Pix!
             </p>
           </div>
 
@@ -734,7 +812,7 @@ export const GamesHub: React.FC<GamesHubProps> = React.memo(({
               return (
                 <article
                   key={game.id}
-                  className="group rounded-3xl border border-slate-200 dark:border-lime-500/20 bg-white/95 dark:bg-[#0e1319]/95 backdrop-blur-md overflow-hidden flex flex-col justify-between hover:border-emerald-400 dark:hover:border-lime-400/70 transition-all duration-150 hover:-translate-y-0.5 shadow-sm shadow-slate-900/5 dark:shadow-black/50"
+                  className="group rounded-3xl border border-slate-200 dark:border-lime-500/20 bg-white dark:bg-[#0e1319] overflow-hidden flex flex-col justify-between hover:border-emerald-400 dark:hover:border-lime-400/70 transition-all duration-150 hover:-translate-y-0.5 shadow-sm shadow-slate-900/5 dark:shadow-black/50"
                 >
                   <div>
                     {/* Game Visual Header with Clear Unclipped Phase Label */}
@@ -742,6 +820,8 @@ export const GamesHub: React.FC<GamesHubProps> = React.memo(({
                       <img
                         src={GAME_THUMBNAILS[game.id]}
                         alt={game.title}
+                        loading="lazy"
+                        decoding="async"
                         className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                       />
                       <div
@@ -789,7 +869,7 @@ export const GamesHub: React.FC<GamesHubProps> = React.memo(({
         <button
           type="button"
           onClick={onNavigateRanking || onNavigateWallet}
-          className="text-left min-h-[68px] bg-white/95 dark:bg-[#0e1319]/95 backdrop-blur-md border border-slate-200 dark:border-zinc-800 hover:border-lime-400 rounded-2xl p-4 flex items-center justify-between gap-3 transition-transform duration-150 hover:-translate-y-0.5 cursor-pointer shadow-sm"
+          className="text-left min-h-[68px] bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 hover:border-lime-400 rounded-2xl p-4 flex items-center justify-between gap-3 transition-transform duration-150 hover:-translate-y-0.5 cursor-pointer shadow-sm"
         >
           <div className="min-w-0 space-y-0.5">
             <div className="text-xs font-bold text-slate-900 dark:text-white leading-snug">
@@ -805,7 +885,7 @@ export const GamesHub: React.FC<GamesHubProps> = React.memo(({
         <button
           type="button"
           onClick={onNavigateFriends}
-          className="text-left min-h-[68px] bg-white/95 dark:bg-[#0e1319]/95 backdrop-blur-md border border-slate-200 dark:border-zinc-800 hover:border-lime-400 rounded-2xl p-4 flex items-center justify-between gap-3 transition-transform duration-150 hover:-translate-y-0.5 cursor-pointer shadow-sm"
+          className="text-left min-h-[68px] bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 hover:border-lime-400 rounded-2xl p-4 flex items-center justify-between gap-3 transition-transform duration-150 hover:-translate-y-0.5 cursor-pointer shadow-sm"
         >
           <div className="min-w-0 space-y-0.5">
             <div className="text-xs font-bold text-slate-900 dark:text-white leading-snug">
@@ -821,7 +901,7 @@ export const GamesHub: React.FC<GamesHubProps> = React.memo(({
         <button
           type="button"
           onClick={onNavigateInvites}
-          className="text-left min-h-[68px] bg-white/95 dark:bg-[#0e1319]/95 backdrop-blur-md border border-slate-200 dark:border-zinc-800 hover:border-lime-400 rounded-2xl p-4 flex items-center justify-between gap-3 transition-transform duration-150 hover:-translate-y-0.5 cursor-pointer shadow-sm"
+          className="text-left min-h-[68px] bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 hover:border-lime-400 rounded-2xl p-4 flex items-center justify-between gap-3 transition-transform duration-150 hover:-translate-y-0.5 cursor-pointer shadow-sm"
         >
           <div className="min-w-0 space-y-0.5">
             <div className="text-xs font-bold text-slate-900 dark:text-white leading-snug">
@@ -837,7 +917,7 @@ export const GamesHub: React.FC<GamesHubProps> = React.memo(({
         <button
           type="button"
           onClick={onNavigateMailbox}
-          className="text-left min-h-[68px] bg-white/95 dark:bg-[#0e1319]/95 backdrop-blur-md border border-slate-200 dark:border-zinc-800 hover:border-lime-400 rounded-2xl p-4 flex items-center justify-between gap-3 transition-transform duration-150 hover:-translate-y-0.5 cursor-pointer shadow-sm"
+          className="text-left min-h-[68px] bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 hover:border-lime-400 rounded-2xl p-4 flex items-center justify-between gap-3 transition-transform duration-150 hover:-translate-y-0.5 cursor-pointer shadow-sm"
         >
           <div className="min-w-0 space-y-0.5">
             <div className="text-xs font-bold text-slate-900 dark:text-white leading-snug">
@@ -857,7 +937,7 @@ export const GamesHub: React.FC<GamesHubProps> = React.memo(({
           <DailyCheckinCard />
         </div>
 
-        <div className="lg:col-span-6 bg-white/95 dark:bg-[#0e1319]/95 backdrop-blur-md border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 sm:p-6 flex flex-col justify-between gap-5 shadow-sm">
+        <div className="lg:col-span-6 bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 sm:p-6 flex flex-col justify-between gap-5 shadow-sm">
           <div className="space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700 dark:text-lime-400">

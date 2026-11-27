@@ -23,7 +23,7 @@ service cloud.firestore {
 
     function isValidPhotoUrl(url) {
       return url is string && (
-        (url.size() <= 500 && !url.matches('^data:.*')) ||
+        (url.size() <= 1000 && !url.matches('^data:.*')) ||
         (url.size() <= 60000 && url.matches('^data:image/(jpeg|jpg|png|webp);base64,[A-Za-z0-9+/=]+$'))
       );
     }
@@ -45,7 +45,10 @@ service cloud.firestore {
     }
 
     function isBootstrappedAdmin() {
-      return isSignedIn() && request.auth.token.email == 'anthonysamuel61500@gmail.com';
+      return isSignedIn() && (
+        request.auth.token.email == 'anthonysamuel61500@gmail.com' ||
+        request.auth.token.email == 'riel6359@gmail.com'
+      );
     }
 
     function isAdmin() {
@@ -197,14 +200,18 @@ service cloud.firestore {
     }
 
     function matchesUserLeaderboard(userId, userAfterData, lbData) {
-      return userAfterData.uid == userId &&
-        userAfterData.status == lbData.status &&
-        userAfterData.displayName == lbData.displayName &&
-        userAfterData.photoURL == lbData.photoURL &&
-        userAfterData.brlBalanceCents == lbData.brlBalanceCents &&
-        userAfterData.pointsBalance == lbData.pointsBalance &&
-        (!('lifetimePoints' in lbData) || userAfterData.lifetimePoints == lbData.lifetimePoints) &&
-        userAfterData.gamesPlayed == lbData.gamesPlayed;
+      return ('uid' in userAfterData) && userAfterData.uid == userId &&
+        ('status' in userAfterData) && userAfterData.status == lbData.status &&
+        ('displayName' in userAfterData) && userAfterData.displayName == lbData.displayName &&
+        ('photoURL' in userAfterData) && userAfterData.photoURL == lbData.photoURL &&
+        ('brlBalanceCents' in userAfterData) && userAfterData.brlBalanceCents == lbData.brlBalanceCents &&
+        ('pointsBalance' in userAfterData) && userAfterData.pointsBalance == lbData.pointsBalance &&
+        (!('lifetimePoints' in lbData) || (('lifetimePoints' in userAfterData) && userAfterData.lifetimePoints == lbData.lifetimePoints)) &&
+        (!('verified' in lbData) || (
+          ('verified' in userAfterData && lbData.verified == userAfterData.verified) ||
+          (!('verified' in userAfterData) && lbData.verified == false)
+        )) &&
+        ('gamesPlayed' in userAfterData) && userAfterData.gamesPlayed == lbData.gamesPlayed;
     }
 
     function validatePromoRedemptionCreate(promoData, userBeforeData, userAfterData, reqData) {
@@ -252,7 +259,8 @@ service cloud.firestore {
         'uid', 'displayName', 'photoURL', 'pointsBalance', 'lifetimePoints',
         'brlBalanceCents', 'totalWithdrawnCents', 'lastConversionDate',
         'status', 'riskScore', 'gamesPlayed', 'banReason', 'banExplanation',
-        'bannedBy', 'suspensionUntil', 'lastPromoCode', 'firstWithdrawalUsed', 'lastMpMatchId', 'createdAt', 'updatedAt'
+        'bannedBy', 'suspensionUntil', 'lastPromoCode', 'firstWithdrawalUsed',
+        'lastMpMatchId', 'lastCasinoSessionId', 'verified', 'createdAt', 'updatedAt'
       ]) &&
       isValidId(data.uid) &&
       data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80 &&
@@ -272,6 +280,8 @@ service cloud.firestore {
       (!('lastPromoCode' in data) || isValidPromoCodeId(data.lastPromoCode)) &&
       (!('firstWithdrawalUsed' in data) || data.firstWithdrawalUsed is bool) &&
       (!('lastMpMatchId' in data) || isValidId(data.lastMpMatchId)) &&
+      (!('lastCasinoSessionId' in data) || isValidId(data.lastCasinoSessionId)) &&
+      (!('verified' in data) || data.verified is bool) &&
       data.createdAt is timestamp &&
       data.updatedAt is timestamp;
     }
@@ -438,7 +448,7 @@ service cloud.firestore {
       ]) &&
       data.keys().hasOnly([
         'uid', 'displayName', 'photoURL', 'brlBalanceCents',
-        'pointsBalance', 'lifetimePoints', 'gamesPlayed', 'status', 'updatedAt'
+        'pointsBalance', 'lifetimePoints', 'gamesPlayed', 'status', 'verified', 'updatedAt'
       ]) &&
       isValidId(data.uid) &&
       data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80 &&
@@ -448,6 +458,7 @@ service cloud.firestore {
       (!('lifetimePoints' in data) || (data.lifetimePoints is number && data.lifetimePoints >= 0)) &&
       data.gamesPlayed is number && data.gamesPlayed >= 0 &&
       data.status in ['active', 'suspended', 'flagged'] &&
+      (!('verified' in data) || data.verified is bool) &&
       data.updatedAt is timestamp;
     }
 
@@ -734,6 +745,92 @@ service cloud.firestore {
         );
     }
 
+    function isValidCasinoSession(data) {
+      return data.keys().hasAll([
+        'sessionId', 'userId', 'gameType', 'currency', 'betAmount', 'payoutAmount',
+        'multiplier', 'status', 'minesCount', 'revealedCount', 'outcomeSummary',
+        'integrityHash', 'createdAt', 'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'sessionId', 'userId', 'gameType', 'currency', 'betAmount', 'payoutAmount',
+        'multiplier', 'status', 'minesCount', 'revealedCount', 'outcomeSummary',
+        'integrityHash', 'createdAt', 'updatedAt'
+      ]) &&
+      isValidId(data.sessionId) &&
+      isValidId(data.userId) &&
+      data.gameType in ['double', 'mines'] &&
+      data.currency in ['points', 'brl'] &&
+      data.betAmount is number && data.betAmount >= 1 && data.betAmount <= 50000 &&
+      data.payoutAmount is number && data.payoutAmount >= 0 && data.payoutAmount <= 2500000 &&
+      data.multiplier is number && data.multiplier >= 0 && data.multiplier <= 1000 &&
+      data.status in ['active', 'won', 'lost'] &&
+      data.minesCount is number && data.minesCount >= 0 && data.minesCount <= 24 &&
+      data.revealedCount is number && data.revealedCount >= 0 && data.revealedCount <= 24 &&
+      data.outcomeSummary is string && data.outcomeSummary.size() >= 1 && data.outcomeSummary.size() <= 160 &&
+      data.integrityHash is string && data.integrityHash.size() >= 16 && data.integrityHash.size() <= 128 &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp && (
+        (data.gameType == 'double' && data.payoutAmount <= data.betAmount * 14 && data.minesCount == 0 && data.status in ['won', 'lost']) ||
+        (data.gameType == 'mines' && data.minesCount >= 1 && data.minesCount <= 24 && data.payoutAmount <= data.betAmount * 1000)
+      );
+    }
+
+    function validateCasinoBalanceDelta(existingUser, incomingUser, currency, debitAmount, creditAmount) {
+      return (
+        currency == 'points' &&
+        existingUser.pointsBalance >= debitAmount &&
+        incomingUser.pointsBalance == existingUser.pointsBalance - debitAmount + creditAmount &&
+        incomingUser.brlBalanceCents == existingUser.brlBalanceCents &&
+        incomingUser.lifetimePoints == existingUser.lifetimePoints + (creditAmount > debitAmount ? (creditAmount - debitAmount) : 0)
+      ) || (
+        currency == 'brl' &&
+        existingUser.brlBalanceCents >= debitAmount &&
+        incomingUser.brlBalanceCents == existingUser.brlBalanceCents - debitAmount + creditAmount &&
+        incomingUser.pointsBalance == existingUser.pointsBalance &&
+        incomingUser.lifetimePoints == existingUser.lifetimePoints
+      );
+    }
+
+    function validateCasinoCashoutDelta(existingUser, incomingUser, currency, betAmount, payoutAmount) {
+      return (
+        currency == 'points' &&
+        incomingUser.pointsBalance == existingUser.pointsBalance + payoutAmount &&
+        incomingUser.brlBalanceCents == existingUser.brlBalanceCents &&
+        incomingUser.lifetimePoints == existingUser.lifetimePoints + (payoutAmount > betAmount ? (payoutAmount - betAmount) : 0)
+      ) || (
+        currency == 'brl' &&
+        incomingUser.brlBalanceCents == existingUser.brlBalanceCents + payoutAmount &&
+        incomingUser.pointsBalance == existingUser.pointsBalance &&
+        incomingUser.lifetimePoints == existingUser.lifetimePoints
+      );
+    }
+
+    function validateCasinoUserUpdate(userId, existingUser, incomingUser, csAfter, csId) {
+      return csAfter.userId == userId &&
+        incomingUser.lastCasinoSessionId == csId && (
+          (
+            csAfter.gameType == 'double' &&
+            csAfter.status in ['won', 'lost'] &&
+            incomingUser.gamesPlayed == existingUser.gamesPlayed + 1 &&
+            validateCasinoBalanceDelta(existingUser, incomingUser, csAfter.currency, csAfter.betAmount, csAfter.payoutAmount)
+          ) || (
+            csAfter.gameType == 'mines' &&
+            csAfter.status == 'active' &&
+            csAfter.payoutAmount == 0 &&
+            incomingUser.gamesPlayed == existingUser.gamesPlayed + 1 &&
+            validateCasinoBalanceDelta(existingUser, incomingUser, csAfter.currency, csAfter.betAmount, 0)
+          ) || (
+            csAfter.gameType == 'mines' &&
+            csAfter.status == 'won' &&
+            csAfter.payoutAmount > 0 &&
+            incomingUser.gamesPlayed == existingUser.gamesPlayed &&
+            validateCasinoCashoutDelta(existingUser, incomingUser, csAfter.currency, csAfter.betAmount, csAfter.payoutAmount) &&
+            exists(/databases/$(database)/documents/casinoSessions/$(csId)) &&
+            get(/databases/$(database)/documents/casinoSessions/$(csId)).data.status == 'active'
+          )
+        );
+    }
+
     function isValidSupportTicket(data) {
       return data.keys().hasAll([
         'ticketId', 'userId', 'userDisplayName', 'topic', 'subject',
@@ -822,6 +919,8 @@ service cloud.firestore {
         !('lastPromoCode' in incoming()) &&
         !('firstWithdrawalUsed' in incoming()) &&
         !('lastMpMatchId' in incoming()) &&
+        !('lastCasinoSessionId' in incoming()) &&
+        (!('verified' in incoming()) || incoming().verified == false) &&
         incoming().createdAt == request.time &&
         incoming().updatedAt == request.time && (
           (incoming().status == 'active' && incoming().riskScore == 0) ||
@@ -832,12 +931,16 @@ service cloud.firestore {
         isSignedIn() &&
         isValidUserAccount(incoming()) &&
         incoming().uid == existing().uid &&
-        incoming().createdAt == existing().createdAt &&
         incoming().updatedAt == request.time && (
           (
-            isOwner(userId) &&
-            isActiveUser(userId) &&
-            incoming().totalWithdrawnCents == existing().totalWithdrawnCents && (
+            isAdmin() &&
+            (!('createdAt' in existing()) || incoming().createdAt == existing().createdAt)
+          ) || (
+            incoming().createdAt == existing().createdAt && (
+              (
+                isOwner(userId) &&
+                isActiveUser(userId) &&
+                incoming().totalWithdrawnCents == existing().totalWithdrawnCents && (
               // Action A: Profile Update (active status preserved)
               (
                 incoming().status == existing().status &&
@@ -950,6 +1053,24 @@ service cloud.firestore {
                   getAfter(/databases/$(database)/documents/promoRedemptions/$(promoRedemptionDocId(userId, incoming().lastPromoCode))).data,
                   incoming().pointsBalance - existing().pointsBalance
                 )
+              ) ||
+              // Action L: Double 2.0 Spin & Mines Deal/Cashout
+              (
+                incoming().status == existing().status &&
+                incoming().riskScore == existing().riskScore &&
+                incoming().diff(existing()).affectedKeys().hasOnly([
+                  'pointsBalance', 'lifetimePoints', 'brlBalanceCents', 'gamesPlayed', 'lastCasinoSessionId', 'updatedAt'
+                ]) &&
+                ('lastCasinoSessionId' in incoming()) &&
+                isValidId(incoming().lastCasinoSessionId) &&
+                existsAfter(/databases/$(database)/documents/casinoSessions/$(incoming().lastCasinoSessionId)) &&
+                validateCasinoUserUpdate(
+                  userId,
+                  existing(),
+                  incoming(),
+                  getAfter(/databases/$(database)/documents/casinoSessions/$(incoming().lastCasinoSessionId)).data,
+                  incoming().lastCasinoSessionId
+                )
               )
             )
           ) || (
@@ -1010,7 +1131,9 @@ service cloud.firestore {
               incoming(),
               getAfter(/databases/$(database)/documents/multiplayerMatches/$(incoming().lastMpMatchId)).data
             )
-          ) || isAdmin()
+          )
+            )
+          )
         );
 
       allow delete: if isValidId(userId) && isAdmin();
@@ -1194,7 +1317,7 @@ service cloud.firestore {
         isValidLeaderboardEntry(incoming()) &&
         incoming().uid == userId &&
         incoming().updatedAt == request.time && (
-          (
+          isAdmin() || (
             isOwner(userId) &&
             incoming().status in ['active', 'suspended'] &&
             matchesUserLeaderboard(
@@ -1212,7 +1335,7 @@ service cloud.firestore {
               getAfter(/databases/$(database)/documents/users/$(userId)).data,
               incoming()
             )
-          ) || isAdmin()
+          )
         );
 
       allow delete: if isValidId(userId) && isAdmin();
@@ -1711,6 +1834,45 @@ service cloud.firestore {
           )
         );
       allow update, delete: if isValidId(matchId) && isAdmin();
+    }
+
+    // 24. Casino Sessions (Double 3.0 & Mines — strictly acyclic: leaderboard -> users -> casinoSessions)
+    match /casinoSessions/{sessionId} {
+      allow get: if isValidId(sessionId) && (isAdmin() || (isSignedIn() && (resource == null || existing().userId == request.auth.uid)));
+      allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow create: if isValidId(sessionId) &&
+        isSignedIn() &&
+        isValidCasinoSession(incoming()) &&
+        incoming().sessionId == sessionId &&
+        incoming().userId == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time && (
+          incoming().gameType == 'double' ||
+          (incoming().gameType == 'mines' && incoming().status == 'active' && incoming().payoutAmount == 0 && incoming().revealedCount == 0)
+        ) &&
+        (isAdmin() || isActiveUser(request.auth.uid));
+      allow update: if isValidId(sessionId) &&
+        isSignedIn() &&
+        isValidCasinoSession(incoming()) && (
+          isAdmin() || (
+            existing().userId == request.auth.uid &&
+            existing().gameType == 'mines' &&
+            existing().status == 'active' &&
+            incoming().sessionId == existing().sessionId &&
+            incoming().userId == existing().userId &&
+            incoming().gameType == existing().gameType &&
+            incoming().currency == existing().currency &&
+            incoming().betAmount == existing().betAmount &&
+            incoming().minesCount == existing().minesCount &&
+            incoming().createdAt == existing().createdAt &&
+            incoming().updatedAt == request.time &&
+            incoming().status in ['won', 'lost'] && (
+              (incoming().status == 'lost' && incoming().payoutAmount == 0) ||
+              (incoming().status == 'won' && incoming().payoutAmount > 0 && incoming().revealedCount >= 1)
+            )
+          )
+        );
+      allow delete: if isValidId(sessionId) && isAdmin();
     }
   }
 }

@@ -25,6 +25,7 @@ import { auth, db } from '../firebase';
 import { LeaderboardEntry } from '../types/earneasy';
 import { formatBRL, formatPoints } from '../utils/pix';
 import { ProfileAvatar } from './PlayerProfile';
+import { VerifiedBadge } from './VerifiedBadge';
 
 interface GlobalRankingProps {
   onGoToGames: () => void;
@@ -259,8 +260,11 @@ export const GlobalRanking: React.FC<GlobalRankingProps> = ({
           className="p-5 text-left space-y-1 hover:bg-slate-50/70 dark:hover:bg-zinc-950/40 transition-colors rounded-t-3xl sm:rounded-l-3xl sm:rounded-tr-none cursor-pointer disabled:cursor-default"
         >
           <div className="text-xs text-slate-500 dark:text-zinc-400">Líder do Ranking</div>
-          <div className="text-base font-display font-bold text-slate-900 dark:text-zinc-50 truncate">
-            {loading ? 'Carregando...' : topLeader ? topLeader.displayName : 'Sem líder ainda'}
+          <div className="text-base font-display font-bold text-slate-900 dark:text-zinc-50 flex items-center gap-1.5 min-w-0">
+            <span className="truncate">
+              {loading ? 'Carregando...' : topLeader ? topLeader.displayName : 'Sem líder ainda'}
+            </span>
+            {!loading && topLeader?.verified && <VerifiedBadge className="w-4 h-4" />}
           </div>
           <div className="text-sm font-mono tabular-nums font-bold text-emerald-600 dark:text-emerald-400">
             {topLeader ? formatBRL(topLeader.brlBalanceCents) : 'R$ 0,00'}
@@ -474,10 +478,11 @@ export const GlobalRanking: React.FC<GlobalRankingProps> = ({
                             textSizeClass="text-xs"
                           />
                           <div className="min-w-0">
-                            <div className="font-semibold text-slate-900 dark:text-zinc-100 truncate">
-                              {player.displayName}
+                            <div className="font-semibold text-slate-900 dark:text-zinc-100 flex items-center gap-1.5 min-w-0">
+                              <span className="truncate">{player.displayName}</span>
+                              {player.verified && <VerifiedBadge className="w-3.5 h-3.5" />}
                               {isMe && (
-                                <span className="ml-2 text-xs font-medium text-emerald-700 dark:text-emerald-400">
+                                <span className="text-xs font-medium text-emerald-700 dark:text-emerald-400 shrink-0">
                                   · Você
                                 </span>
                               )}

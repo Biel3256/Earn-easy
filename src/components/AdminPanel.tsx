@@ -16,6 +16,7 @@ import {
   writeBatch,
 } from 'firebase/firestore';
 import {
+  BadgeCheck,
   Ban,
   CheckCircle2,
   Clock,
@@ -63,6 +64,7 @@ import {
   WithdrawalAttemptLog,
   WithdrawalAttemptStatus,
 } from '../types/earneasy';
+import { VerifiedBadge } from './VerifiedBadge';
 import { generateId, sha256Hex } from '../utils/antifraud';
 import {
   extractReadableError,
@@ -684,8 +686,10 @@ export const AdminPanel: React.FC = React.memo(() => {
               photoURL: uData.photoURL,
               brlBalanceCents: uData.brlBalanceCents + w.amountCents,
               pointsBalance: uData.pointsBalance,
+              lifetimePoints: uData.lifetimePoints,
               gamesPlayed: uData.gamesPlayed,
               status: uData.status,
+              verified: Boolean(uData.verified),
               updatedAt: serverTimestamp(),
             });
           }
@@ -948,11 +952,27 @@ export const AdminPanel: React.FC = React.memo(() => {
           ? current.pointsBalance + amount
           : current.pointsBalance - amount;
         if (nextBalance < 0) throw new Error('O usuário não possui pontos suficientes para essa retirada.');
+        const nextLifetime =
+          pointsOperation === 'add' ? current.lifetimePoints + amount : current.lifetimePoints;
         tx.update(userRef, {
           pointsBalance: nextBalance,
-          ...(pointsOperation === 'add' ? { lifetimePoints: current.lifetimePoints + amount } : {}),
+          ...(pointsOperation === 'add' ? { lifetimePoints: nextLifetime } : {}),
           updatedAt: serverTimestamp(),
         });
+        if (current.status === 'active') {
+          tx.set(doc(db, 'leaderboard', pointsTarget.uid), {
+            uid: current.uid,
+            displayName: current.displayName,
+            photoURL: current.photoURL,
+            brlBalanceCents: current.brlBalanceCents,
+            pointsBalance: nextBalance,
+            lifetimePoints: nextLifetime,
+            gamesPlayed: current.gamesPlayed,
+            status: current.status,
+            verified: Boolean(current.verified),
+            updatedAt: serverTimestamp(),
+          });
+        }
         const logId = generateId('pts');
         tx.set(doc(db, 'fraudLogs', logId), {
           logId,
@@ -990,13 +1010,48 @@ export const AdminPanel: React.FC = React.memo(() => {
         photoURL: u.photoURL,
         brlBalanceCents: u.brlBalanceCents,
         pointsBalance: u.pointsBalance,
+        lifetimePoints: u.lifetimePoints,
         gamesPlayed: u.gamesPlayed,
         status: 'active',
+        verified: Boolean(u.verified),
         updatedAt: serverTimestamp(),
       });
       setActionMsg(`Usuário ${u.displayName} reativado com sucesso.`);
     } catch (err) {
       setActionErr(extractReadableError(err, 'Erro ao reativar usuário.'));
+    }
+  };
+
+  const toggleUserVerified = async (u: UserAccount) => {
+    const nextVerified = !Boolean(u.verified);
+    try {
+      const batch = writeBatch(db);
+      batch.update(doc(db, 'users', u.uid), {
+        verified: nextVerified,
+        updatedAt: serverTimestamp(),
+      });
+      if (u.status === 'active') {
+        batch.set(doc(db, 'leaderboard', u.uid), {
+          uid: u.uid,
+          displayName: u.displayName,
+          photoURL: u.photoURL,
+          brlBalanceCents: u.brlBalanceCents,
+          pointsBalance: u.pointsBalance,
+          lifetimePoints: u.lifetimePoints,
+          gamesPlayed: u.gamesPlayed,
+          status: u.status,
+          verified: nextVerified,
+          updatedAt: serverTimestamp(),
+        });
+      }
+      await batch.commit();
+      setActionMsg(
+        nextVerified
+          ? `Selo Verificado concedido a ${u.displayName}.`
+          : `Selo Verificado removido de ${u.displayName}.`
+      );
+    } catch (err) {
+      setActionErr(extractReadableError(err, 'Erro ao atualizar selo de verificado.'));
     }
   };
 
@@ -2235,6 +2290,7 @@ export const AdminPanel: React.FC = React.memo(() => {
                       <span className="text-sm font-bold text-slate-900 dark:text-white break-words">
                         {u.displayName}
                       </span>
+                      {u.verified && <VerifiedBadge className="w-3.5 h-3.5" showLabel />}
                       {adminUids.includes(u.uid) && (
                         <span className="px-2 py-0.5 rounded-lg text-[11px] font-bold bg-lime-100 dark:bg-lime-500/15 text-lime-800 dark:text-lime-300">
                           Administrador
@@ -2298,6 +2354,18 @@ export const AdminPanel: React.FC = React.memo(() => {
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => toggleUserVerified(u)}
+                      className={`min-h-[40px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl font-bold border cursor-pointer transition-colors ${
+                        u.verified
+                          ? 'bg-sky-500/15 dark:bg-sky-500/20 text-sky-700 dark:text-sky-300 border-sky-300 dark:border-sky-500/40 hover:bg-sky-500/25'
+                          : 'bg-white dark:bg-zinc-800 text-slate-800 dark:text-zinc-200 border-slate-200 dark:border-zinc-700 hover:border-sky-400'
+                      }`}
+                    >
+                      <BadgeCheck className="w-3.5 h-3.5 text-sky-500 dark:text-sky-400" />
+                      {u.verified ? 'Remover Verificado' : 'Dar Verificado'}
+                    </button>
                     <button
                       type="button"
                       onClick={() => openPointsModal(u)}

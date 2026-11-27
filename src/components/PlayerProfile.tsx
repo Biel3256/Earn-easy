@@ -24,6 +24,7 @@ import {
 } from '../utils/avatars';
 import { calculateGamesXp, calculatePlayerLevel, PLAYER_LEVELS } from '../utils/levels';
 import { formatBRL, formatPoints } from '../utils/pix';
+import { VerifiedBadge } from './VerifiedBadge';
 
 export const ProfileAvatar: React.FC<{
   name: string;
@@ -305,9 +306,12 @@ export const PlayerProfile: React.FC = () => {
               sizeClass="w-20 h-20"
             />
             <div className="space-y-1 min-w-0">
-              <h1 className="text-2xl font-display font-bold text-slate-900 dark:text-zinc-50 truncate">
-                {userAccount.displayName}
-              </h1>
+              <div className="flex items-center gap-2 min-w-0">
+                <h1 className="text-2xl font-display font-bold text-slate-900 dark:text-zinc-50 truncate">
+                  {userAccount.displayName}
+                </h1>
+                {userAccount.verified && <VerifiedBadge className="w-5 h-5" />}
+              </div>
               <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-zinc-400">
                 <span>Nível {levelInfo.level} · {levelInfo.title}</span>
                 <span aria-hidden="true">·</span>

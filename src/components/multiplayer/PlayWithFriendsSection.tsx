@@ -138,7 +138,7 @@ export const PlayWithFriendsSection: React.FC = React.memo(() => {
     return (
       <div className="space-y-5">
         {/* Room Header Bar */}
-        <div className="rounded-3xl border border-slate-200 dark:border-zinc-800 bg-white/95 dark:bg-[#0e1319]/95 backdrop-blur-md p-4 sm:p-5 shadow-lg flex flex-wrap items-center justify-between gap-3">
+        <div className="rounded-3xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-[#0e1319] p-4 sm:p-5 shadow-lg flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3 min-w-0">
             <div className="w-11 h-11 rounded-2xl bg-lime-400/15 border border-lime-400/40 text-lime-500 flex items-center justify-center shrink-0">
               <Swords className="w-5 h-5" />
@@ -599,7 +599,7 @@ export const PlayWithFriendsSection: React.FC = React.memo(() => {
 
         {/* JOGO ATIVO */}
         {room.status === 'playing' && (
-          <div className="rounded-3xl border border-slate-200 dark:border-zinc-800 bg-white/95 dark:bg-[#0e1319]/95 backdrop-blur-md p-4 sm:p-6 shadow-xl">
+          <div className="rounded-3xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-[#0e1319] p-4 sm:p-6 shadow-xl">
             <MultiplayerGameBoards
               room={room}
               myUid={userAccount.uid}

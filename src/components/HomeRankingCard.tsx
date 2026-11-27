@@ -13,6 +13,7 @@ import { db } from '../firebase';
 import { LeaderboardEntry } from '../types/earneasy';
 import { formatBRL, formatPoints } from '../utils/pix';
 import { ProfileAvatar } from './PlayerProfile';
+import { VerifiedBadge } from './VerifiedBadge';
 
 interface HomeRankingCardProps {
   onViewFullRanking: () => void;
@@ -75,7 +76,7 @@ export const HomeRankingCard: React.FC<HomeRankingCardProps> = ({
     : -1;
 
   return (
-    <div className="bg-white/90 dark:bg-zinc-900/90 backdrop-blur-md border border-slate-200/90 dark:border-zinc-800 rounded-3xl p-6 flex flex-col justify-between h-full shadow-sm shadow-slate-900/5">
+    <div className="bg-white dark:bg-[#0e1319] border border-slate-200/90 dark:border-zinc-800 rounded-3xl p-6 flex flex-col justify-between h-full shadow-sm shadow-slate-900/5">
       <div className="space-y-4">
         <div className="flex items-center justify-between gap-3 pb-3 border-b border-slate-100 dark:border-zinc-800">
           <div className="flex items-center gap-2.5">
@@ -161,10 +162,11 @@ export const HomeRankingCard: React.FC<HomeRankingCardProps> = ({
                     />
 
                     <div className="min-w-0">
-                      <div className="text-xs font-semibold text-slate-900 dark:text-zinc-100 truncate">
-                        {player.displayName}
+                      <div className="text-xs font-semibold text-slate-900 dark:text-zinc-100 flex items-center gap-1 min-w-0">
+                        <span className="truncate">{player.displayName}</span>
+                        {player.verified && <VerifiedBadge className="w-3.5 h-3.5" />}
                         {isMe && (
-                          <span className="ml-1.5 text-[11px] font-medium text-emerald-700 dark:text-emerald-400">
+                          <span className="text-[11px] font-medium text-emerald-700 dark:text-emerald-400 shrink-0">
                             · Você
                           </span>
                         )}

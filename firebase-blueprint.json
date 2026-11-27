@@ -22,6 +22,8 @@
         "lastPromoCode": { "type": "string", "maxLength": 128 },
         "firstWithdrawalUsed": { "type": "boolean" },
         "lastMpMatchId": { "type": "string", "maxLength": 128 },
+        "lastCasinoSessionId": { "type": "string", "maxLength": 128 },
+        "verified": { "type": "boolean" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -244,6 +246,7 @@
         "lifetimePoints": { "type": "number" },
         "gamesPlayed": { "type": "number" },
         "status": { "type": "string", "enum": ["active", "suspended", "flagged"] },
+        "verified": { "type": "boolean" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": [
@@ -621,6 +624,43 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["matchId", "roomCode", "gameId", "participantUids", "winnerUid", "loserUid", "stakePoints", "settledByUid", "integrityHash", "createdAt"]
+    },
+    "CasinoSession": {
+      "title": "CasinoSession",
+      "description": "Server-verified Double 3.0 and Mines wagering session record.",
+      "type": "object",
+      "properties": {
+        "sessionId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "gameType": { "type": "string", "enum": ["double", "mines"] },
+        "currency": { "type": "string", "enum": ["points", "brl"] },
+        "betAmount": { "type": "number" },
+        "payoutAmount": { "type": "number" },
+        "multiplier": { "type": "number" },
+        "status": { "type": "string", "enum": ["active", "won", "lost"] },
+        "minesCount": { "type": "number" },
+        "revealedCount": { "type": "number" },
+        "outcomeSummary": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "integrityHash": { "type": "string", "minLength": 16, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "sessionId",
+        "userId",
+        "gameType",
+        "currency",
+        "betAmount",
+        "payoutAmount",
+        "multiplier",
+        "status",
+        "minesCount",
+        "revealedCount",
+        "outcomeSummary",
+        "integrityHash",
+        "createdAt",
+        "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -731,6 +771,10 @@
     "/multiplayerMatches/{matchId}": {
       "schema": { "$ref": "#/entities/MultiplayerMatchRecord" },
       "description": "Authoritative multiplayer match results and atomic points settlements."
+    },
+    "/casinoSessions/{sessionId}": {
+      "schema": { "$ref": "#/entities/CasinoSession" },
+      "description": "Server-verified Double 3.0 and Mines sessions."
     }
   }
 }

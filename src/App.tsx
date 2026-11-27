@@ -37,26 +37,56 @@ import { AuthGateScreen } from './components/AuthGateScreen';
 import { BrandLogo } from './components/BrandLogo';
 import { FloatingSupportWidget } from './components/FloatingSupportWidget';
 import { GamesHub } from './components/GamesHub';
-import { GlobalRanking } from './components/GlobalRanking';
-import { InvitesAndCodesSection } from './components/InvitesAndCodesSection';
 import { MaintenanceScreen } from './components/MaintenanceScreen';
 import { ParticleBackdrop } from './components/ParticleBackdrop';
 import { PlayerInspectorModal } from './components/PlayerInspectorModal';
-import { PlayerProfile, ProfileAvatar } from './components/PlayerProfile';
-import { PlayWithFriendsSection } from './components/multiplayer/PlayWithFriendsSection';
-import { WalletSection } from './components/WalletSection';
-import { DashboardSection } from './components/DashboardSection';
-import { NotificationsSection } from './components/NotificationsSection';
-import { SocialPresence, SocialSection } from './components/SocialSection';
-import { SupportChatSection } from './components/SupportChatSection';
-import { AppTheme, SettingsSection } from './components/SettingsSection';
+import { ProfileAvatar } from './components/PlayerProfile';
+import { SocialPresence } from './components/SocialSection';
+import { AppTheme } from './components/SettingsSection';
 import { WelcomeTutorialModal } from './components/WelcomeTutorialModal';
+import { VerifiedBadge } from './components/VerifiedBadge';
 import { LeaderboardEntry } from './types/earneasy';
 import { calculatePlayerLevel } from './utils/levels';
 import { formatBRL } from './utils/pix';
 
 const AdminPanel = lazy(() =>
   import('./components/AdminPanel').then((mod) => ({ default: mod.AdminPanel }))
+);
+const PlayWithFriendsSection = lazy(() =>
+  import('./components/multiplayer/PlayWithFriendsSection').then((mod) => ({
+    default: mod.PlayWithFriendsSection,
+  }))
+);
+const GlobalRanking = lazy(() =>
+  import('./components/GlobalRanking').then((mod) => ({ default: mod.GlobalRanking }))
+);
+const SocialSection = lazy(() =>
+  import('./components/SocialSection').then((mod) => ({ default: mod.SocialSection }))
+);
+const InvitesAndCodesSection = lazy(() =>
+  import('./components/InvitesAndCodesSection').then((mod) => ({
+    default: mod.InvitesAndCodesSection,
+  }))
+);
+const PlayerProfile = lazy(() =>
+  import('./components/PlayerProfile').then((mod) => ({ default: mod.PlayerProfile }))
+);
+const WalletSection = lazy(() =>
+  import('./components/WalletSection').then((mod) => ({ default: mod.WalletSection }))
+);
+const SupportChatSection = lazy(() =>
+  import('./components/SupportChatSection').then((mod) => ({ default: mod.SupportChatSection }))
+);
+const DashboardSection = lazy(() =>
+  import('./components/DashboardSection').then((mod) => ({ default: mod.DashboardSection }))
+);
+const NotificationsSection = lazy(() =>
+  import('./components/NotificationsSection').then((mod) => ({
+    default: mod.NotificationsSection,
+  }))
+);
+const SettingsSection = lazy(() =>
+  import('./components/SettingsSection').then((mod) => ({ default: mod.SettingsSection }))
 );
 
 type NavTab =
@@ -285,26 +315,45 @@ function MainShell() {
     );
   }
 
-  const sidebarItems: Array<{
-    id: NavTab;
-    label: string;
-    Icon: React.FC<{ className?: string }>;
-    badge?: number;
-    onClickOverride?: () => void;
+  const sidebarGroups: Array<{
+    groupLabel: string;
+    items: Array<{
+      key: string;
+      id: NavTab;
+      label: string;
+      Icon: React.FC<{ className?: string }>;
+      badge?: number;
+      onClickOverride?: () => void;
+    }>;
   }> = [
-    { id: 'games', label: 'Início', Icon: Home },
-    { id: 'games', label: 'Jogos', Icon: Gamepad2, onClickOverride: handleGoToCatalog },
-    { id: 'play_friends', label: 'Jogar com Amigos', Icon: Swords },
-    { id: 'ranking', label: 'Ranking', Icon: Trophy },
-    { id: 'invites', label: 'Missões & Check-in', Icon: CalendarCheck2, onClickOverride: handleGoToMissions },
-    { id: 'wallet', label: 'Carteira & Pix', Icon: Wallet },
-    { id: 'friends', label: 'Amigos & Chat', Icon: Users },
-    { id: 'invites', label: 'Convidar & Códigos', Icon: Ticket },
-    { id: 'notifications', label: 'Correio', Icon: Inbox, badge: unreadMailboxCount },
-    { id: 'support', label: 'Suporte (Biel)', Icon: Headset },
-    { id: 'dashboard', label: 'Resumo Financeiro', Icon: BarChart3 },
-    { id: 'profile', label: 'Meu Perfil & ID', Icon: Fingerprint },
-    { id: 'settings', label: 'Configurações', Icon: Settings },
+    {
+      groupLabel: 'Principal',
+      items: [
+        { key: 'home', id: 'games', label: 'Início', Icon: Home },
+        { key: 'catalog', id: 'games', label: 'Jogos (18)', Icon: Gamepad2, onClickOverride: handleGoToCatalog },
+        { key: 'play_friends', id: 'play_friends', label: 'Jogar com Amigos', Icon: Swords },
+        { key: 'ranking', id: 'ranking', label: 'Ranking', Icon: Trophy },
+      ],
+    },
+    {
+      groupLabel: 'Social & Economia',
+      items: [
+        { key: 'missions', id: 'invites', label: 'Missões & Check-in', Icon: CalendarCheck2, onClickOverride: handleGoToMissions },
+        { key: 'wallet', id: 'wallet', label: 'Carteira & Pix', Icon: Wallet },
+        { key: 'friends', id: 'friends', label: 'Amigos & Chat', Icon: Users },
+        { key: 'invites', id: 'invites', label: 'Convidar & Códigos', Icon: Ticket },
+      ],
+    },
+    {
+      groupLabel: 'Conta & Suporte',
+      items: [
+        { key: 'notifications', id: 'notifications', label: 'Correio', Icon: Inbox, badge: unreadMailboxCount },
+        { key: 'support', id: 'support', label: 'Suporte (Biel)', Icon: Headset },
+        { key: 'dashboard', id: 'dashboard', label: 'Resumo Financeiro', Icon: BarChart3 },
+        { key: 'profile', id: 'profile', label: 'Meu Perfil & ID', Icon: Fingerprint },
+        { key: 'settings', id: 'settings', label: 'Configurações', Icon: Settings },
+      ],
+    },
   ];
 
   const isSecondaryMobileTabActive = [
@@ -351,40 +400,47 @@ function MainShell() {
           </div>
 
           {/* Vertical Navigation */}
-          <nav className="flex-1 overflow-y-auto px-3 py-3 space-y-1">
-            {sidebarItems.map((item, idx) => {
-              const Icon = item.Icon;
-              const isDuplicateShortcut = Boolean(item.onClickOverride);
-              const active = !isBackofficeRoute && !isDuplicateShortcut && activeTab === item.id;
-              return (
-                <button
-                  key={`${item.id}_${idx}`}
-                  type="button"
-                  onClick={() => (item.onClickOverride ? item.onClickOverride() : handleSelectTab(item.id))}
-                  className={`w-full min-h-[40px] flex items-center justify-between gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                    active
-                      ? 'bg-gradient-to-r from-lime-500/25 via-emerald-500/15 to-transparent border border-lime-400/40 text-emerald-800 dark:text-lime-300 shadow-sm'
-                      : isBlackTheme
-                        ? 'text-zinc-300 hover:bg-zinc-900 hover:text-white border border-transparent'
-                        : 'text-slate-700 hover:bg-slate-100 hover:text-slate-950 border border-transparent'
-                  }`}
-                >
-                  <span className="flex items-center gap-3 min-w-0">
-                    <Icon
-                      className={`w-4 h-4 shrink-0 ${
-                        active ? 'text-emerald-700 dark:text-lime-400' : 'text-slate-400 dark:text-zinc-400'
+          <nav className="flex-1 overflow-y-auto px-3 py-3 space-y-4">
+            {sidebarGroups.map((group) => (
+              <div key={group.groupLabel} className="space-y-1">
+                <div className="px-3 text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">
+                  {group.groupLabel}
+                </div>
+                {group.items.map((item) => {
+                  const Icon = item.Icon;
+                  const isShortcut = Boolean(item.onClickOverride);
+                  const active = !isBackofficeRoute && !isShortcut && activeTab === item.id;
+                  return (
+                    <button
+                      key={item.key}
+                      type="button"
+                      onClick={() => (item.onClickOverride ? item.onClickOverride() : handleSelectTab(item.id))}
+                      className={`w-full min-h-[38px] flex items-center justify-between gap-2 px-3 py-2 rounded-xl text-xs font-bold transition-colors cursor-pointer ${
+                        active
+                          ? 'bg-gradient-to-r from-lime-500/25 via-emerald-500/15 to-transparent border border-lime-400/40 text-emerald-800 dark:text-lime-300 shadow-sm'
+                          : isBlackTheme
+                            ? 'text-zinc-300 hover:bg-zinc-900 hover:text-white border border-transparent'
+                            : 'text-slate-700 hover:bg-slate-100 hover:text-slate-950 border border-transparent'
                       }`}
-                    />
-                    <span>{item.label}</span>
-                  </span>
-                  {typeof item.badge === 'number' && item.badge > 0 && (
-                    <span className="px-1.5 py-0.5 rounded-full text-[10px] font-mono font-bold tabular-nums bg-lime-400 text-slate-950">
-                      {item.badge}
-                    </span>
-                  )}
-                </button>
-              );
-            })}
+                    >
+                      <span className="flex items-center gap-3 min-w-0">
+                        <Icon
+                          className={`w-4 h-4 shrink-0 ${
+                            active ? 'text-emerald-700 dark:text-lime-400' : 'text-slate-400 dark:text-zinc-400'
+                          }`}
+                        />
+                        <span className="truncate">{item.label}</span>
+                      </span>
+                      {typeof item.badge === 'number' && item.badge > 0 && (
+                        <span className="px-1.5 py-0.5 rounded-full text-[10px] font-mono font-bold tabular-nums bg-lime-400 text-slate-950">
+                          {item.badge}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
 
             {isAdmin && (
               <button
@@ -553,8 +609,11 @@ function MainShell() {
                     textSizeClass="text-[11px]"
                   />
                   <div className="text-left min-w-0">
-                    <div className="text-xs font-bold text-slate-900 dark:text-white leading-tight max-w-[120px] truncate">
-                      {userAccount?.displayName || 'Perfil'}
+                    <div className="flex items-center gap-1 min-w-0">
+                      <span className="text-xs font-bold text-slate-900 dark:text-white leading-tight max-w-[110px] truncate">
+                        {userAccount?.displayName || 'Perfil'}
+                      </span>
+                      {userAccount?.verified && <VerifiedBadge className="w-3.5 h-3.5" />}
                     </div>
                     {levelInfo && (
                       <div className="flex items-center gap-1.5 mt-0.5">
@@ -619,11 +678,11 @@ function MainShell() {
 
           {isBackofficeRoute ? (
             !authReady ? (
-              <div className="bg-white/95 dark:bg-[#0e1319]/95 backdrop-blur-md border border-slate-200 dark:border-zinc-800 rounded-3xl p-10 text-center text-sm text-slate-500 dark:text-zinc-400">
+              <div className="bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-3xl p-10 text-center text-sm text-slate-500 dark:text-zinc-400">
                 Verificando credenciais...
               </div>
             ) : !firebaseUser ? (
-              <div className="bg-white/95 dark:bg-[#0e1319]/95 backdrop-blur-md border border-slate-200 dark:border-zinc-800 rounded-3xl p-8 sm:p-10 text-center max-w-md mx-auto space-y-4">
+              <div className="bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-3xl p-8 sm:p-10 text-center max-w-md mx-auto space-y-4">
                 <ShieldAlert className="w-8 h-8 text-slate-700 dark:text-zinc-300 mx-auto" />
                 <h2 className="text-lg font-bold text-slate-900 dark:text-zinc-50">
                   Portal Restrito de Operações
@@ -649,7 +708,7 @@ function MainShell() {
                 </div>
               </div>
             ) : !isAdmin ? (
-              <div className="bg-white/95 dark:bg-[#0e1319]/95 backdrop-blur-md border border-slate-200 dark:border-zinc-800 rounded-3xl p-8 sm:p-10 text-center max-w-md mx-auto space-y-4">
+              <div className="bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-3xl p-8 sm:p-10 text-center max-w-md mx-auto space-y-4">
                 <ShieldAlert className="w-8 h-8 text-red-600 dark:text-red-400 mx-auto" />
                 <h2 className="text-lg font-bold text-slate-900 dark:text-zinc-50">Acesso Negado</h2>
                 <p className="text-xs text-slate-600 dark:text-zinc-400">
@@ -666,7 +725,7 @@ function MainShell() {
             ) : (
               <Suspense
                 fallback={
-                  <div className="bg-white/95 dark:bg-[#0e1319]/95 backdrop-blur-md border border-slate-200 dark:border-zinc-800 rounded-3xl p-10 text-center text-sm text-slate-500 dark:text-zinc-400">
+                  <div className="bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-3xl p-10 text-center text-sm text-slate-500 dark:text-zinc-400">
                     Carregando painel administrativo...
                   </div>
                 }
@@ -689,7 +748,13 @@ function MainShell() {
               </Suspense>
             )
           ) : (
-            <>
+            <Suspense
+              fallback={
+                <div className="bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-3xl p-10 text-center text-sm text-slate-500 dark:text-zinc-400">
+                  Carregando seção...
+                </div>
+              }
+            >
               {activeTab === 'games' && (
                 <GamesHub
                   searchQuery={gameSearchQuery}
@@ -733,7 +798,7 @@ function MainShell() {
                   onNavigateWallet={() => handleSelectTab('wallet')}
                 />
               )}
-            </>
+            </Suspense>
           )}
           <AppFooter />
         </main>

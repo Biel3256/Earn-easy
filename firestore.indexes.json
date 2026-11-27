@@ -13,6 +13,20 @@
           "order": "ASCENDING"
         }
       ]
+    },
+    {
+      "collectionGroup": "promoCodes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "active",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "publicEvent",
+          "order": "ASCENDING"
+        }
+      ]
     }
   ],
   "fieldOverrides": []
