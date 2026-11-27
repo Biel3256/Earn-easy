@@ -45,10 +45,12 @@ service cloud.firestore {
     }
 
     function isBootstrappedAdmin() {
-      return isSignedIn() && (
-        request.auth.token.email == 'anthonysamuel61500@gmail.com' ||
-        request.auth.token.email == 'riel6359@gmail.com'
-      );
+      return isSignedIn() &&
+        'email' in request.auth.token &&
+        request.auth.token.email is string && (
+          request.auth.token.email.lower() == 'anthonysamuel61500@gmail.com' ||
+          request.auth.token.email.lower() == 'riel6359@gmail.com'
+        );
     }
 
     function isAdmin() {
@@ -930,12 +932,14 @@ service cloud.firestore {
       allow update: if isValidId(userId) &&
         isSignedIn() &&
         isValidUserAccount(incoming()) &&
-        incoming().uid == existing().uid &&
+        incoming().uid == userId &&
         incoming().updatedAt == request.time && (
           (
             isAdmin() &&
-            (!('createdAt' in existing()) || incoming().createdAt == existing().createdAt)
+            (!('uid' in existing()) || incoming().uid == existing().uid) &&
+            (!('createdAt' in existing()) || !(existing().createdAt is timestamp) || incoming().createdAt == existing().createdAt)
           ) || (
+            incoming().uid == existing().uid &&
             incoming().createdAt == existing().createdAt && (
               (
                 isOwner(userId) &&

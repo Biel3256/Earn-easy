@@ -74,6 +74,11 @@ import {
   formatScheduleTime,
   timestampToMillis,
 } from '../utils/pix';
+import {
+  buildCleanLeaderboardPayload,
+  buildRepairedUserAccountPayload,
+  toNonNegativeInt,
+} from '../utils/userSchema';
 
 type AdminTab = 'overview' | 'payouts' | 'users' | 'codes' | 'support' | 'chat' | 'antifraud' | 'api';
 
@@ -646,7 +651,16 @@ export const AdminPanel: React.FC = React.memo(() => {
         const uRef = doc(db, 'users', w.userId);
         const uSnap = await tx.get(uRef);
         if (!uSnap.exists()) throw new Error('Usuário não encontrado.');
-        const uData = uSnap.data() as UserAccount;
+        const rawUser = uSnap.data() as Record<string, unknown>;
+        const curTotalWithdrawn = toNonNegativeInt(rawUser.totalWithdrawnCents);
+        const curBrl = toNonNegativeInt(rawUser.brlBalanceCents);
+        const curPoints = toNonNegativeInt(rawUser.pointsBalance);
+        const curLifetime = toNonNegativeInt(rawUser.lifetimePoints);
+        const curGames = toNonNegativeInt(rawUser.gamesPlayed);
+        const uStatus =
+          rawUser.status === 'active' || rawUser.status === 'suspended' || rawUser.status === 'flagged'
+            ? rawUser.status
+            : 'active';
 
         tx.update(wRef, {
           status: nextStatus,
@@ -661,10 +675,12 @@ export const AdminPanel: React.FC = React.memo(() => {
         });
 
         if (nextStatus === 'paid') {
-          tx.update(uRef, {
-            totalWithdrawnCents: uData.totalWithdrawnCents + w.amountCents,
-            updatedAt: serverTimestamp(),
-          });
+          tx.set(
+            uRef,
+            buildRepairedUserAccountPayload(rawUser, w.userId, w.userDisplayName, {
+              totalWithdrawnCents: curTotalWithdrawn + w.amountCents,
+            })
+          );
         } else if (nextStatus === 'rejected') {
           const hasOtherActiveWithdrawal = withdrawals.some(
             (other) =>
@@ -672,26 +688,27 @@ export const AdminPanel: React.FC = React.memo(() => {
               other.withdrawalId !== w.withdrawalId &&
               other.status !== 'rejected'
           );
-          tx.update(uRef, {
-            brlBalanceCents: uData.brlBalanceCents + w.amountCents,
-            ...(uData.totalWithdrawnCents === 0 && !hasOtherActiveWithdrawal
-              ? { firstWithdrawalUsed: false }
-              : {}),
-            updatedAt: serverTimestamp(),
-          });
-          if (uData.status === 'active') {
-            tx.set(doc(db, 'leaderboard', w.userId), {
-              uid: uData.uid,
-              displayName: uData.displayName,
-              photoURL: uData.photoURL,
-              brlBalanceCents: uData.brlBalanceCents + w.amountCents,
-              pointsBalance: uData.pointsBalance,
-              lifetimePoints: uData.lifetimePoints,
-              gamesPlayed: uData.gamesPlayed,
-              status: uData.status,
-              verified: Boolean(uData.verified),
-              updatedAt: serverTimestamp(),
-            });
+          const nextBrl = curBrl + w.amountCents;
+          tx.set(
+            uRef,
+            buildRepairedUserAccountPayload(rawUser, w.userId, w.userDisplayName, {
+              brlBalanceCents: nextBrl,
+              ...(curTotalWithdrawn === 0 && !hasOtherActiveWithdrawal
+                ? { firstWithdrawalUsed: false }
+                : {}),
+            })
+          );
+          if (uStatus === 'active') {
+            tx.set(
+              doc(db, 'leaderboard', w.userId),
+              buildCleanLeaderboardPayload(rawUser, w.userId, w.userDisplayName, {
+                brlBalanceCents: nextBrl,
+                pointsBalance: curPoints,
+                lifetimePoints: curLifetime,
+                gamesPlayed: curGames,
+                status: 'active',
+              })
+            );
           }
         }
 
@@ -705,7 +722,7 @@ export const AdminPanel: React.FC = React.memo(() => {
         tx.set(doc(db, 'withdrawalAttempts', attemptId), {
           attemptId,
           userId: w.userId,
-          userDisplayName: (w.userDisplayName || uData.displayName || 'Jogador').slice(0, 80),
+          userDisplayName: (w.userDisplayName || String(rawUser.displayName || 'Jogador')).slice(0, 80),
           withdrawalId: w.withdrawalId,
           amountCents: w.amountCents,
           pixKeyType: w.pixKeyType,
@@ -878,14 +895,22 @@ export const AdminPanel: React.FC = React.memo(() => {
     setBanSubmitting(true);
     try {
       const adminActor = (firebaseUser?.email || firebaseUser?.uid || 'admin').slice(0, 160);
-      await updateDoc(doc(db, 'users', banTarget.uid), {
-        status: 'suspended',
-        riskScore: 100,
-        banReason: trimmedReason,
-        banExplanation: trimmedExplanation,
-        bannedBy: adminActor,
-        suspensionUntil,
-        updatedAt: serverTimestamp(),
+      await runTransaction(db, async (tx) => {
+        const userRef = doc(db, 'users', banTarget.uid);
+        const userSnap = await tx.get(userRef);
+        if (!userSnap.exists()) throw new Error('Usuário não encontrado.');
+        const rawCurrent = userSnap.data() as Record<string, unknown>;
+        tx.set(
+          userRef,
+          buildRepairedUserAccountPayload(rawCurrent, banTarget.uid, banTarget.displayName, {
+            status: 'suspended',
+            riskScore: 100,
+            banReason: trimmedReason,
+            banExplanation: trimmedExplanation,
+            bannedBy: adminActor,
+            suspensionUntil,
+          })
+        );
       });
 
       await deleteDoc(doc(db, 'leaderboard', banTarget.uid)).catch(() => {});
@@ -947,31 +972,40 @@ export const AdminPanel: React.FC = React.memo(() => {
         const userRef = doc(db, 'users', pointsTarget.uid);
         const userSnap = await tx.get(userRef);
         if (!userSnap.exists()) throw new Error('Usuário não encontrado.');
-        const current = userSnap.data() as UserAccount;
+        const rawCurrent = userSnap.data() as Record<string, unknown>;
+        const curPoints = toNonNegativeInt(rawCurrent.pointsBalance);
+        const curLifetime = toNonNegativeInt(rawCurrent.lifetimePoints);
+        const curBrl = toNonNegativeInt(rawCurrent.brlBalanceCents);
+        const curGames = toNonNegativeInt(rawCurrent.gamesPlayed);
         const nextBalance = pointsOperation === 'add'
-          ? current.pointsBalance + amount
-          : current.pointsBalance - amount;
+          ? curPoints + amount
+          : curPoints - amount;
         if (nextBalance < 0) throw new Error('O usuário não possui pontos suficientes para essa retirada.');
         const nextLifetime =
-          pointsOperation === 'add' ? current.lifetimePoints + amount : current.lifetimePoints;
-        tx.update(userRef, {
-          pointsBalance: nextBalance,
-          ...(pointsOperation === 'add' ? { lifetimePoints: nextLifetime } : {}),
-          updatedAt: serverTimestamp(),
-        });
-        if (current.status === 'active') {
-          tx.set(doc(db, 'leaderboard', pointsTarget.uid), {
-            uid: current.uid,
-            displayName: current.displayName,
-            photoURL: current.photoURL,
-            brlBalanceCents: current.brlBalanceCents,
+          pointsOperation === 'add' ? curLifetime + amount : curLifetime;
+
+        const repairedUser = buildRepairedUserAccountPayload(
+          rawCurrent,
+          pointsTarget.uid,
+          pointsTarget.displayName,
+          {
             pointsBalance: nextBalance,
-            lifetimePoints: nextLifetime,
-            gamesPlayed: current.gamesPlayed,
-            status: current.status,
-            verified: Boolean(current.verified),
-            updatedAt: serverTimestamp(),
-          });
+            ...(pointsOperation === 'add' ? { lifetimePoints: nextLifetime } : {}),
+          }
+        );
+        tx.set(userRef, repairedUser);
+
+        if (repairedUser.status === 'active') {
+          tx.set(
+            doc(db, 'leaderboard', pointsTarget.uid),
+            buildCleanLeaderboardPayload(rawCurrent, pointsTarget.uid, pointsTarget.displayName, {
+              brlBalanceCents: curBrl,
+              pointsBalance: nextBalance,
+              lifetimePoints: nextLifetime,
+              gamesPlayed: curGames,
+              status: 'active',
+            })
+          );
         }
         const logId = generateId('pts');
         tx.set(doc(db, 'fraudLogs', logId), {
@@ -994,27 +1028,31 @@ export const AdminPanel: React.FC = React.memo(() => {
   };
 
   const reactivateUser = async (u: UserAccount) => {
+    setActionMsg(null);
+    setActionErr(null);
     try {
-      await updateDoc(doc(db, 'users', u.uid), {
-        status: 'active',
-        riskScore: 0,
-        banReason: '',
-        banExplanation: '',
-        bannedBy: '',
-        suspensionUntil: null,
-        updatedAt: serverTimestamp(),
-      });
-      await setDoc(doc(db, 'leaderboard', u.uid), {
-        uid: u.uid,
-        displayName: u.displayName,
-        photoURL: u.photoURL,
-        brlBalanceCents: u.brlBalanceCents,
-        pointsBalance: u.pointsBalance,
-        lifetimePoints: u.lifetimePoints,
-        gamesPlayed: u.gamesPlayed,
-        status: 'active',
-        verified: Boolean(u.verified),
-        updatedAt: serverTimestamp(),
+      await runTransaction(db, async (tx) => {
+        const userRef = doc(db, 'users', u.uid);
+        const userSnap = await tx.get(userRef);
+        if (!userSnap.exists()) throw new Error('Usuário não encontrado.');
+        const rawCurrent = userSnap.data() as Record<string, unknown>;
+        tx.set(
+          userRef,
+          buildRepairedUserAccountPayload(rawCurrent, u.uid, u.displayName, {
+            status: 'active',
+            riskScore: 0,
+            banReason: '',
+            banExplanation: '',
+            bannedBy: '',
+            suspensionUntil: null,
+          })
+        );
+        tx.set(
+          doc(db, 'leaderboard', u.uid),
+          buildCleanLeaderboardPayload(rawCurrent, u.uid, u.displayName, {
+            status: 'active',
+          })
+        );
       });
       setActionMsg(`Usuário ${u.displayName} reativado com sucesso.`);
     } catch (err) {
@@ -1023,28 +1061,30 @@ export const AdminPanel: React.FC = React.memo(() => {
   };
 
   const toggleUserVerified = async (u: UserAccount) => {
-    const nextVerified = !Boolean(u.verified);
+    setActionMsg(null);
+    setActionErr(null);
     try {
-      const batch = writeBatch(db);
-      batch.update(doc(db, 'users', u.uid), {
-        verified: nextVerified,
-        updatedAt: serverTimestamp(),
-      });
-      if (u.status === 'active') {
-        batch.set(doc(db, 'leaderboard', u.uid), {
-          uid: u.uid,
-          displayName: u.displayName,
-          photoURL: u.photoURL,
-          brlBalanceCents: u.brlBalanceCents,
-          pointsBalance: u.pointsBalance,
-          lifetimePoints: u.lifetimePoints,
-          gamesPlayed: u.gamesPlayed,
-          status: u.status,
-          verified: nextVerified,
-          updatedAt: serverTimestamp(),
+      const nextVerified = await runTransaction(db, async (tx) => {
+        const userRef = doc(db, 'users', u.uid);
+        const userSnap = await tx.get(userRef);
+        if (!userSnap.exists()) throw new Error('Usuário não encontrado.');
+        const rawCurrent = userSnap.data() as Record<string, unknown>;
+        const targetVerified = !Boolean(rawCurrent.verified);
+        const repairedUser = buildRepairedUserAccountPayload(rawCurrent, u.uid, u.displayName, {
+          verified: targetVerified,
         });
-      }
-      await batch.commit();
+        tx.set(userRef, repairedUser);
+        if (repairedUser.status === 'active') {
+          tx.set(
+            doc(db, 'leaderboard', u.uid),
+            buildCleanLeaderboardPayload(rawCurrent, u.uid, u.displayName, {
+              status: 'active',
+              verified: targetVerified,
+            })
+          );
+        }
+        return targetVerified;
+      });
       setActionMsg(
         nextVerified
           ? `Selo Verificado concedido a ${u.displayName}.`

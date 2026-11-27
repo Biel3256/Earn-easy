@@ -103,6 +103,14 @@ import {
   syncServerUtcClock,
   timestampToMillis,
 } from '../utils/pix';
+import {
+  buildCleanLeaderboardPayload,
+  buildRepairedUserAccountPayload,
+  needsUserAccountSchemaRepair,
+  safeDisplayNameForSchema,
+  safePhotoUrlForSchema,
+  toNonNegativeInt,
+} from '../utils/userSchema';
 
 function isFirestoreSdkError(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
@@ -136,145 +144,7 @@ function sanitizePhotoUrl(raw: string): string {
   if (trimmed.startsWith('data:')) {
     throw new Error('Formato de imagem inválido. Use JPEG, PNG ou WebP.');
   }
-  return trimmed.slice(0, 500);
-}
-
-const ALLOWED_USER_ACCOUNT_KEYS = new Set([
-  'uid',
-  'displayName',
-  'photoURL',
-  'pointsBalance',
-  'lifetimePoints',
-  'brlBalanceCents',
-  'totalWithdrawnCents',
-  'lastConversionDate',
-  'status',
-  'riskScore',
-  'gamesPlayed',
-  'banReason',
-  'banExplanation',
-  'bannedBy',
-  'suspensionUntil',
-  'lastPromoCode',
-  'firstWithdrawalUsed',
-  'lastMpMatchId',
-  'lastCasinoSessionId',
-  'verified',
-  'createdAt',
-  'updatedAt',
-]);
-
-const REQUIRED_USER_ACCOUNT_KEYS = [
-  'uid',
-  'displayName',
-  'photoURL',
-  'pointsBalance',
-  'lifetimePoints',
-  'brlBalanceCents',
-  'totalWithdrawnCents',
-  'lastConversionDate',
-  'status',
-  'riskScore',
-  'gamesPlayed',
-  'createdAt',
-  'updatedAt',
-];
-
-function needsUserAccountSchemaRepair(raw: Record<string, unknown>): boolean {
-  for (const reqKey of REQUIRED_USER_ACCOUNT_KEYS) {
-    if (!(reqKey in raw) || raw[reqKey] === undefined || raw[reqKey] === null) {
-      return true;
-    }
-  }
-  for (const key of Object.keys(raw)) {
-    if (!ALLOWED_USER_ACCOUNT_KEYS.has(key)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function safeDisplayNameForSchema(rawName: unknown, fallbackName?: string | null): string {
-  const base =
-    typeof rawName === 'string' && rawName.trim().length > 0
-      ? rawName.trim()
-      : typeof fallbackName === 'string' && fallbackName.trim().length > 0
-        ? fallbackName.trim()
-        : 'Jogador';
-  return base.slice(0, 80);
-}
-
-function safePhotoUrlForSchema(rawPhoto: unknown): string {
-  if (typeof rawPhoto !== 'string') return '';
-  const trimmed = rawPhoto.trim();
-  if (!trimmed) return '';
-  if (trimmed.startsWith('data:')) {
-    return /^data:image\/(jpeg|jpg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(trimmed) &&
-      trimmed.length <= 60000
-      ? trimmed
-      : '';
-  }
   return trimmed.slice(0, 1000);
-}
-
-function buildRepairedUserAccountPayload(
-  raw: Record<string, unknown>,
-  uid: string,
-  fallbackDisplayName?: string | null,
-  overrides: Record<string, unknown> = {}
-): Record<string, unknown> {
-  const payload: Record<string, unknown> = {
-    uid,
-    displayName: safeDisplayNameForSchema(raw.displayName, fallbackDisplayName),
-    photoURL: safePhotoUrlForSchema(raw.photoURL),
-    pointsBalance: Math.max(0, Math.floor(Number(raw.pointsBalance ?? 0) || 0)),
-    lifetimePoints: Math.max(0, Math.floor(Number(raw.lifetimePoints ?? 0) || 0)),
-    brlBalanceCents: Math.max(0, Math.floor(Number(raw.brlBalanceCents ?? 0) || 0)),
-    totalWithdrawnCents: Math.max(0, Math.floor(Number(raw.totalWithdrawnCents ?? 0) || 0)),
-    lastConversionDate:
-      typeof raw.lastConversionDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw.lastConversionDate)
-        ? raw.lastConversionDate
-        : '',
-    status:
-      raw.status === 'active' || raw.status === 'suspended' || raw.status === 'flagged'
-        ? raw.status
-        : 'active',
-    riskScore: Math.min(100, Math.max(0, Math.floor(Number(raw.riskScore ?? 0) || 0))),
-    gamesPlayed: Math.max(0, Math.floor(Number(raw.gamesPlayed ?? 0) || 0)),
-    createdAt: raw.createdAt || serverTimestamp(),
-    updatedAt: serverTimestamp(),
-  };
-
-  if (typeof raw.banReason === 'string' && raw.banReason.length <= 120) payload.banReason = raw.banReason;
-  if (typeof raw.banExplanation === 'string' && raw.banExplanation.length <= 400) {
-    payload.banExplanation = raw.banExplanation;
-  }
-  if (typeof raw.bannedBy === 'string' && raw.bannedBy.length <= 160) payload.bannedBy = raw.bannedBy;
-  if (raw.suspensionUntil !== undefined) payload.suspensionUntil = raw.suspensionUntil;
-  if (typeof raw.lastPromoCode === 'string' && /^[A-Z0-9_-]{3,40}$/.test(raw.lastPromoCode)) {
-    payload.lastPromoCode = raw.lastPromoCode;
-  }
-  if (typeof raw.firstWithdrawalUsed === 'boolean') {
-    payload.firstWithdrawalUsed = raw.firstWithdrawalUsed;
-  }
-  if (typeof raw.lastMpMatchId === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(raw.lastMpMatchId)) {
-    payload.lastMpMatchId = raw.lastMpMatchId;
-  }
-  if (
-    typeof raw.lastCasinoSessionId === 'string' &&
-    /^[a-zA-Z0-9_-]{1,128}$/.test(raw.lastCasinoSessionId)
-  ) {
-    payload.lastCasinoSessionId = raw.lastCasinoSessionId;
-  }
-  if (typeof raw.verified === 'boolean') {
-    payload.verified = raw.verified;
-  }
-
-  return {
-    ...payload,
-    ...overrides,
-    updatedAt: serverTimestamp(),
-  };
 }
 
 interface AuthContextValue {
@@ -660,7 +530,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           }
 
           const rawUserData = userSnap.data() as Record<string, unknown>;
-          if (adminCheck && needsUserAccountSchemaRepair(rawUserData)) {
+          let userData = rawUserData as unknown as UserAccount;
+          if (adminCheck && needsUserAccountSchemaRepair(rawUserData, user.uid)) {
             try {
               const repaired = buildRepairedUserAccountPayload(
                 rawUserData,
@@ -668,12 +539,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 user.displayName
               );
               await setDoc(userRef, repaired);
+              const refreshedSnap = await getDoc(userRef);
+              if (refreshedSnap.exists()) {
+                userData = refreshedSnap.data() as UserAccount;
+              }
             } catch {
               // Non-fatal if repair skipped
             }
           }
 
-          const userData = userSnap.data() as UserAccount;
           setUserAccount(userData);
 
           if (userData.status === 'active') {
@@ -682,10 +556,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             const lbData = lbSnap.exists() ? lbSnap.data() : null;
             const safeLbName = safeDisplayNameForSchema(userData.displayName, user.displayName);
             const safeLbPhoto = safePhotoUrlForSchema(userData.photoURL);
-            const safeLbBrl = Math.max(0, Math.floor(Number(userData.brlBalanceCents ?? 0) || 0));
-            const safeLbPts = Math.max(0, Math.floor(Number(userData.pointsBalance ?? 0) || 0));
-            const safeLbLife = Math.max(0, Math.floor(Number(userData.lifetimePoints ?? 0) || 0));
-            const safeLbGames = Math.max(0, Math.floor(Number(userData.gamesPlayed ?? 0) || 0));
+            const safeLbBrl = toNonNegativeInt(userData.brlBalanceCents);
+            const safeLbPts = toNonNegativeInt(userData.pointsBalance);
+            const safeLbLife = toNonNegativeInt(userData.lifetimePoints);
+            const safeLbGames = toNonNegativeInt(userData.gamesPlayed);
             if (
               !lbData ||
               lbData.brlBalanceCents !== safeLbBrl ||
@@ -697,18 +571,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               Boolean(lbData.verified) !== Boolean(userData.verified) ||
               lbData.status !== userData.status
             ) {
-              await setDoc(lbRef, {
-                uid: user.uid,
-                displayName: safeLbName,
-                photoURL: safeLbPhoto,
-                brlBalanceCents: safeLbBrl,
-                pointsBalance: safeLbPts,
-                lifetimePoints: safeLbLife,
-                gamesPlayed: safeLbGames,
-                status: userData.status,
-                verified: Boolean(userData.verified),
-                updatedAt: serverTimestamp(),
-              });
+              await setDoc(
+                lbRef,
+                buildCleanLeaderboardPayload(
+                  userData as unknown as Record<string, unknown>,
+                  user.uid,
+                  user.displayName,
+                  {
+                    brlBalanceCents: safeLbBrl,
+                    pointsBalance: safeLbPts,
+                    lifetimePoints: safeLbLife,
+                    gamesPlayed: safeLbGames,
+                    status: userData.status,
+                    verified: Boolean(userData.verified),
+                  }
+                )
+              );
             }
           }
         }
@@ -2750,8 +2628,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             ? curBrl - totalBet + payoutAmount
             : curBrl;
         const nextGames = curGames + 1;
-        const safeDisplayName = safeDisplayNameForSchema(current.displayName, firebaseUser.displayName);
-        const safePhoto = safePhotoUrlForSchema(current.photoURL);
 
         tx.set(doc(db, 'casinoSessions', sessionId), {
           sessionId,
@@ -2779,7 +2655,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           updatedAt: serverTimestamp(),
         };
 
-        if (isAdmin && needsUserAccountSchemaRepair(rawCurrent)) {
+        if (isAdmin && needsUserAccountSchemaRepair(rawCurrent, firebaseUser.uid)) {
           tx.set(
             userRef,
             buildRepairedUserAccountPayload(rawCurrent, firebaseUser.uid, firebaseUser.displayName, userPatch)
@@ -2788,18 +2664,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           tx.update(userRef, userPatch);
         }
 
-        tx.set(doc(db, 'leaderboard', firebaseUser.uid), {
-          uid: firebaseUser.uid,
-          displayName: safeDisplayName,
-          photoURL: safePhoto,
-          brlBalanceCents: nextBrl,
-          pointsBalance: nextPoints,
-          lifetimePoints: nextLifetime,
-          gamesPlayed: nextGames,
-          status: current.status,
-          verified: Boolean(current.verified),
-          updatedAt: serverTimestamp(),
-        });
+        tx.set(
+          doc(db, 'leaderboard', firebaseUser.uid),
+          buildCleanLeaderboardPayload(rawCurrent, firebaseUser.uid, firebaseUser.displayName, {
+            brlBalanceCents: nextBrl,
+            pointsBalance: nextPoints,
+            lifetimePoints: nextLifetime,
+            gamesPlayed: nextGames,
+            status: current.status,
+            verified: Boolean(current.verified),
+          })
+        );
       });
     } catch (error) {
       handleTransactionError(error, OperationType.WRITE, `casinoSessions/${sessionId}`);
@@ -2888,8 +2763,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const nextBrl =
           params.currency === 'brl' ? curBrl - betAmount : curBrl;
         const nextGames = curGames + 1;
-        const safeDisplayName = safeDisplayNameForSchema(current.displayName, firebaseUser.displayName);
-        const safePhoto = safePhotoUrlForSchema(current.photoURL);
 
         tx.set(doc(db, 'casinoSessions', sessionId), {
           sessionId,
@@ -2916,7 +2789,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           updatedAt: serverTimestamp(),
         };
 
-        if (isAdmin && needsUserAccountSchemaRepair(rawCurrent)) {
+        if (isAdmin && needsUserAccountSchemaRepair(rawCurrent, firebaseUser.uid)) {
           tx.set(
             userRef,
             buildRepairedUserAccountPayload(rawCurrent, firebaseUser.uid, firebaseUser.displayName, userPatch)
@@ -2925,18 +2798,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           tx.update(userRef, userPatch);
         }
 
-        tx.set(doc(db, 'leaderboard', firebaseUser.uid), {
-          uid: firebaseUser.uid,
-          displayName: safeDisplayName,
-          photoURL: safePhoto,
-          brlBalanceCents: nextBrl,
-          pointsBalance: nextPoints,
-          lifetimePoints: curLifetime,
-          gamesPlayed: nextGames,
-          status: current.status,
-          verified: Boolean(current.verified),
-          updatedAt: serverTimestamp(),
-        });
+        tx.set(
+          doc(db, 'leaderboard', firebaseUser.uid),
+          buildCleanLeaderboardPayload(rawCurrent, firebaseUser.uid, firebaseUser.displayName, {
+            brlBalanceCents: nextBrl,
+            pointsBalance: nextPoints,
+            lifetimePoints: curLifetime,
+            gamesPlayed: nextGames,
+            status: current.status,
+            verified: Boolean(current.verified),
+          })
+        );
       });
     } catch (error) {
       handleTransactionError(error, OperationType.WRITE, `casinoSessions/${sessionId}`);
@@ -2988,8 +2860,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             : curLifetime;
         const nextBrl =
           session.currency === 'brl' ? curBrl + payout : curBrl;
-        const safeDisplayName = safeDisplayNameForSchema(current.displayName, firebaseUser.displayName);
-        const safePhoto = safePhotoUrlForSchema(current.photoURL);
 
         tx.update(sessionRef, {
           status: 'won',
@@ -3009,7 +2879,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           updatedAt: serverTimestamp(),
         };
 
-        if (isAdmin && needsUserAccountSchemaRepair(rawCurrent)) {
+        if (isAdmin && needsUserAccountSchemaRepair(rawCurrent, firebaseUser.uid)) {
           tx.set(
             userRef,
             buildRepairedUserAccountPayload(rawCurrent, firebaseUser.uid, firebaseUser.displayName, userPatch)
@@ -3018,18 +2888,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           tx.update(userRef, userPatch);
         }
 
-        tx.set(doc(db, 'leaderboard', firebaseUser.uid), {
-          uid: firebaseUser.uid,
-          displayName: safeDisplayName,
-          photoURL: safePhoto,
-          brlBalanceCents: nextBrl,
-          pointsBalance: nextPoints,
-          lifetimePoints: nextLifetime,
-          gamesPlayed: curGames,
-          status: current.status,
-          verified: Boolean(current.verified),
-          updatedAt: serverTimestamp(),
-        });
+        tx.set(
+          doc(db, 'leaderboard', firebaseUser.uid),
+          buildCleanLeaderboardPayload(rawCurrent, firebaseUser.uid, firebaseUser.displayName, {
+            brlBalanceCents: nextBrl,
+            pointsBalance: nextPoints,
+            lifetimePoints: nextLifetime,
+            gamesPlayed: curGames,
+            status: current.status,
+            verified: Boolean(current.verified),
+          })
+        );
       });
     } catch (error) {
       handleTransactionError(error, OperationType.WRITE, `casinoSessions/${sessionId}`);
