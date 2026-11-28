@@ -12,6 +12,7 @@ import {
   UserCheck,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { AdConsentState, adsenseService } from '../services/adsenseService';
 import { formatBRL, formatPoints } from '../utils/pix';
 
 export type AppTheme = 'light' | 'dark';
@@ -46,6 +47,11 @@ export const SettingsSection: React.FC<SettingsSectionProps> = ({
     type: 'success' | 'info' | 'error';
     text: string;
   } | null>(null);
+  const [adConsent, setAdConsent] = useState<AdConsentState>(() => adsenseService.getConsentState());
+
+  React.useEffect(() => {
+    return adsenseService.subscribeConsent(setAdConsent);
+  }, []);
 
   const handleRequestNotifications = async () => {
     setNotifFeedback(null);
@@ -401,6 +407,74 @@ export const SettingsSection: React.FC<SettingsSectionProps> = ({
             </div>
           </div>
         )}
+      </section>
+
+      {/* Privacy & Google AdSense Consent */}
+      <section className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-6 space-y-5">
+        <div className="flex items-center justify-between border-b border-slate-100 dark:border-zinc-800 pb-4">
+          <div>
+            <h2 className="text-base font-bold text-slate-900 dark:text-zinc-50">
+              Gerenciador de AdSense & Cookies
+            </h2>
+            <p className="text-xs text-slate-500 dark:text-zinc-400 mt-0.5">
+              Os scripts e tags do Google AdSense só são carregados após o seu consentimento nos cookies.
+            </p>
+          </div>
+          <ShieldCheck className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+        </div>
+
+        <div className="bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 rounded-lg p-4 space-y-4">
+          <div className="space-y-1">
+            <div className="text-xs text-slate-500 dark:text-zinc-400">Preferência atual</div>
+            <div className="text-sm font-semibold text-slate-900 dark:text-zinc-100">
+              {adConsent.status === 'granted'
+                ? adConsent.personalized
+                  ? 'Permitido (Anúncios personalizados)'
+                  : 'Permitido (Anúncios não personalizados)'
+                : adConsent.status === 'denied'
+                  ? 'Recusado (Scripts bloqueados)'
+                  : 'Aguardando escolha (Scripts bloqueados)'}
+            </div>
+          </div>
+
+          <div className="flex flex-wrap gap-2.5">
+            <button
+              type="button"
+              onClick={() => adsenseService.grantConsent(true)}
+              className={`inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-lg border transition-colors cursor-pointer ${
+                adConsent.status === 'granted' && adConsent.personalized
+                  ? 'bg-emerald-600 text-white border-transparent'
+                  : 'bg-white dark:bg-zinc-900 text-slate-800 dark:text-zinc-200 border-slate-300 dark:border-zinc-700 hover:bg-slate-100 dark:hover:bg-zinc-800'
+              }`}
+            >
+              <Check className="w-3.5 h-3.5" />
+              Permitir Personalizados
+            </button>
+            <button
+              type="button"
+              onClick={() => adsenseService.grantConsent(false)}
+              className={`inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-lg border transition-colors cursor-pointer ${
+                adConsent.status === 'granted' && !adConsent.personalized
+                  ? 'bg-emerald-600 text-white border-transparent'
+                  : 'bg-white dark:bg-zinc-900 text-slate-800 dark:text-zinc-200 border-slate-300 dark:border-zinc-700 hover:bg-slate-100 dark:hover:bg-zinc-800'
+              }`}
+            >
+              <Check className="w-3.5 h-3.5" />
+              Não Personalizados
+            </button>
+            <button
+              type="button"
+              onClick={() => adsenseService.denyConsent()}
+              className={`inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-lg border transition-colors cursor-pointer ${
+                adConsent.status === 'denied'
+                  ? 'bg-slate-900 dark:bg-zinc-800 text-white border-transparent'
+                  : 'bg-white dark:bg-zinc-900 text-slate-600 dark:text-zinc-300 border-slate-300 dark:border-zinc-700 hover:bg-slate-100 dark:hover:bg-zinc-800'
+              }`}
+            >
+              Recusar Anúncios
+            </button>
+          </div>
+        </div>
       </section>
     </div>
   );

@@ -23,6 +23,7 @@
         "firstWithdrawalUsed": { "type": "boolean" },
         "lastMpMatchId": { "type": "string", "maxLength": 128 },
         "lastCasinoSessionId": { "type": "string", "maxLength": 128 },
+        "lastAdRewardId": { "type": "string", "maxLength": 128 },
         "verified": { "type": "boolean" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
@@ -661,6 +662,68 @@
         "createdAt",
         "updatedAt"
       ]
+    },
+    "AdSenseSettings": {
+      "title": "AdSenseSettings",
+      "description": "Admin-managed Google AdSense & rewarded ad configuration stored in appSettings/adsense.",
+      "type": "object",
+      "properties": {
+        "settingId": { "type": "string", "maxLength": 32, "pattern": "^adsense$" },
+        "enabled": { "type": "boolean" },
+        "clientId": { "type": "string", "maxLength": 40 },
+        "defaultSlotId": { "type": "string", "maxLength": 30 },
+        "gamesFooterSlotId": { "type": "string", "maxLength": 30 },
+        "rankingSlotId": { "type": "string", "maxLength": 30 },
+        "dashboardSlotId": { "type": "string", "maxLength": 30 },
+        "invitesSlotId": { "type": "string", "maxLength": 30 },
+        "rewardedProvider": { "type": "string", "enum": ["none", "gam_gpt", "adsense_h5"] },
+        "rewardedAdUnitPath": { "type": "string", "maxLength": 140 },
+        "rewardedPointsPerWatch": { "type": "number" },
+        "rewardedDailyLimit": { "type": "number" },
+        "updatedBy": { "type": "string", "maxLength": 160 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "settingId",
+        "enabled",
+        "clientId",
+        "defaultSlotId",
+        "gamesFooterSlotId",
+        "rankingSlotId",
+        "dashboardSlotId",
+        "invitesSlotId",
+        "rewardedProvider",
+        "rewardedAdUnitPath",
+        "rewardedPointsPerWatch",
+        "rewardedDailyLimit",
+        "updatedBy",
+        "updatedAt"
+      ]
+    },
+    "AdRewardClaim": {
+      "title": "AdRewardClaim",
+      "description": "Verified rewarded ad view claim awarding bounded daily points.",
+      "type": "object",
+      "properties": {
+        "rewardId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "provider": { "type": "string", "enum": ["gam_gpt", "adsense_h5"] },
+        "pointsAwarded": { "type": "number" },
+        "rewardDate": { "type": "string", "maxLength": 10, "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+        "watchNumber": { "type": "number" },
+        "integrityToken": { "type": "string", "minLength": 12, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "rewardId",
+        "userId",
+        "provider",
+        "pointsAwarded",
+        "rewardDate",
+        "watchNumber",
+        "integrityToken",
+        "createdAt"
+      ]
     }
   },
   "firestore": {
@@ -734,7 +797,11 @@
     },
     "/appSettings/{settingId}": {
       "schema": { "$ref": "#/entities/WithdrawalSettings" },
-      "description": "Admin-configured platform settings: 'withdrawal' (Pix withdrawal minimums 1..2000 cents) and 'maintenance' (site-wide MaintenanceSettings)."
+      "description": "Admin-configured platform settings: 'withdrawal', 'maintenance', and 'adsense'."
+    },
+    "/adRewards/{rewardId}": {
+      "schema": { "$ref": "#/entities/AdRewardClaim" },
+      "description": "Verified rewarded ad watch claims with server-UTC daily cap."
     },
     "/withdrawalAttempts/{attemptId}": {
       "schema": { "$ref": "#/entities/WithdrawalAttemptLog" },

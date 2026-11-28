@@ -638,7 +638,7 @@ async function startServer() {
   });
 
   app.post('/api/casino/mines/start', (req, res) => {
-    const { userId, currency, betAmount, minesCount } = req.body ?? {};
+    const { userId, currency, betAmount, minesCount, sessionId: requestedSessionId } = req.body ?? {};
     if (typeof userId !== 'string' || !userId.trim()) {
       res.status(400).json({ error: 'Usuário inválido para iniciar partida no Mines.' });
       return;
@@ -672,7 +672,14 @@ async function startServer() {
     }
     const mineIndices = deck.slice(0, cleanMines).sort((a, b) => a - b);
 
-    const sessionId = `mns_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
+    const expectedPrefix = `mns_${userId}_`;
+    const sessionId =
+      typeof requestedSessionId === 'string' &&
+      requestedSessionId.startsWith(expectedPrefix) &&
+      /^mns_[a-zA-Z0-9_-]{1,120}$/.test(requestedSessionId) &&
+      /^\d+$/.test(requestedSessionId.slice(expectedPrefix.length))
+        ? requestedSessionId
+        : `mns_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
     minesRounds.set(sessionId, {
       sessionId,
       userId,

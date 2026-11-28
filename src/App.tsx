@@ -33,6 +33,7 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 import { MultiplayerProvider, useMultiplayer } from './context/MultiplayerContext';
 import { ToastProvider } from './context/ToastContext';
 import { AppFooter } from './components/AppFooter';
+import { AdSenseManager } from './components/AdSenseManager';
 import { AuthGateScreen } from './components/AuthGateScreen';
 import { BrandLogo } from './components/BrandLogo';
 import { FloatingSupportWidget } from './components/FloatingSupportWidget';
@@ -154,6 +155,7 @@ function MainShell() {
   const [activeTab, setActiveTab] = useState<NavTab>('games');
   const [theme, setTheme] = useState<AppTheme>(() => getInitialTheme());
   const [isBackofficeRoute, setIsBackofficeRoute] = useState<boolean>(() => isPrivateBackofficeUrl());
+  const [adminInitialTab, setAdminInitialTab] = useState<'overview' | 'ads'>('overview');
   const [gameSearchQuery, setGameSearchQuery] = useState('');
   const [moreSheetOpen, setMoreSheetOpen] = useState(false);
   const [tutorialOpen, setTutorialOpen] = useState(false);
@@ -225,7 +227,8 @@ function MainShell() {
     }
   }, [authReady, firebaseUser, userAccount, maintenanceSettings.enabled, isBackofficeRoute]);
 
-  const enterBackoffice = () => {
+  const enterBackoffice = (initialTab: 'overview' | 'ads' = 'overview') => {
+    setAdminInitialTab(initialTab);
     window.history.pushState({}, '', '/backoffice');
     setIsBackofficeRoute(true);
     setMoreSheetOpen(false);
@@ -293,7 +296,7 @@ function MainShell() {
         theme={theme}
         isAdmin={isAdmin}
         isSignedIn={Boolean(firebaseUser)}
-        onGoBackoffice={enterBackoffice}
+        onGoBackoffice={() => enterBackoffice('overview')}
         onRefresh={() => window.location.reload()}
         onLogout={firebaseUser ? logout : undefined}
         onSignInAdmin={!firebaseUser ? signInWithGoogle : undefined}
@@ -445,7 +448,7 @@ function MainShell() {
             {isAdmin && (
               <button
                 type="button"
-                onClick={enterBackoffice}
+                onClick={() => enterBackoffice('overview')}
                 className={`w-full min-h-[42px] flex items-center gap-3 px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer mt-2 ${
                   isBackofficeRoute
                     ? 'bg-lime-400 text-slate-950 shadow-sm'
@@ -743,7 +746,7 @@ function MainShell() {
                       {TAB_TITLES[activeTab] ? 'Backoffice Seguro' : ''}
                     </span>
                   </div>
-                  <AdminPanel />
+                  <AdminPanel initialTab={adminInitialTab} />
                 </div>
               </Suspense>
             )
@@ -767,6 +770,7 @@ function MainShell() {
                   onNavigateFriends={() => handleSelectTab('friends')}
                   onNavigatePlayFriends={() => handleSelectTab('play_friends')}
                   onInspectPlayer={(player, rank) => setInspectedPlayer({ player, rank })}
+                  onOpenAdSettings={() => enterBackoffice('ads')}
                 />
               )}
               {activeTab === 'play_friends' && <PlayWithFriendsSection />}
@@ -799,6 +803,27 @@ function MainShell() {
                 />
               )}
             </Suspense>
+          )}
+          {!isBackofficeRoute && (
+            <AdSenseManager
+              placement={
+                activeTab === 'ranking'
+                  ? 'ranking_banner'
+                  : activeTab === 'dashboard'
+                    ? 'dashboard_banner'
+                    : activeTab === 'invites'
+                      ? 'invites_banner'
+                      : 'games_hub_footer'
+              }
+              layoutContext={{
+                activeTab,
+                isBackoffice: isBackofficeRoute,
+                isMaintenance: maintenanceSettings.enabled,
+                isAuthGate: !authReady || !firebaseUser || needsOnboarding,
+                hasBlockingModal: tutorialOpen || moreSheetOpen || Boolean(inspectedPlayer),
+              }}
+              onOpenSettings={() => handleSelectTab('settings')}
+            />
           )}
           <AppFooter />
         </main>
@@ -988,7 +1013,7 @@ function MainShell() {
             {isAdmin && (
               <button
                 type="button"
-                onClick={enterBackoffice}
+                onClick={() => enterBackoffice('overview')}
                 className="w-full min-h-[46px] px-4 py-2.5 rounded-2xl bg-lime-400 hover:bg-lime-300 text-slate-950 text-xs font-extrabold flex items-center justify-center gap-2 cursor-pointer"
               >
                 <ShieldCheck className="w-4 h-4" />

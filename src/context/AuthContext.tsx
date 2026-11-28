@@ -28,10 +28,13 @@ import {
   OperationType,
 } from '../firebase';
 import {
+  AdRewardClaim,
+  AdSenseSettings,
   CasinoCurrency,
   CasinoSession,
   CENTS_PER_BLOCK,
   DailyCheckin,
+  DEFAULT_ADSENSE_SETTINGS,
   DEFAULT_MAINTENANCE_SETTINGS,
   DEFAULT_WITHDRAWAL_SETTINGS,
   DoubleColor,
@@ -64,6 +67,7 @@ import {
   WithdrawalSettings,
   WithdrawalStatus,
 } from '../types/earneasy';
+import { adsenseService } from '../services/adsenseService';
 import {
   generateId,
   getDeviceFingerprint,
@@ -169,6 +173,8 @@ interface AuthContextValue {
   unreadMailboxCount: number;
   withdrawalSettings: WithdrawalSettings;
   maintenanceSettings: MaintenanceSettings;
+  adsenseSettings: AdSenseSettings;
+  myAdRewards: AdRewardClaim[];
   isFirstWithdrawalEligible: boolean;
   activeMinWithdrawalCents: number;
   needsOnboarding: boolean;
@@ -189,6 +195,24 @@ interface AuthContextValue {
     message: string;
     estimatedReturn: string;
   }) => Promise<void>;
+  updateAdSenseSettings: (params: {
+    enabled: boolean;
+    clientId: string;
+    defaultSlotId: string;
+    gamesFooterSlotId: string;
+    rankingSlotId: string;
+    dashboardSlotId: string;
+    invitesSlotId: string;
+    rewardedProvider: AdSenseSettings['rewardedProvider'];
+    rewardedAdUnitPath: string;
+    rewardedPointsPerWatch: number;
+    rewardedDailyLimit: number;
+  }) => Promise<void>;
+  claimRewardedAdPoints: (provider: 'gam_gpt' | 'adsense_h5') => Promise<{
+    rewardId: string;
+    pointsAwarded: number;
+    watchNumber: number;
+  }>;
   signInWithGoogle: () => Promise<void>;
   logout: () => Promise<void>;
   createUserAccount: (params: {
@@ -403,6 +427,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [myPromoRedemptions, setMyPromoRedemptions] = useState<PromoRedemption[]>([]);
   const [myMultiplayerMatches, setMyMultiplayerMatches] = useState<MultiplayerMatchRecord[]>([]);
   const [myCasinoSessions, setMyCasinoSessions] = useState<CasinoSession[]>([]);
+  const [myAdRewards, setMyAdRewards] = useState<AdRewardClaim[]>([]);
   const [rawMailboxMessages, setRawMailboxMessages] = useState<MailboxMessage[]>([]);
   const [deletedMailboxIds, setDeletedMailboxIds] = useState<string[]>([]);
   const [readMailboxIds, setReadMailboxIds] = useState<string[]>([]);
@@ -410,6 +435,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     useState<WithdrawalSettings>(DEFAULT_WITHDRAWAL_SETTINGS);
   const [maintenanceSettings, setMaintenanceSettings] =
     useState<MaintenanceSettings>(DEFAULT_MAINTENANCE_SETTINGS);
+  const [adsenseSettings, setAdsenseSettings] =
+    useState<AdSenseSettings>(DEFAULT_ADSENSE_SETTINGS);
   const [authError, setAuthError] = useState<string | null>(null);
   const [browserNotifPermission, setBrowserNotifPermission] =
     useState<BrowserNotificationPermissionState>(() => getBrowserNotificationPermission());
@@ -476,6 +503,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setMyPromoRedemptions([]);
         setMyMultiplayerMatches([]);
         setMyCasinoSessions([]);
+        setMyAdRewards([]);
         setRawMailboxMessages([]);
         setDeletedMailboxIds([]);
         setReadMailboxIds([]);
@@ -636,6 +664,52 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     );
     return () => unsubMaintenance();
+  }, []);
+
+  // Global listener for platform AdSense & Rewarded Ads config (readable by all visitors)
+  useEffect(() => {
+    const unsubAdsense = onSnapshot(
+      doc(db, 'appSettings', 'adsense'),
+      (snap) => {
+        if (!snap.exists()) {
+          setAdsenseSettings(DEFAULT_ADSENSE_SETTINGS);
+          adsenseService.applyRemoteSettings(null);
+          return;
+        }
+        const raw = snap.data() as Partial<AdSenseSettings>;
+        const next: AdSenseSettings = {
+          settingId: 'adsense',
+          enabled: raw.enabled !== false,
+          clientId: typeof raw.clientId === 'string' ? raw.clientId.trim() : '',
+          defaultSlotId: typeof raw.defaultSlotId === 'string' ? raw.defaultSlotId.trim() : '',
+          gamesFooterSlotId: typeof raw.gamesFooterSlotId === 'string' ? raw.gamesFooterSlotId.trim() : '',
+          rankingSlotId: typeof raw.rankingSlotId === 'string' ? raw.rankingSlotId.trim() : '',
+          dashboardSlotId: typeof raw.dashboardSlotId === 'string' ? raw.dashboardSlotId.trim() : '',
+          invitesSlotId: typeof raw.invitesSlotId === 'string' ? raw.invitesSlotId.trim() : '',
+          rewardedProvider:
+            raw.rewardedProvider === 'gam_gpt' || raw.rewardedProvider === 'adsense_h5'
+              ? raw.rewardedProvider
+              : 'none',
+          rewardedAdUnitPath: typeof raw.rewardedAdUnitPath === 'string' ? raw.rewardedAdUnitPath.trim() : '',
+          rewardedPointsPerWatch:
+            typeof raw.rewardedPointsPerWatch === 'number' && Number.isFinite(raw.rewardedPointsPerWatch)
+              ? Math.min(200, Math.max(10, Math.round(raw.rewardedPointsPerWatch)))
+              : DEFAULT_ADSENSE_SETTINGS.rewardedPointsPerWatch,
+          rewardedDailyLimit:
+            typeof raw.rewardedDailyLimit === 'number' && Number.isFinite(raw.rewardedDailyLimit)
+              ? Math.min(20, Math.max(1, Math.round(raw.rewardedDailyLimit)))
+              : DEFAULT_ADSENSE_SETTINGS.rewardedDailyLimit,
+          updatedBy: typeof raw.updatedBy === 'string' ? raw.updatedBy : 'admin',
+          updatedAt: raw.updatedAt ?? null,
+        };
+        setAdsenseSettings(next);
+        adsenseService.applyRemoteSettings(next);
+      },
+      () => {
+        // Ignore smoothly if adsense settings doc does not exist yet
+      }
+    );
+    return () => unsubAdsense();
   }, []);
 
 
@@ -1027,6 +1101,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       (error) => logListenerIssue('casinoSessions', error)
     );
 
+    const unsubAdRewards = onSnapshot(
+      query(collection(db, 'adRewards'), where('userId', '==', uid)),
+      (snap) => {
+        const list = snap.docs
+          .map((d) => d.data() as AdRewardClaim)
+          .sort((a, b) => timestampToMillis(b.createdAt) - timestampToMillis(a.createdAt));
+        setMyAdRewards(list);
+      },
+      (error) => logListenerIssue('adRewards', error)
+    );
+
     try {
       const saved = window.localStorage.getItem(`earneasy_read_mail_${uid}`);
       if (saved) {
@@ -1076,6 +1161,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       unsubWithdrawalSettings();
       unsubMultiplayerMatches();
       unsubCasinoSessions();
+      unsubAdRewards();
     };
   }, [authReady, firebaseUser]);
 
@@ -1267,6 +1353,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         `Partida em ${params.gameCategory} sinalizada: ${verification.fraudReason}`
       );
     }
+
+    adsenseService.notifyGameRoundCompleted({
+      category: params.gameCategory,
+      score: credited,
+    });
 
     return {
       credited,
@@ -2367,6 +2458,162 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const updateAdSenseSettings = async (params: {
+    enabled: boolean;
+    clientId: string;
+    defaultSlotId: string;
+    gamesFooterSlotId: string;
+    rankingSlotId: string;
+    dashboardSlotId: string;
+    invitesSlotId: string;
+    rewardedProvider: AdSenseSettings['rewardedProvider'];
+    rewardedAdUnitPath: string;
+    rewardedPointsPerWatch: number;
+    rewardedDailyLimit: number;
+  }) => {
+    if (!firebaseUser || !isAdmin) {
+      throw new Error('Somente administradores podem configurar anúncios.');
+    }
+    const cleanClient = params.clientId.trim();
+    if (cleanClient && !adsenseService.isValidClientId(cleanClient)) {
+      throw new Error('ID do Publicador AdSense inválido. Use o formato ca-pub-XXXXXXXXXXXXXXXX.');
+    }
+    const slotFields = [
+      params.defaultSlotId,
+      params.gamesFooterSlotId,
+      params.rankingSlotId,
+      params.dashboardSlotId,
+      params.invitesSlotId,
+    ].map((s) => s.trim());
+    if (slotFields.some((s) => s !== '' && !adsenseService.isValidSlotId(s))) {
+      throw new Error('ID de bloco de anúncio inválido. Informe apenas dígitos (6 a 20 números).');
+    }
+    const cleanRewardedPath = params.rewardedAdUnitPath.trim().slice(0, 140);
+    if (params.rewardedProvider === 'gam_gpt' && !adsenseService.isValidGamUnitPath(cleanRewardedPath)) {
+      throw new Error('Informe o caminho da unidade premiada do Google Ad Manager (ex: /12345678/rewarded).');
+    }
+    if (params.rewardedProvider === 'adsense_h5' && !cleanClient) {
+      throw new Error('Informe seu ID ca-pub-... do AdSense para usar anúncios premiados H5 Games.');
+    }
+
+    const pts = Math.min(200, Math.max(10, Math.round(params.rewardedPointsPerWatch || 30)));
+    const limitPerDay = Math.min(20, Math.max(1, Math.round(params.rewardedDailyLimit || 8)));
+
+    try {
+      await setDoc(doc(db, 'appSettings', 'adsense'), {
+        settingId: 'adsense',
+        enabled: Boolean(params.enabled),
+        clientId: cleanClient,
+        defaultSlotId: slotFields[0],
+        gamesFooterSlotId: slotFields[1],
+        rankingSlotId: slotFields[2],
+        dashboardSlotId: slotFields[3],
+        invitesSlotId: slotFields[4],
+        rewardedProvider: params.rewardedProvider,
+        rewardedAdUnitPath: cleanRewardedPath,
+        rewardedPointsPerWatch: pts,
+        rewardedDailyLimit: limitPerDay,
+        updatedBy: (firebaseUser.email || firebaseUser.uid).slice(0, 160),
+        updatedAt: serverTimestamp(),
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, 'appSettings/adsense');
+      throw error;
+    }
+  };
+
+  const claimRewardedAdPoints = async (provider: 'gam_gpt' | 'adsense_h5') => {
+    if (!firebaseUser || !userAccount) {
+      throw new Error('Faça login para receber pontos por anúncios.');
+    }
+    if (!adsenseSettings.enabled || adsenseSettings.rewardedProvider === 'none') {
+      throw new Error('Os anúncios premiados estão desativados no momento.');
+    }
+    if (adsenseSettings.rewardedProvider !== provider) {
+      throw new Error('Provedor de anúncio premiado divergente da configuração atual.');
+    }
+
+    await syncServerUtcClock();
+    const todayUtc = getTodayUtcDate();
+    const dailyLimit = Math.min(20, Math.max(1, Math.round(adsenseSettings.rewardedDailyLimit || 8)));
+    const pointsToCredit = Math.min(200, Math.max(10, Math.round(adsenseSettings.rewardedPointsPerWatch || 30)));
+
+    let chosenWatchNumber = 0;
+    for (let i = 1; i <= dailyLimit; i += 1) {
+      const candidateId = `adr_${firebaseUser.uid}_${todayUtc}_${i}`;
+      const snap = await getDoc(doc(db, 'adRewards', candidateId));
+      if (!snap.exists()) {
+        chosenWatchNumber = i;
+        break;
+      }
+    }
+
+    if (chosenWatchNumber === 0) {
+      throw new Error('Você já atingiu o limite diário de anúncios premiados hoje.');
+    }
+
+    const rewardId = `adr_${firebaseUser.uid}_${todayUtc}_${chosenWatchNumber}`;
+    const integrityToken = await sha256Hex(
+      `${rewardId}:${firebaseUser.uid}:${provider}:${pointsToCredit}:${getServerNowMs()}`
+    );
+
+    const userRef = doc(db, 'users', firebaseUser.uid);
+    const lbRef = doc(db, 'leaderboard', firebaseUser.uid);
+    const rewardRef = doc(db, 'adRewards', rewardId);
+
+    try {
+      await runTransaction(db, async (tx) => {
+        const userSnap = await tx.get(userRef);
+        const rewardSnap = await tx.get(rewardRef);
+        if (!userSnap.exists()) {
+          throw new Error('Perfil de usuário não encontrado.');
+        }
+        if (rewardSnap.exists()) {
+          throw new Error('Recompensa deste anúncio já foi registrada.');
+        }
+
+        const rawUser = userSnap.data() as Record<string, unknown>;
+        const nextPoints = toNonNegativeInt(rawUser.pointsBalance) + pointsToCredit;
+        const nextLifetime = toNonNegativeInt(rawUser.lifetimePoints) + pointsToCredit;
+
+        tx.set(rewardRef, {
+          rewardId,
+          userId: firebaseUser.uid,
+          provider,
+          pointsAwarded: pointsToCredit,
+          rewardDate: todayUtc,
+          watchNumber: chosenWatchNumber,
+          integrityToken,
+          createdAt: serverTimestamp(),
+        });
+
+        tx.update(userRef, {
+          pointsBalance: nextPoints,
+          lifetimePoints: nextLifetime,
+          lastAdRewardId: rewardId,
+          updatedAt: serverTimestamp(),
+        });
+
+        tx.set(
+          lbRef,
+          buildCleanLeaderboardPayload(rawUser, firebaseUser.uid, firebaseUser.displayName, {
+            pointsBalance: nextPoints,
+            lifetimePoints: nextLifetime,
+          }),
+          { merge: true }
+        );
+      });
+
+      return {
+        rewardId,
+        pointsAwarded: pointsToCredit,
+        watchNumber: chosenWatchNumber,
+      };
+    } catch (error) {
+      handleTransactionError(error, OperationType.WRITE, `adRewards/${rewardId}`);
+    }
+  };
+
   const setBrowserNotifEnabled = (enabled: boolean) => {
     setBrowserNotifEnabledState(enabled);
     browserNotifPrefsRef.current.enabled = enabled;
@@ -2433,7 +2680,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const matchRef = doc(db, 'multiplayerMatches', settlement.matchId);
 
     try {
-      return await runTransaction(db, async (tx) => {
+      const txResult = await runTransaction(db, async (tx) => {
         const matchSnap = await tx.get(matchRef);
         if (matchSnap.exists()) {
           const existingMatch = matchSnap.data() as MultiplayerMatchRecord;
@@ -2542,6 +2789,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           transferredPoints: effectiveStake,
         };
       });
+
+      adsenseService.notifyGameRoundCompleted({
+        category: settlement.gameId || 'multiplayer',
+        label: 'Duelo Online',
+      });
+
+      return txResult;
     } catch (error) {
       handleTransactionError(error, OperationType.WRITE, `multiplayerMatches/${settlement.matchId}`);
     }
@@ -2590,13 +2844,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       throw new Error(data?.error || 'Não foi possível executar o giro do Double 3.0.');
     }
 
-    const sessionId = String(data.sessionId);
     const payoutAmount = Math.max(0, Math.round(Number(data.payoutAmount || 0)));
     const multiplier = Number(data.multiplier || 0);
     const status: 'won' | 'lost' = payoutAmount > 0 ? 'won' : 'lost';
     const colorLabel =
       data.color === 'white' ? 'Branco (14x)' : data.color === 'red' ? 'Vermelho (2x)' : 'Preto (2x)';
     const outcomeSummary = `Double 3.0 #${data.number} ${colorLabel}`.slice(0, 160);
+    let sessionId = String(data.sessionId);
 
     let leaderboardSyncPayload: Record<string, unknown> | null = null;
     try {
@@ -2619,16 +2873,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const nextPoints =
           params.currency === 'points'
             ? curPoints - totalBet + payoutAmount
-            : curPoints;
+            : current.pointsBalance;
         const nextLifetime =
           params.currency === 'points' && payoutAmount > totalBet
             ? curLifetime + (payoutAmount - totalBet)
-            : curLifetime;
+            : current.lifetimePoints;
         const nextBrl =
           params.currency === 'brl'
             ? curBrl - totalBet + payoutAmount
-            : curBrl;
+            : current.brlBalanceCents;
         const nextGames = curGames + 1;
+        sessionId = `dbl_${firebaseUser.uid}_${nextGames}`;
 
         tx.set(doc(db, 'casinoSessions', sessionId), {
           sessionId,
@@ -2666,9 +2921,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
 
         return buildCleanLeaderboardPayload(rawCurrent, firebaseUser.uid, firebaseUser.displayName, {
-          brlBalanceCents: nextBrl,
-          pointsBalance: nextPoints,
-          lifetimePoints: nextLifetime,
+          brlBalanceCents: Math.max(0, Math.floor(Number(nextBrl ?? 0) || 0)),
+          pointsBalance: Math.max(0, Math.floor(Number(nextPoints ?? 0) || 0)),
+          lifetimePoints: Math.max(0, Math.floor(Number(nextLifetime ?? 0) || 0)),
           gamesPlayed: nextGames,
           status: current.status,
           verified: Boolean(current.verified),
@@ -2726,6 +2981,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       );
     }
 
+    const freshUserSnap = await getDoc(doc(db, 'users', firebaseUser.uid));
+    const freshGames = freshUserSnap.exists()
+      ? Math.max(0, Math.floor(Number(freshUserSnap.data()?.gamesPlayed ?? 0) || 0))
+      : Math.max(0, Math.floor(Number(userAccount.gamesPlayed ?? 0) || 0));
+    const expectedNextGames = freshGames + 1;
+    const expectedSessionId = `mns_${firebaseUser.uid}_${expectedNextGames}`;
+
     const res = await fetch('/api/casino/mines/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -2734,6 +2996,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         currency: params.currency,
         betAmount,
         minesCount,
+        sessionId: expectedSessionId,
       }),
     });
     const data = await res.json().catch(() => ({}));
@@ -2761,11 +3024,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const curBal = params.currency === 'points' ? curPoints : curBrl;
         if (curBal < betAmount) throw new Error('Saldo insuficiente para iniciar no Mines.');
 
-        const nextPoints =
-          params.currency === 'points' ? curPoints - betAmount : curPoints;
-        const nextBrl =
-          params.currency === 'brl' ? curBrl - betAmount : curBrl;
         const nextGames = curGames + 1;
+        if (`mns_${firebaseUser.uid}_${nextGames}` !== sessionId) {
+          throw new Error('Sua sessão foi atualizada por outra ação. Clique em Iniciar novamente.');
+        }
+
+        const nextPoints =
+          params.currency === 'points' ? curPoints - betAmount : current.pointsBalance;
+        const nextBrl =
+          params.currency === 'brl' ? curBrl - betAmount : current.brlBalanceCents;
 
         tx.set(doc(db, 'casinoSessions', sessionId), {
           sessionId,
@@ -2802,8 +3069,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
 
         return buildCleanLeaderboardPayload(rawCurrent, firebaseUser.uid, firebaseUser.displayName, {
-          brlBalanceCents: nextBrl,
-          pointsBalance: nextPoints,
+          brlBalanceCents: Math.max(0, Math.floor(Number(nextBrl ?? 0) || 0)),
+          pointsBalance: Math.max(0, Math.floor(Number(nextPoints ?? 0) || 0)),
           lifetimePoints: curLifetime,
           gamesPlayed: nextGames,
           status: current.status,
@@ -2858,13 +3125,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
         const payout = Math.max(1, Math.round(payload.payoutAmount));
         const nextPoints =
-          session.currency === 'points' ? curPoints + payout : curPoints;
+          session.currency === 'points' ? curPoints + payout : current.pointsBalance;
         const nextLifetime =
           session.currency === 'points' && payout > betAmt
             ? curLifetime + (payout - betAmt)
-            : curLifetime;
+            : current.lifetimePoints;
         const nextBrl =
-          session.currency === 'brl' ? curBrl + payout : curBrl;
+          session.currency === 'brl' ? curBrl + payout : current.brlBalanceCents;
 
         tx.update(sessionRef, {
           status: 'won',
@@ -2880,7 +3147,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           pointsBalance: nextPoints,
           lifetimePoints: nextLifetime,
           brlBalanceCents: nextBrl,
-          lastCasinoSessionId: sessionId,
+          lastCasinoSessionId: `won_${sessionId}`,
           updatedAt: serverTimestamp(),
         };
 
@@ -2894,9 +3161,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
 
         return buildCleanLeaderboardPayload(rawCurrent, firebaseUser.uid, firebaseUser.displayName, {
-          brlBalanceCents: nextBrl,
-          pointsBalance: nextPoints,
-          lifetimePoints: nextLifetime,
+          brlBalanceCents: Math.max(0, Math.floor(Number(nextBrl ?? 0) || 0)),
+          pointsBalance: Math.max(0, Math.floor(Number(nextPoints ?? 0) || 0)),
+          lifetimePoints: Math.max(0, Math.floor(Number(nextLifetime ?? 0) || 0)),
           gamesPlayed: curGames,
           status: current.status,
           verified: Boolean(current.verified),
@@ -2953,6 +3220,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       });
     }
 
+    if (data.outcome === 'bomb' || data.outcome === 'cleared') {
+      adsenseService.notifyGameRoundCompleted({
+        category: 'mines',
+        label: 'Mines',
+      });
+    }
+
     return {
       outcome: data.outcome as 'gem' | 'bomb' | 'cleared',
       hitBomb: Boolean(data.hitBomb),
@@ -2989,6 +3263,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       revealedCount: Number(data.revealedCount),
       integrityHash: String(data.integrityHash || ''),
       outcomeSummary: `Cashout em ${Number(data.revealedCount)} diamante(s) · ${Number(data.multiplier).toFixed(2)}x`,
+    });
+
+    adsenseService.notifyGameRoundCompleted({
+      category: 'mines',
+      label: 'Mines',
     });
 
     return {
@@ -3028,11 +3307,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         myPromoRedemptions,
         myMultiplayerMatches,
         myCasinoSessions,
+        myAdRewards,
         mailboxMessages,
         readMailboxIds,
         unreadMailboxCount,
         withdrawalSettings,
         maintenanceSettings,
+        adsenseSettings,
         isFirstWithdrawalEligible,
         activeMinWithdrawalCents,
         needsOnboarding,
@@ -3061,6 +3342,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         clearAllMailboxMessages,
         deleteEmailNotification,
         updateMaintenanceSettings,
+        updateAdSenseSettings,
+        claimRewardedAdPoints,
         settleMultiplayerMatch,
         playDoubleSpin,
         startMinesRound,

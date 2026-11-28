@@ -35,6 +35,7 @@ import {
   ShieldCheck,
   SlidersHorizontal,
   Ticket,
+  Tv,
   UserCheck,
   Users,
   Webhook,
@@ -44,6 +45,8 @@ import {
   MessageCircle,
   Trash2,
 } from 'lucide-react';
+import { AdSenseSettings } from '../types/earneasy';
+import { adsenseService } from '../services/adsenseService';
 import { useAuth } from '../context/AuthContext';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import {
@@ -80,7 +83,7 @@ import {
   toNonNegativeInt,
 } from '../utils/userSchema';
 
-type AdminTab = 'overview' | 'payouts' | 'users' | 'codes' | 'support' | 'chat' | 'antifraud' | 'api';
+export type AdminTab = 'overview' | 'payouts' | 'users' | 'codes' | 'support' | 'chat' | 'antifraud' | 'ads' | 'api';
 
 const ATTEMPT_STATUS_META: Record<
   WithdrawalAttemptStatus,
@@ -162,17 +165,23 @@ function buildRandomPromoCode(): string {
 
 const ADMIN_QUICK_AMOUNT_CHOICES = [1, 5, 10, 25, 50, 100, 200, 500, 1000, 2000];
 
-export const AdminPanel: React.FC = React.memo(() => {
+interface AdminPanelProps {
+  initialTab?: AdminTab;
+}
+
+export const AdminPanel: React.FC<AdminPanelProps> = React.memo(({ initialTab = 'overview' }) => {
   const {
     firebaseUser,
     userAccount,
     isAdmin,
     withdrawalSettings,
     maintenanceSettings,
+    adsenseSettings,
     updateMaintenanceSettings,
+    updateAdSenseSettings,
   } = useAuth();
 
-  const [tab, setTab] = useState<AdminTab>('overview');
+  const [tab, setTab] = useState<AdminTab>(initialTab);
   const [users, setUsers] = useState<UserAccount[]>([]);
   const [adminUids, setAdminUids] = useState<string[]>([]);
   const [privateMap, setPrivateMap] = useState<Record<string, UserPrivateInfo>>({});
@@ -209,12 +218,46 @@ export const AdminPanel: React.FC = React.memo(() => {
   const [maintReturn, setMaintReturn] = useState(maintenanceSettings.estimatedReturn);
   const [savingMaint, setSavingMaint] = useState(false);
 
+  // AdSense & Rewarded Ads form state
+  const [adsEnabled, setAdsEnabled] = useState(adsenseSettings.enabled);
+  const [adsClientId, setAdsClientId] = useState(adsenseSettings.clientId);
+  const [adsDefaultSlot, setAdsDefaultSlot] = useState(adsenseSettings.defaultSlotId);
+  const [adsGamesSlot, setAdsGamesSlot] = useState(adsenseSettings.gamesFooterSlotId);
+  const [adsRankingSlot, setAdsRankingSlot] = useState(adsenseSettings.rankingSlotId);
+  const [adsDashboardSlot, setAdsDashboardSlot] = useState(adsenseSettings.dashboardSlotId);
+  const [adsInvitesSlot, setAdsInvitesSlot] = useState(adsenseSettings.invitesSlotId);
+  const [adsRewardedProvider, setAdsRewardedProvider] = useState<AdSenseSettings['rewardedProvider']>(
+    adsenseSettings.rewardedProvider
+  );
+  const [adsRewardedPath, setAdsRewardedPath] = useState(adsenseSettings.rewardedAdUnitPath);
+  const [adsRewardedPts, setAdsRewardedPts] = useState(String(adsenseSettings.rewardedPointsPerWatch));
+  const [adsRewardedLimit, setAdsRewardedLimit] = useState(String(adsenseSettings.rewardedDailyLimit));
+  const [savingAds, setSavingAds] = useState(false);
+
+  useEffect(() => {
+    setTab(initialTab);
+  }, [initialTab]);
+
   useEffect(() => {
     setMaintEnabled(maintenanceSettings.enabled);
     setMaintTitle(maintenanceSettings.title);
     setMaintMessage(maintenanceSettings.message);
     setMaintReturn(maintenanceSettings.estimatedReturn);
   }, [maintenanceSettings]);
+
+  useEffect(() => {
+    setAdsEnabled(adsenseSettings.enabled);
+    setAdsClientId(adsenseSettings.clientId);
+    setAdsDefaultSlot(adsenseSettings.defaultSlotId);
+    setAdsGamesSlot(adsenseSettings.gamesFooterSlotId);
+    setAdsRankingSlot(adsenseSettings.rankingSlotId);
+    setAdsDashboardSlot(adsenseSettings.dashboardSlotId);
+    setAdsInvitesSlot(adsenseSettings.invitesSlotId);
+    setAdsRewardedProvider(adsenseSettings.rewardedProvider);
+    setAdsRewardedPath(adsenseSettings.rewardedAdUnitPath);
+    setAdsRewardedPts(String(adsenseSettings.rewardedPointsPerWatch));
+    setAdsRewardedLimit(String(adsenseSettings.rewardedDailyLimit));
+  }, [adsenseSettings]);
 
   useEffect(() => {
     if (!firebaseUser || !isAdmin) {
@@ -827,6 +870,37 @@ export const AdminPanel: React.FC = React.memo(() => {
       setSettingsError(extractReadableError(err, 'Erro ao salvar configurações de saque.'));
     } finally {
       setSavingSettings(false);
+    }
+  };
+
+  const handleSaveAdSenseSettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setActionErr(null);
+    setActionMsg(null);
+    setSavingAds(true);
+    try {
+      await updateAdSenseSettings({
+        enabled: adsEnabled,
+        clientId: adsClientId,
+        defaultSlotId: adsDefaultSlot,
+        gamesFooterSlotId: adsGamesSlot,
+        rankingSlotId: adsRankingSlot,
+        dashboardSlotId: adsDashboardSlot,
+        invitesSlotId: adsInvitesSlot,
+        rewardedProvider: adsRewardedProvider,
+        rewardedAdUnitPath: adsRewardedPath,
+        rewardedPointsPerWatch: Number(adsRewardedPts) || 30,
+        rewardedDailyLimit: Number(adsRewardedLimit) || 8,
+      });
+      setActionMsg(
+        adsEnabled
+          ? 'Configuração do Google AdSense / Anúncios salva em tempo real para todo o site!'
+          : 'Exibição de anúncios pausada no site.'
+      );
+    } catch (err) {
+      setActionErr(extractReadableError(err, 'Erro ao salvar configuração de anúncios.'));
+    } finally {
+      setSavingAds(false);
     }
   };
 
@@ -1572,6 +1646,7 @@ export const AdminPanel: React.FC = React.memo(() => {
       Icon: ShieldCheck,
       badge: fraudLogs.filter((f) => !f.resolved).length || undefined,
     },
+    { id: 'ads', label: 'Anúncios (AdSense)', Icon: Tv },
     { id: 'api', label: 'API & SMTP', Icon: Webhook },
   ];
 
@@ -3347,6 +3422,293 @@ export const AdminPanel: React.FC = React.memo(() => {
           </div>
         </div>
       )}
+
+      {/* TAB: ANÚNCIOS & MONETIZAÇÃO (GOOGLE ADSENSE + REWARDED) */}
+      {tab === 'ads' && (() => {
+        const diag = adsenseService.getDiagnostics();
+        return (
+          <div className="space-y-6">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
+              <div className="bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-2xl p-4">
+                <div className="text-xs text-slate-500 dark:text-zinc-400">Banners AdSense</div>
+                <div
+                  className={`text-base font-extrabold mt-1 ${
+                    diag.hasDisplayConfig && diag.enabled
+                      ? 'text-emerald-700 dark:text-lime-400'
+                      : 'text-amber-600 dark:text-amber-400'
+                  }`}
+                >
+                  {diag.hasDisplayConfig && diag.enabled ? 'Ativo no Site' : 'Aguardando IDs'}
+                </div>
+                <div className="text-[11px] text-slate-500 dark:text-zinc-500 mt-1">
+                  Fonte: {diag.source === 'firestore' ? 'Painel Admin (Banco)' : diag.source === 'env' ? 'Variáveis .env' : 'Não configurado'}
+                </div>
+              </div>
+
+              <div className="bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-2xl p-4">
+                <div className="text-xs text-slate-500 dark:text-zinc-400">Anúncios Premiados (Assistir)</div>
+                <div
+                  className={`text-base font-extrabold mt-1 ${
+                    diag.hasRewardedConfig
+                      ? 'text-emerald-700 dark:text-lime-400'
+                      : 'text-slate-600 dark:text-zinc-400'
+                  }`}
+                >
+                  {diag.hasRewardedConfig ? 'Ativo na Tela Inicial' : 'Desativado'}
+                </div>
+                <div className="text-[11px] text-slate-500 dark:text-zinc-500 mt-1">
+                  {diag.rewardedProvider === 'gam_gpt'
+                    ? 'Google Ad Manager (GPT)'
+                    : diag.rewardedProvider === 'adsense_h5'
+                      ? 'AdSense H5 Games'
+                      : 'Somente banners'}
+                </div>
+              </div>
+
+              <div className="bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-2xl p-4">
+                <div className="text-xs text-slate-500 dark:text-zinc-400">Consentimento (Este Navegador)</div>
+                <div className="text-base font-extrabold text-slate-900 dark:text-white mt-1">
+                  {diag.consentStatus === 'granted'
+                    ? 'Aceito'
+                    : diag.consentStatus === 'denied'
+                      ? 'Recusado'
+                      : 'Pendente'}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    adsenseService.resetConsent();
+                    setActionMsg('Consentimento de cookies resetado neste navegador para você testar o banner.');
+                  }}
+                  className="text-[11px] font-semibold text-emerald-700 dark:text-lime-400 hover:underline mt-1 cursor-pointer"
+                >
+                  Resetar cookies para testar
+                </button>
+              </div>
+
+              <div className="bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-2xl p-4">
+                <div className="text-xs text-slate-500 dark:text-zinc-400">Script AdSense</div>
+                <div className="text-base font-extrabold text-slate-900 dark:text-white mt-1">
+                  {diag.scriptLoaded ? 'Carregado' : 'Aguardando uso'}
+                </div>
+                <div className="text-[11px] text-slate-500 dark:text-zinc-500 mt-1">
+                  Carrega após aceite dos cookies
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-amber-50 dark:bg-amber-950/25 border border-amber-200 dark:border-amber-800/70 rounded-2xl p-4 sm:p-5 text-xs space-y-2 text-amber-900 dark:text-amber-200">
+              <div className="font-extrabold text-sm">
+                Como fazer os anúncios aparecerem e ganhar dinheiro de verdade:
+              </div>
+              <ol className="list-decimal pl-4 space-y-1 leading-relaxed">
+                <li>
+                  <strong>Banners no site (Google AdSense):</strong> Acesse sua conta no <em>Google AdSense</em>, crie um bloco de <strong>Anúncio de Display</strong> e cole abaixo seu <strong>ID do Publicador</strong> (<code>ca-pub-...</code>) e o <strong>ID do Bloco Padrão</strong>. Assim que salvar, todos os visitantes que aceitarem os cookies verão os anúncios nas abas <em>Início</em>, <em>Ranking</em>, <em>Convites</em> e <em>Resumo</em>.
+                </li>
+                <li>
+                  <strong>Usuários assistindo anúncios por pontos:</strong> Pelas regras do Google, banners normais do AdSense não podem pagar pontos por clique/visualização. Para exibir o botão <strong>&ldquo;Assistir Anúncio Premiado&rdquo;</strong> no site, ative abaixo uma unidade real do <strong>Google Ad Manager (GPT Rewarded)</strong> ou <strong>AdSense H5 Games</strong> caso sua conta já tenha aprovação.
+                </li>
+              </ol>
+            </div>
+
+            <form
+              onSubmit={handleSaveAdSenseSettings}
+              className="bg-white dark:bg-[#0e1319] border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 sm:p-6 space-y-6"
+            >
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-zinc-800 pb-4">
+                <div>
+                  <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                    Configuração do Google AdSense & Anúncios Premiados
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-zinc-400">
+                    Salvo no Firestore em tempo real — não precisa editar código nem arquivo .env.
+                  </p>
+                </div>
+
+                <label className="inline-flex items-center gap-2.5 px-3.5 py-2 rounded-xl border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-[#090d12] cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={adsEnabled}
+                    onChange={(e) => setAdsEnabled(e.target.checked)}
+                    className="w-4 h-4 accent-lime-400 rounded cursor-pointer"
+                  />
+                  <span className="text-xs font-bold text-slate-900 dark:text-zinc-100">
+                    {adsEnabled ? 'Anúncios Ligados' : 'Anúncios Pausados'}
+                  </span>
+                </label>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300">
+                    ID do Publicador Google AdSense (Client ID)
+                  </label>
+                  <input
+                    type="text"
+                    value={adsClientId}
+                    onChange={(e) => setAdsClientId(e.target.value)}
+                    placeholder="ca-pub-1234567890123456"
+                    className="w-full min-h-[42px] px-3 py-2 text-sm font-mono bg-slate-50 dark:bg-[#090d12] border border-slate-200 dark:border-zinc-800 text-slate-900 dark:text-zinc-100 rounded-xl"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300">
+                    ID do Bloco Padrão (Display Responsivo)
+                  </label>
+                  <input
+                    type="text"
+                    value={adsDefaultSlot}
+                    onChange={(e) => setAdsDefaultSlot(e.target.value)}
+                    placeholder="1234567890"
+                    className="w-full min-h-[42px] px-3 py-2 text-sm font-mono bg-slate-50 dark:bg-[#090d12] border border-slate-200 dark:border-zinc-800 text-slate-900 dark:text-zinc-100 rounded-xl"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-3 pt-2 border-t border-slate-100 dark:border-zinc-800">
+                <div className="text-xs font-bold text-slate-700 dark:text-zinc-300">
+                  Blocos específicos por página (opcional — se vazio, usa o Bloco Padrão acima)
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                  <div className="space-y-1">
+                    <label className="block text-[11px] font-medium text-slate-500 dark:text-zinc-400">
+                      Rodapé Início & Jogos
+                    </label>
+                    <input
+                      type="text"
+                      value={adsGamesSlot}
+                      onChange={(e) => setAdsGamesSlot(e.target.value)}
+                      placeholder="Opcional"
+                      className="w-full min-h-[38px] px-3 py-1.5 text-xs font-mono bg-slate-50 dark:bg-[#090d12] border border-slate-200 dark:border-zinc-800 text-slate-900 dark:text-zinc-100 rounded-xl"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="block text-[11px] font-medium text-slate-500 dark:text-zinc-400">
+                      Aba Ranking Global
+                    </label>
+                    <input
+                      type="text"
+                      value={adsRankingSlot}
+                      onChange={(e) => setAdsRankingSlot(e.target.value)}
+                      placeholder="Opcional"
+                      className="w-full min-h-[38px] px-3 py-1.5 text-xs font-mono bg-slate-50 dark:bg-[#090d12] border border-slate-200 dark:border-zinc-800 text-slate-900 dark:text-zinc-100 rounded-xl"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="block text-[11px] font-medium text-slate-500 dark:text-zinc-400">
+                      Aba Resumo Financeiro
+                    </label>
+                    <input
+                      type="text"
+                      value={adsDashboardSlot}
+                      onChange={(e) => setAdsDashboardSlot(e.target.value)}
+                      placeholder="Opcional"
+                      className="w-full min-h-[38px] px-3 py-1.5 text-xs font-mono bg-slate-50 dark:bg-[#090d12] border border-slate-200 dark:border-zinc-800 text-slate-900 dark:text-zinc-100 rounded-xl"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="block text-[11px] font-medium text-slate-500 dark:text-zinc-400">
+                      Aba Convites & Códigos
+                    </label>
+                    <input
+                      type="text"
+                      value={adsInvitesSlot}
+                      onChange={(e) => setAdsInvitesSlot(e.target.value)}
+                      placeholder="Opcional"
+                      className="w-full min-h-[38px] px-3 py-1.5 text-xs font-mono bg-slate-50 dark:bg-[#090d12] border border-slate-200 dark:border-zinc-800 text-slate-900 dark:text-zinc-100 rounded-xl"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-4 pt-3 border-t border-slate-100 dark:border-zinc-800">
+                <div>
+                  <h4 className="text-sm font-bold text-slate-900 dark:text-white">
+                    Anúncios Premiados (&ldquo;Assistir e Ganhar Pontos&rdquo;)
+                  </h4>
+                  <p className="text-xs text-slate-500 dark:text-zinc-400">
+                    Credita pontos automaticamente na conta do jogador somente após assistir ao anúncio real até o final.
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300">
+                      Provedor de Anúncio Premiado
+                    </label>
+                    <select
+                      value={adsRewardedProvider}
+                      onChange={(e) =>
+                        setAdsRewardedProvider(e.target.value as AdSenseSettings['rewardedProvider'])
+                      }
+                      className="w-full min-h-[42px] px-3 py-2 text-sm bg-slate-50 dark:bg-[#090d12] border border-slate-200 dark:border-zinc-800 text-slate-900 dark:text-zinc-100 rounded-xl"
+                    >
+                      <option value="none">Desativado (Apenas banners)</option>
+                      <option value="gam_gpt">Google Ad Manager (GPT Rewarded)</option>
+                      <option value="adsense_h5">Google AdSense H5 Games (adBreak)</option>
+                    </select>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300">
+                      Pontos por anúncio assistido (10–200)
+                    </label>
+                    <input
+                      type="number"
+                      min={10}
+                      max={200}
+                      value={adsRewardedPts}
+                      onChange={(e) => setAdsRewardedPts(e.target.value)}
+                      className="w-full min-h-[42px] px-3 py-2 text-sm font-mono bg-slate-50 dark:bg-[#090d12] border border-slate-200 dark:border-zinc-800 text-slate-900 dark:text-zinc-100 rounded-xl"
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300">
+                      Limite diário por usuário (1–20)
+                    </label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={20}
+                      value={adsRewardedLimit}
+                      onChange={(e) => setAdsRewardedLimit(e.target.value)}
+                      className="w-full min-h-[42px] px-3 py-2 text-sm font-mono bg-slate-50 dark:bg-[#090d12] border border-slate-200 dark:border-zinc-800 text-slate-900 dark:text-zinc-100 rounded-xl"
+                    />
+                  </div>
+                </div>
+
+                {adsRewardedProvider === 'gam_gpt' && (
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300">
+                      Caminho da Unidade Premiada do Google Ad Manager (Ad Unit Path)
+                    </label>
+                    <input
+                      type="text"
+                      value={adsRewardedPath}
+                      onChange={(e) => setAdsRewardedPath(e.target.value)}
+                      placeholder="/12345678/earneasy_rewarded"
+                      className="w-full min-h-[42px] px-3 py-2 text-sm font-mono bg-slate-50 dark:bg-[#090d12] border border-slate-200 dark:border-zinc-800 text-slate-900 dark:text-zinc-100 rounded-xl"
+                    />
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-center justify-end gap-3 pt-2 border-t border-slate-100 dark:border-zinc-800">
+                <button
+                  type="submit"
+                  disabled={savingAds}
+                  className="min-h-[44px] inline-flex items-center gap-2 px-5 py-2.5 text-xs sm:text-sm font-extrabold bg-lime-400 hover:bg-lime-300 disabled:opacity-50 text-slate-950 rounded-xl cursor-pointer"
+                >
+                  <Tv className="w-4 h-4" />
+                  {savingAds ? 'Salvando...' : 'Salvar Configuração de Anúncios'}
+                </button>
+              </div>
+            </form>
+          </div>
+        );
+      })()}
 
       {/* MODAL: BANIR USUÁRIO */}
       {banTarget && (

@@ -38,6 +38,8 @@ import {
 } from '../utils/pix';
 import { DailyCheckinCard } from './DailyCheckinCard';
 import { HomeRankingCard } from './HomeRankingCard';
+import { RewardedAdCard } from './RewardedAdCard';
+import { adsenseService } from '../services/adsenseService';
 
 const BattleshipSoloGame = lazy(() =>
   import('./games/BattleshipSoloGame').then((m) => ({ default: m.BattleshipSoloGame }))
@@ -284,6 +286,7 @@ interface GamesHubProps {
   onNavigateFriends?: () => void;
   onNavigatePlayFriends?: () => void;
   onInspectPlayer?: (player: LeaderboardEntry, rank: number) => void;
+  onOpenAdSettings?: () => void;
 }
 
 export const GamesHub: React.FC<GamesHubProps> = React.memo(({
@@ -296,11 +299,13 @@ export const GamesHub: React.FC<GamesHubProps> = React.memo(({
   onNavigateFriends,
   onNavigatePlayFriends,
   onInspectPlayer,
+  onOpenAdSettings,
 }) => {
   const { showToast } = useToast();
   const {
     firebaseUser,
     userAccount,
+    isAdmin,
     mySessions,
     myCasinoSessions,
     myInvitedReferrals,
@@ -314,6 +319,13 @@ export const GamesHub: React.FC<GamesHubProps> = React.memo(({
     recordGameReward,
     redeemPromoCode,
   } = useAuth();
+
+  const [adsConfigured, setAdsConfigured] = useState(() => adsenseService.isConfigured());
+  useEffect(() => {
+    return adsenseService.subscribeConfig(() => {
+      setAdsConfigured(adsenseService.isConfigured());
+    });
+  }, []);
 
   const [activeGame, setActiveGame] = useState<GameCategory | null>(null);
   const [selectedGroup, setSelectedGroup] = useState<FilterGroupId>('all');
@@ -733,6 +745,29 @@ export const GamesHub: React.FC<GamesHubProps> = React.memo(({
           </div>
         </div>
       )}
+
+      {/* Admin-only shortcut when AdSense publisher/slot IDs have not been entered yet */}
+      {isAdmin && !adsConfigured && onOpenAdSettings && (
+        <section
+          aria-label="Configuração pendente do AdSense"
+          className="rounded-2xl border border-amber-300/70 dark:border-amber-700/60 bg-amber-50/90 dark:bg-amber-950/25 px-4 py-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+        >
+          <div className="text-xs text-amber-950 dark:text-amber-200 leading-relaxed">
+            <strong className="font-extrabold">Anúncios ainda não configurados (visível apenas para Admin):</strong>{' '}
+            Informe seu ID <code className="font-mono">ca-pub-...</code> e o ID do bloco de anúncio no Painel Admin para exibir anúncios reais aos usuários.
+          </div>
+          <button
+            type="button"
+            onClick={onOpenAdSettings}
+            className="min-h-[38px] px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-extrabold whitespace-nowrap cursor-pointer shrink-0"
+          >
+            Configurar Anúncios Agora
+          </button>
+        </section>
+      )}
+
+      {/* Rewarded Ad ("Assistir Anúncio Premiado") — renders only when configured by Admin */}
+      <RewardedAdCard />
 
       {/* 2. CATÁLOGO DE JOGOS & FASES */}
       <section id="games-catalog" className="space-y-4">

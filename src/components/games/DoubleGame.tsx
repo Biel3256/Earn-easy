@@ -17,6 +17,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
+import { adsenseService } from '../../services/adsenseService';
 import { CasinoCurrency, DoubleColor } from '../../types/earneasy';
 import { casinoSound } from '../../utils/casinoSound';
 import { extractReadableError, formatBRL, formatPoints } from '../../utils/pix';
@@ -425,6 +426,10 @@ export const DoubleGame: React.FC<DoubleGameProps> = ({ onExit }) => {
           if (autoActiveRef.current && stopOnWinRef.current && result.payoutAmount > 0) {
             setAutoActive(false);
             setAutoRoundsLeft(0);
+            adsenseService.notifyGameRoundCompleted({
+              category: 'double',
+              label: 'Double 3.0',
+            });
             return;
           }
 
@@ -435,9 +440,15 @@ export const DoubleGame: React.FC<DoubleGameProps> = ({ onExit }) => {
                 void runSingleSpin(remainingAutoAfterThis - 1);
               }
             }, turboRef.current ? 550 : 1100);
-          } else if (autoActiveRef.current) {
-            setAutoActive(false);
-            setAutoRoundsLeft(0);
+          } else {
+            if (autoActiveRef.current) {
+              setAutoActive(false);
+              setAutoRoundsLeft(0);
+            }
+            adsenseService.notifyGameRoundCompleted({
+              category: 'double',
+              label: 'Double 3.0',
+            });
           }
         };
 

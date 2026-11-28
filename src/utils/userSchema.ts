@@ -20,6 +20,7 @@ export const ALLOWED_USER_ACCOUNT_KEYS = new Set([
   'firstWithdrawalUsed',
   'lastMpMatchId',
   'lastCasinoSessionId',
+  'lastAdRewardId',
   'verified',
   'createdAt',
   'updatedAt',
@@ -169,6 +170,12 @@ export function needsUserAccountSchemaRepair(
   ) {
     return true;
   }
+  if (
+    'lastAdRewardId' in raw &&
+    (typeof raw.lastAdRewardId !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(raw.lastAdRewardId))
+  ) {
+    return true;
+  }
   return false;
 }
 
@@ -234,6 +241,9 @@ export function buildRepairedUserAccountPayload(
     /^[a-zA-Z0-9_-]{1,128}$/.test(raw.lastCasinoSessionId)
   ) {
     payload.lastCasinoSessionId = raw.lastCasinoSessionId;
+  }
+  if (typeof raw.lastAdRewardId === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(raw.lastAdRewardId)) {
+    payload.lastAdRewardId = raw.lastAdRewardId;
   }
   if (typeof raw.verified === 'boolean') {
     payload.verified = raw.verified;

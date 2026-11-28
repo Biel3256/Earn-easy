@@ -103,6 +103,18 @@ service cloud.firestore {
       return 'prm_' + userId + '_' + code;
     }
 
+    function adRewardDocId(userId, watchNum) {
+      return 'adr_' + userId + '_' + serverDateStr() + '_' + string(watchNum);
+    }
+
+    function adsenseSettingsExists() {
+      return exists(/databases/$(database)/documents/appSettings/adsense);
+    }
+
+    function adsenseSettings() {
+      return get(/databases/$(database)/documents/appSettings/adsense).data;
+    }
+
     function userXp(data) {
       return data.lifetimePoints + (data.gamesPlayed * 25);
     }
@@ -268,7 +280,7 @@ service cloud.firestore {
         'brlBalanceCents', 'totalWithdrawnCents', 'lastConversionDate',
         'status', 'riskScore', 'gamesPlayed', 'banReason', 'banExplanation',
         'bannedBy', 'suspensionUntil', 'lastPromoCode', 'firstWithdrawalUsed',
-        'lastMpMatchId', 'lastCasinoSessionId', 'verified', 'createdAt', 'updatedAt'
+        'lastMpMatchId', 'lastCasinoSessionId', 'lastAdRewardId', 'verified', 'createdAt', 'updatedAt'
       ]) &&
       isValidId(data.uid) &&
       data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80 &&
@@ -289,6 +301,7 @@ service cloud.firestore {
       (!('firstWithdrawalUsed' in data) || data.firstWithdrawalUsed is bool) &&
       (!('lastMpMatchId' in data) || isValidId(data.lastMpMatchId)) &&
       (!('lastCasinoSessionId' in data) || isValidId(data.lastCasinoSessionId)) &&
+      (!('lastAdRewardId' in data) || isValidId(data.lastAdRewardId)) &&
       (!('verified' in data) || data.verified is bool) &&
       data.createdAt is timestamp &&
       data.updatedAt is timestamp;
@@ -813,30 +826,37 @@ service cloud.firestore {
       );
     }
 
-    function validateCasinoUserUpdate(userId, existingUser, incomingUser, csAfter, csId) {
+    function doubleSessionId(userId, existingUser) {
+      return 'dbl_' + userId + '_' + string(existingUser.gamesPlayed + 1);
+    }
+
+    function minesSessionId(userId, gameNum) {
+      return 'mns_' + userId + '_' + string(gameNum);
+    }
+
+    function validateDoubleUserUpdate(userId, existingUser, incomingUser, csAfter) {
       return csAfter.userId == userId &&
-        incomingUser.lastCasinoSessionId == csId && (
-          (
-            csAfter.gameType == 'double' &&
-            csAfter.status in ['won', 'lost'] &&
-            incomingUser.gamesPlayed == existingUser.gamesPlayed + 1 &&
-            validateCasinoBalanceDelta(existingUser, incomingUser, csAfter.currency, csAfter.betAmount, csAfter.payoutAmount)
-          ) || (
-            csAfter.gameType == 'mines' &&
-            csAfter.status == 'active' &&
-            csAfter.payoutAmount == 0 &&
-            incomingUser.gamesPlayed == existingUser.gamesPlayed + 1 &&
-            validateCasinoBalanceDelta(existingUser, incomingUser, csAfter.currency, csAfter.betAmount, 0)
-          ) || (
-            csAfter.gameType == 'mines' &&
-            csAfter.status == 'won' &&
-            csAfter.payoutAmount > 0 &&
-            incomingUser.gamesPlayed == existingUser.gamesPlayed &&
-            validateCasinoCashoutDelta(existingUser, incomingUser, csAfter.currency, csAfter.betAmount, csAfter.payoutAmount) &&
-            exists(/databases/$(database)/documents/casinoSessions/$(csId)) &&
-            get(/databases/$(database)/documents/casinoSessions/$(csId)).data.status == 'active'
-          )
-        );
+        csAfter.gameType == 'double' &&
+        csAfter.status in ['won', 'lost'] &&
+        (!('lastCasinoSessionId' in existingUser) || existingUser.lastCasinoSessionId != incomingUser.lastCasinoSessionId) &&
+        validateCasinoBalanceDelta(existingUser, incomingUser, csAfter.currency, csAfter.betAmount, csAfter.payoutAmount);
+    }
+
+    function validateMinesStartUserUpdate(userId, existingUser, incomingUser, csAfter) {
+      return csAfter.userId == userId &&
+        csAfter.gameType == 'mines' &&
+        csAfter.status == 'active' &&
+        csAfter.payoutAmount == 0 &&
+        (!('lastCasinoSessionId' in existingUser) || existingUser.lastCasinoSessionId != incomingUser.lastCasinoSessionId) &&
+        validateCasinoBalanceDelta(existingUser, incomingUser, csAfter.currency, csAfter.betAmount, 0);
+    }
+
+    function validateMinesCashoutUserUpdate(userId, existingUser, incomingUser, csAfter) {
+      return csAfter.userId == userId &&
+        csAfter.gameType == 'mines' &&
+        csAfter.status == 'won' &&
+        csAfter.payoutAmount > 0 &&
+        validateCasinoCashoutDelta(existingUser, incomingUser, csAfter.currency, csAfter.betAmount, csAfter.payoutAmount);
     }
 
     function isValidSupportTicket(data) {
@@ -904,6 +924,59 @@ service cloud.firestore {
       data.deletedAt is timestamp;
     }
 
+    function isValidAdSenseSlotOrEmpty(val) {
+      return val is string && (val == '' || val.matches('^\\d{6,20}$'));
+    }
+
+    function isValidAdSenseSettings(data) {
+      return data.keys().hasAll([
+        'settingId', 'enabled', 'clientId', 'defaultSlotId',
+        'gamesFooterSlotId', 'rankingSlotId', 'dashboardSlotId', 'invitesSlotId',
+        'rewardedProvider', 'rewardedAdUnitPath', 'rewardedPointsPerWatch', 'rewardedDailyLimit',
+        'updatedBy', 'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'settingId', 'enabled', 'clientId', 'defaultSlotId',
+        'gamesFooterSlotId', 'rankingSlotId', 'dashboardSlotId', 'invitesSlotId',
+        'rewardedProvider', 'rewardedAdUnitPath', 'rewardedPointsPerWatch', 'rewardedDailyLimit',
+        'updatedBy', 'updatedAt'
+      ]) &&
+      data.settingId == 'adsense' &&
+      data.enabled is bool &&
+      data.clientId is string && data.clientId.size() <= 40 &&
+      (data.clientId == '' || data.clientId.matches('^ca-pub-\\d{10,20}$')) &&
+      isValidAdSenseSlotOrEmpty(data.defaultSlotId) &&
+      isValidAdSenseSlotOrEmpty(data.gamesFooterSlotId) &&
+      isValidAdSenseSlotOrEmpty(data.rankingSlotId) &&
+      isValidAdSenseSlotOrEmpty(data.dashboardSlotId) &&
+      isValidAdSenseSlotOrEmpty(data.invitesSlotId) &&
+      data.rewardedProvider in ['none', 'gam_gpt', 'adsense_h5'] &&
+      data.rewardedAdUnitPath is string && data.rewardedAdUnitPath.size() <= 140 &&
+      data.rewardedPointsPerWatch is int && data.rewardedPointsPerWatch >= 10 && data.rewardedPointsPerWatch <= 200 &&
+      data.rewardedDailyLimit is int && data.rewardedDailyLimit >= 1 && data.rewardedDailyLimit <= 20 &&
+      data.updatedBy is string && data.updatedBy.size() >= 1 && data.updatedBy.size() <= 160 &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidAdRewardClaim(data) {
+      return data.keys().hasAll([
+        'rewardId', 'userId', 'provider', 'pointsAwarded',
+        'rewardDate', 'watchNumber', 'integrityToken', 'createdAt'
+      ]) &&
+      data.keys().hasOnly([
+        'rewardId', 'userId', 'provider', 'pointsAwarded',
+        'rewardDate', 'watchNumber', 'integrityToken', 'createdAt'
+      ]) &&
+      isValidId(data.rewardId) &&
+      isValidId(data.userId) &&
+      data.provider in ['gam_gpt', 'adsense_h5'] &&
+      data.pointsAwarded is int && data.pointsAwarded >= 10 && data.pointsAwarded <= 200 &&
+      isValidDateStr(data.rewardDate) &&
+      data.watchNumber is int && data.watchNumber >= 1 && data.watchNumber <= 20 &&
+      data.integrityToken is string && data.integrityToken.size() >= 12 && data.integrityToken.size() <= 128 &&
+      data.createdAt is timestamp;
+    }
+
     // --- Collection Rules ---
 
     // 1. Users Collection
@@ -928,6 +1001,7 @@ service cloud.firestore {
         !('firstWithdrawalUsed' in incoming()) &&
         !('lastMpMatchId' in incoming()) &&
         !('lastCasinoSessionId' in incoming()) &&
+        !('lastAdRewardId' in incoming()) &&
         (!('verified' in incoming()) || incoming().verified == false) &&
         incoming().createdAt == request.time &&
         incoming().updatedAt == request.time && (
@@ -1070,7 +1144,7 @@ service cloud.firestore {
                   incoming().pointsBalance - existing().pointsBalance
                 )
               ) ||
-              // Action L: Double 2.0 Spin & Mines Deal/Cashout
+              // Action L: Double 3.0 Spin & Mines Deal/Cashout (deterministic session IDs, no incoming() path interpolation)
               (
                 incoming().status == existing().status &&
                 incoming().riskScore == existing().riskScore &&
@@ -1078,15 +1152,59 @@ service cloud.firestore {
                   'pointsBalance', 'lifetimePoints', 'brlBalanceCents', 'gamesPlayed', 'lastCasinoSessionId', 'updatedAt'
                 ]) &&
                 ('lastCasinoSessionId' in incoming()) &&
-                isValidId(incoming().lastCasinoSessionId) &&
-                existsAfter(/databases/$(database)/documents/casinoSessions/$(incoming().lastCasinoSessionId)) &&
-                validateCasinoUserUpdate(
-                  userId,
-                  existing(),
-                  incoming(),
-                  getAfter(/databases/$(database)/documents/casinoSessions/$(incoming().lastCasinoSessionId)).data,
-                  incoming().lastCasinoSessionId
+                isValidId(incoming().lastCasinoSessionId) && (
+                  (
+                    incoming().lastCasinoSessionId == doubleSessionId(userId, existing()) &&
+                    incoming().gamesPlayed == existing().gamesPlayed + 1 &&
+                    existsAfter(/databases/$(database)/documents/casinoSessions/$(doubleSessionId(userId, existing()))) &&
+                    validateDoubleUserUpdate(
+                      userId,
+                      existing(),
+                      incoming(),
+                      getAfter(/databases/$(database)/documents/casinoSessions/$(doubleSessionId(userId, existing()))).data
+                    )
+                  ) || (
+                    incoming().lastCasinoSessionId == minesSessionId(userId, existing().gamesPlayed + 1) &&
+                    incoming().gamesPlayed == existing().gamesPlayed + 1 &&
+                    existsAfter(/databases/$(database)/documents/casinoSessions/$(minesSessionId(userId, existing().gamesPlayed + 1))) &&
+                    validateMinesStartUserUpdate(
+                      userId,
+                      existing(),
+                      incoming(),
+                      getAfter(/databases/$(database)/documents/casinoSessions/$(minesSessionId(userId, existing().gamesPlayed + 1))).data
+                    )
+                  ) || (
+                    ('lastCasinoSessionId' in existing()) &&
+                    existing().lastCasinoSessionId == minesSessionId(userId, existing().gamesPlayed) &&
+                    incoming().lastCasinoSessionId == ('won_' + minesSessionId(userId, existing().gamesPlayed)) &&
+                    incoming().gamesPlayed == existing().gamesPlayed &&
+                    existsAfter(/databases/$(database)/documents/casinoSessions/$(minesSessionId(userId, existing().gamesPlayed))) &&
+                    validateMinesCashoutUserUpdate(
+                      userId,
+                      existing(),
+                      incoming(),
+                      getAfter(/databases/$(database)/documents/casinoSessions/$(minesSessionId(userId, existing().gamesPlayed))).data
+                    )
+                  )
                 )
+              ) ||
+              // Action M: Verified Rewarded Ad Watch Claim (bounded daily count & admin-configured pts)
+              (
+                incoming().status == existing().status &&
+                incoming().riskScore == existing().riskScore &&
+                incoming().diff(existing()).affectedKeys().hasOnly(['pointsBalance', 'lifetimePoints', 'lastAdRewardId', 'updatedAt']) &&
+                ('lastAdRewardId' in incoming()) &&
+                isValidId(incoming().lastAdRewardId) &&
+                incoming().lastAdRewardId.matches('^adr_' + userId + '_\\d{4}-\\d{2}-\\d{2}_([1-9]|1[0-9]|20)$') &&
+                adsenseSettingsExists() &&
+                adsenseSettings().enabled == true &&
+                adsenseSettings().rewardedProvider != 'none' &&
+                (incoming().pointsBalance - existing().pointsBalance) == adsenseSettings().rewardedPointsPerWatch &&
+                incoming().lifetimePoints == existing().lifetimePoints + (incoming().pointsBalance - existing().pointsBalance) &&
+                !exists(/databases/$(database)/documents/adRewards/$(incoming().lastAdRewardId)) &&
+                existsAfter(/databases/$(database)/documents/adRewards/$(incoming().lastAdRewardId)) &&
+                getAfter(/databases/$(database)/documents/adRewards/$(incoming().lastAdRewardId)).data.userId == userId &&
+                getAfter(/databases/$(database)/documents/adRewards/$(incoming().lastAdRewardId)).data.pointsAwarded == (incoming().pointsBalance - existing().pointsBalance)
               )
             )
           ) || (
@@ -1558,10 +1676,11 @@ service cloud.firestore {
       allow delete: if isValidId(messageId) && isAdmin();
     }
 
-    // 16. Platform App Settings (withdrawal minimums 1..2000 cents + maintenance mode)
+    // 16. Platform App Settings (withdrawal minimums, maintenance mode, and adsense config)
     match /appSettings/{settingId} {
       allow get: if isValidId(settingId) && (
         settingId == 'maintenance' ||
+        settingId == 'adsense' ||
         (settingId == 'withdrawal' && isSignedIn())
       );
       allow list: if isAdmin();
@@ -1571,7 +1690,8 @@ service cloud.firestore {
         incoming().settingId == settingId &&
         incoming().updatedAt == request.time && (
           (settingId == 'withdrawal' && isValidWithdrawalSettings(incoming())) ||
-          (settingId == 'maintenance' && isValidMaintenanceSettings(incoming()))
+          (settingId == 'maintenance' && isValidMaintenanceSettings(incoming())) ||
+          (settingId == 'adsense' && isValidAdSenseSettings(incoming()))
         );
 
       allow update: if isValidId(settingId) &&
@@ -1579,7 +1699,8 @@ service cloud.firestore {
         incoming().settingId == existing().settingId &&
         incoming().updatedAt == request.time && (
           (settingId == 'withdrawal' && isValidWithdrawalSettings(incoming())) ||
-          (settingId == 'maintenance' && isValidMaintenanceSettings(incoming()))
+          (settingId == 'maintenance' && isValidMaintenanceSettings(incoming())) ||
+          (settingId == 'adsense' && isValidAdSenseSettings(incoming()))
         );
 
       allow delete: if isValidId(settingId) && isAdmin();
@@ -1865,8 +1986,7 @@ service cloud.firestore {
         incoming().updatedAt == request.time && (
           incoming().gameType == 'double' ||
           (incoming().gameType == 'mines' && incoming().status == 'active' && incoming().payoutAmount == 0 && incoming().revealedCount == 0)
-        ) &&
-        (isAdmin() || isActiveUser(request.auth.uid));
+        );
       allow update: if isValidId(sessionId) &&
         isSignedIn() &&
         isValidCasinoSession(incoming()) && (
@@ -1889,6 +2009,34 @@ service cloud.firestore {
           )
         );
       allow delete: if isValidId(sessionId) && isAdmin();
+    }
+
+    // 25. Rewarded Ad Watch Claims (bounded daily server-UTC watch count)
+    match /adRewards/{rewardId} {
+      allow get: if isValidId(rewardId) && (
+        isAdmin() || (
+          isSignedIn() && (
+            rewardId.matches('^adr_' + request.auth.uid + '_.*') ||
+            (resource != null && existing().userId == request.auth.uid)
+          )
+        )
+      );
+      allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow create: if isValidId(rewardId) &&
+        isSignedIn() &&
+        isValidAdRewardClaim(incoming()) &&
+        incoming().rewardId == rewardId &&
+        incoming().userId == request.auth.uid &&
+        incoming().rewardDate == serverDateStr() &&
+        rewardId == adRewardDocId(request.auth.uid, incoming().watchNumber) &&
+        incoming().createdAt == request.time &&
+        isActiveUser(request.auth.uid) &&
+        adsenseSettingsExists() &&
+        adsenseSettings().enabled == true &&
+        adsenseSettings().rewardedProvider == incoming().provider &&
+        incoming().watchNumber <= adsenseSettings().rewardedDailyLimit &&
+        incoming().pointsAwarded == adsenseSettings().rewardedPointsPerWatch;
+      allow update, delete: if isValidId(rewardId) && isAdmin();
     }
   }
 }

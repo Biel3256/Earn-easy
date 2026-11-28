@@ -41,6 +41,7 @@ export interface UserAccount {
   lastPromoCode?: string;
   lastMpMatchId?: string;
   lastCasinoSessionId?: string;
+  lastAdRewardId?: string;
   firstWithdrawalUsed?: boolean;
   verified?: boolean;
   createdAt: unknown;
@@ -432,6 +433,53 @@ export const DEFAULT_MAINTENANCE_SETTINGS: MaintenanceSettings = {
   updatedBy: 'system',
   updatedAt: null,
 };
+
+export type RewardedAdProvider = 'none' | 'gam_gpt' | 'adsense_h5';
+
+export interface AdSenseSettings {
+  settingId: 'adsense';
+  enabled: boolean;
+  clientId: string;
+  defaultSlotId: string;
+  gamesFooterSlotId: string;
+  rankingSlotId: string;
+  dashboardSlotId: string;
+  invitesSlotId: string;
+  rewardedProvider: RewardedAdProvider;
+  rewardedAdUnitPath: string;
+  rewardedPointsPerWatch: number;
+  rewardedDailyLimit: number;
+  updatedBy: string;
+  updatedAt: unknown;
+}
+
+export const DEFAULT_ADSENSE_SETTINGS: AdSenseSettings = {
+  settingId: 'adsense',
+  enabled: true,
+  clientId: '',
+  defaultSlotId: '',
+  gamesFooterSlotId: '',
+  rankingSlotId: '',
+  dashboardSlotId: '',
+  invitesSlotId: '',
+  rewardedProvider: 'none',
+  rewardedAdUnitPath: '',
+  rewardedPointsPerWatch: 30,
+  rewardedDailyLimit: 8,
+  updatedBy: 'system',
+  updatedAt: null,
+};
+
+export interface AdRewardClaim {
+  rewardId: string;
+  userId: string;
+  provider: 'gam_gpt' | 'adsense_h5';
+  pointsAwarded: number;
+  rewardDate: string;
+  watchNumber: number;
+  integrityToken: string;
+  createdAt: unknown;
+}
 
 export type SupportTicketStatus = 'waiting_human' | 'active_human' | 'closed';
 
